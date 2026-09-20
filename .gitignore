@@ -1,0 +1,5 @@
+/gh-projects-tui
+/dist/
+/coverage.out
+/coverage.html
+.DS_Store
