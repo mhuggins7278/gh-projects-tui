@@ -58,7 +58,7 @@ Build a private, precompiled GitHub CLI extension invoked as `gh projects-tui` t
    - Core keys: `h/l` lanes, `j/k` cards, `/` local search, `enter` details, `p` project picker, `v` view picker, `r` refresh, `o` browser, `?` help, and `q` quit.
 
 4. **Responsive data loading**
-   - Load project/view/field metadata first, then paginate board items and render pages progressively. Label partial results and local-search counts while loading; retain focus by item identity as new pages change sorted positions.
+   - Load project/view/field metadata first, then paginate compatible Status lanes concurrently behind per-lane loading states. Reveal each lane when its grouping and saved sorting are stable; use a whole-board paginated fallback for unsupported grouping configurations.
    - Fetch only core metadata plus fields required for grouping, sorting, and cards during board load.
    - Lazy-load the selected item’s full field set and body after a short selection debounce; cache details in memory only. Paginate nested connections as needed, including field values and multi-valued fields, and combine them with project field definitions.
    - Cancel obsolete reads when the user switches projects or views, avoid N+1 requests, and surface rate-limit/auth failures inside the TUI. Tag asynchronous messages with host/project/view generation and item identity where applicable; discard stale read results even if cancellation arrives too late.

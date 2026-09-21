@@ -37,7 +37,7 @@ Results below are intentionally aggregate and contain no project names, item tit
 - The sampled saved filter `iteration:@current` was accepted by `items(query:)` and returned zero items.
 - The board metadata probe returned visible-field metadata for all five views. Grouping and sorting metadata were present on the board views, including a board with vertical grouping and position sorting.
 - The first board's field configuration decoded as title, assignees, three single-select fields, a number field, and an iteration field. Single-select options and iteration configuration are returned as inline lists, not cursor connections.
-- Item reads use owner-specific GraphQL branches, position ordering, and the saved filter. Scalar field values are loaded during board reads; multi-valued label, user, reviewer, repository, milestone, and pull-request values are identified but marked unavailable until their nested connections are deliberately loaded.
+- Item reads use owner-specific GraphQL branches, position ordering, and the saved filter. Scalar project and issue-backed field values plus issue/pull-request repository, state, and aggregate sub-issue progress metadata are loaded during board reads; multi-valued label, user, reviewer, repository, milestone, and pull-request project-field values are identified but marked unavailable until their nested connections are deliberately loaded.
 
 These results establish that the intended discovery, view metadata, position ordering, and server-side filter read shapes work on the target host. They do not establish that every GitHub filter expression or saved-view display rule has matching semantics.
 
@@ -80,7 +80,7 @@ query ProjectItems($login: String!, $project: Int!, $filter: String, $after: Str
     projectV2(number: $project) {
       items(first: 100, after: $after, query: $filter,
             orderBy: {field: POSITION, direction: ASC}) {
-        nodes { id type content { __typename } fieldValues(first: 100) { ... } }
+        nodes { id type content { __typename ... on Issue { repository { name } state subIssuesSummary { total completed } } ... on PullRequest { repository { name } state isDraft merged } } fieldValues(first: 100) { ... } }
         pageInfo { hasNextPage endCursor }
       }
     }

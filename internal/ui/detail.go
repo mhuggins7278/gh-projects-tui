@@ -24,9 +24,13 @@ func (m Model) renderDetailPanel() string {
 
 	lines := detailLines(*m.detail, m.detailPanelWidth(), m.detailShowAll)
 	viewport := m.detailViewportLines()
-	start := m.detailOffset
+	start := 0
 	var end int
 	for {
+		// Reapply the requested offset after reserving space for scroll markers.
+		// The usable viewport can shrink when a marker is needed, which changes
+		// the maximum valid start position by a line or two.
+		start = m.detailOffset
 		if start < 0 {
 			start = 0
 		}
@@ -84,6 +88,38 @@ func (m Model) detailViewportLines() int {
 		return 6
 	}
 	return lines
+}
+
+func (m Model) detailMaxOffset() int {
+	if m.detail == nil {
+		return 0
+	}
+	lineCount := len(detailLines(*m.detail, m.detailPanelWidth(), m.detailShowAll))
+	viewport := m.detailViewportLines()
+	if lineCount <= viewport {
+		return 0
+	}
+	if viewport > 6 {
+		viewport--
+	}
+	return lineCount - viewport
+}
+
+func (m *Model) moveDetail(delta int) {
+	if m.detail == nil {
+		return
+	}
+	max := m.detailMaxOffset()
+	if m.detailOffset > max {
+		m.detailOffset = max
+	}
+	m.detailOffset += delta
+	if m.detailOffset < 0 {
+		m.detailOffset = 0
+	}
+	if m.detailOffset > max {
+		m.detailOffset = max
+	}
 }
 
 func renderPopover(base, popup string, width, height int) string {

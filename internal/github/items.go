@@ -59,8 +59,19 @@ fragment FieldValue on ProjectV2ItemFieldValue {
     field { ... on ProjectV2Field { id name } }
   }
   ... on ProjectV2ItemIssueFieldValue {
-    field { ... on ProjectV2Field { id name } }
-    issueFieldValue { __typename }
+    field {
+      ... on ProjectV2Field { id name }
+      ... on ProjectV2SingleSelectField { id name }
+      ... on ProjectV2MultiSelectField { id name }
+    }
+    issueFieldValue {
+      __typename
+      ... on IssueFieldDateValue { date: value }
+      ... on IssueFieldMultiSelectValue { options { id name } }
+      ... on IssueFieldNumberValue { number: value }
+      ... on IssueFieldSingleSelectValue { optionId name }
+      ... on IssueFieldTextValue { text: value }
+    }
   }
 }`
 
@@ -70,8 +81,8 @@ fragment ItemsPage on ProjectV2ItemConnection {
     id type
     content {
       __typename
-      ... on Issue { id number title url }
-      ... on PullRequest { id number title url }
+      ... on Issue { id number title url repository { name } state subIssuesSummary { total completed } }
+      ... on PullRequest { id number title url repository { name } state isDraft merged }
       ... on DraftIssue { id title }
     }
     fieldValues(first: 100) { ...FieldValuesPage }
@@ -114,6 +125,12 @@ type Content struct {
 	Number        int
 	Title         string
 	URL           string
+	Repository    string
+	State         string
+	IsDraft       bool
+	Merged        bool
+	SubIssueTotal int
+	SubIssueDone  int
 	Body          string
 	BodyAvailable bool
 }
@@ -158,12 +175,26 @@ type rawItem struct {
 }
 
 type rawContent struct {
-	Kind   string  `json:"__typename"`
-	ID     string  `json:"id"`
-	Number int     `json:"number"`
-	Title  string  `json:"title"`
-	URL    string  `json:"url"`
-	Body   *string `json:"body"`
+	Kind       string         `json:"__typename"`
+	ID         string         `json:"id"`
+	Number     int            `json:"number"`
+	Title      string         `json:"title"`
+	URL        string         `json:"url"`
+	Repository *rawRepository `json:"repository"`
+	State      string         `json:"state"`
+	IsDraft    bool           `json:"isDraft"`
+	Merged     bool           `json:"merged"`
+	SubIssues  *rawSubIssues  `json:"subIssuesSummary"`
+	Body       *string        `json:"body"`
+}
+
+type rawRepository struct {
+	Name string `json:"name"`
+}
+
+type rawSubIssues struct {
+	Total     int `json:"total"`
+	Completed int `json:"completed"`
 }
 
 type rawFieldValuePage struct {
@@ -172,17 +203,28 @@ type rawFieldValuePage struct {
 }
 
 type rawFieldValue struct {
-	Kind        string        `json:"__typename"`
-	Field       rawFieldRef   `json:"field"`
-	OptionID    string        `json:"optionId"`
-	Name        string        `json:"name"`
-	Text        string        `json:"text"`
-	Date        string        `json:"date"`
-	Number      *float64      `json:"number"`
-	IterationID string        `json:"iterationId"`
-	Title       string        `json:"title"`
-	Value       string        `json:"value"`
-	Options     []FieldOption `json:"options"`
+	Kind            string              `json:"__typename"`
+	Field           rawFieldRef         `json:"field"`
+	OptionID        string              `json:"optionId"`
+	Name            string              `json:"name"`
+	Text            string              `json:"text"`
+	Date            string              `json:"date"`
+	Number          *float64            `json:"number"`
+	IterationID     string              `json:"iterationId"`
+	Title           string              `json:"title"`
+	Value           string              `json:"value"`
+	Options         []FieldOption       `json:"options"`
+	IssueFieldValue *rawIssueFieldValue `json:"issueFieldValue"`
+}
+
+type rawIssueFieldValue struct {
+	Kind     string        `json:"__typename"`
+	OptionID string        `json:"optionId"`
+	Name     string        `json:"name"`
+	Text     string        `json:"text"`
+	Date     string        `json:"date"`
+	Number   *float64      `json:"number"`
+	Options  []FieldOption `json:"options"`
 }
 
 type rawFieldRef struct {
@@ -282,11 +324,21 @@ func projectContent(content *rawContent) *Content {
 		return nil
 	}
 	projected := &Content{
-		Kind:   content.Kind,
-		ID:     content.ID,
-		Number: content.Number,
-		Title:  content.Title,
-		URL:    content.URL,
+		Kind:    content.Kind,
+		ID:      content.ID,
+		Number:  content.Number,
+		Title:   content.Title,
+		URL:     content.URL,
+		State:   content.State,
+		IsDraft: content.IsDraft,
+		Merged:  content.Merged,
+	}
+	if content.Repository != nil {
+		projected.Repository = content.Repository.Name
+	}
+	if content.SubIssues != nil {
+		projected.SubIssueTotal = content.SubIssues.Total
+		projected.SubIssueDone = content.SubIssues.Completed
 	}
 	if content.Body != nil {
 		projected.Body = *content.Body
@@ -307,6 +359,16 @@ func (c *Client) fetchItemFieldValues(ctx context.Context, itemID, after string)
 }
 
 func (value rawFieldValue) project() FieldValue {
+	if value.Kind == "ProjectV2ItemIssueFieldValue" && value.IssueFieldValue != nil {
+		return FieldValue{
+			Kind:      value.IssueFieldValue.Kind,
+			FieldID:   value.Field.ID,
+			FieldName: value.Field.Name,
+			OptionID:  value.IssueFieldValue.OptionID,
+			Value:     issueFieldValueValue(*value.IssueFieldValue),
+			Available: value.IssueFieldValue.hasValue(),
+		}
+	}
 	return FieldValue{
 		Kind:        value.Kind,
 		FieldID:     value.Field.ID,
@@ -316,6 +378,35 @@ func (value rawFieldValue) project() FieldValue {
 		IterationID: value.IterationID,
 		Available:   value.hasScalarValue(),
 	}
+}
+
+func (value rawIssueFieldValue) hasValue() bool {
+	switch value.Kind {
+	case "IssueFieldDateValue", "IssueFieldMultiSelectValue", "IssueFieldNumberValue", "IssueFieldSingleSelectValue", "IssueFieldTextValue":
+		return true
+	default:
+		return false
+	}
+}
+
+func issueFieldValueValue(value rawIssueFieldValue) string {
+	parts := make([]string, 0, len(value.Options)+4)
+	if value.Text != "" {
+		parts = append(parts, value.Text)
+	}
+	if value.Date != "" {
+		parts = append(parts, value.Date)
+	}
+	if value.Number != nil {
+		parts = append(parts, formatNumber(*value.Number))
+	}
+	if value.Name != "" {
+		parts = append(parts, value.Name)
+	}
+	for _, option := range value.Options {
+		parts = append(parts, option.Name)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (value rawFieldValue) hasScalarValue() bool {

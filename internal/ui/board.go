@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -9,8 +11,11 @@ import (
 )
 
 type boardLane struct {
-	Name  string
-	Items []github.Item
+	Key     string
+	Name    string
+	Items   []github.Item
+	Loading bool
+	Failed  bool
 }
 
 type laneDefinition struct {
@@ -18,8 +23,144 @@ type laneDefinition struct {
 	name string
 }
 
+type laneItemsRequest struct {
+	key    string
+	name   string
+	filter string
+}
+
+var itemsLoadingFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
 func (m Model) boardLanes() []boardLane {
-	return lanesForView(m.view, m.items)
+	if m.itemsLoading && len(m.itemsLoadingLanes) == 0 {
+		lanes := lanesForView(m.view, nil)
+		for index := range lanes {
+			lanes[index].Loading = true
+		}
+		return lanes
+	}
+	lanes := lanesForView(m.view, sortedItemsForView(m.view, m.items))
+	for index := range lanes {
+		lanes[index].Loading = m.itemsLoadingLanes[lanes[index].Key]
+		lanes[index].Failed = m.itemsFailedLanes[lanes[index].Key]
+	}
+	return lanes
+}
+
+func (m Model) itemsLoadingSpinner() string {
+	return itemsLoadingFrames[m.itemsLoadFrame%len(itemsLoadingFrames)]
+}
+
+type itemSortValue struct {
+	present bool
+	number  float64
+	text    string
+	byText  bool
+}
+
+func sortedItemsForView(view *github.View, items []github.Item) []github.Item {
+	ordered := append([]github.Item(nil), items...)
+	if view == nil || positionOnly(view) || !sortFieldsSupported(view) {
+		return ordered
+	}
+	sort.SliceStable(ordered, func(left, right int) bool {
+		for _, field := range view.SortByFields {
+			comparison := compareSortField(field.Field, ordered[left], ordered[right], strings.EqualFold(field.Direction, "DESC"))
+			if comparison == 0 {
+				continue
+			}
+			return comparison < 0
+		}
+		return false
+	})
+	return ordered
+}
+
+func sortFieldsSupported(view *github.View) bool {
+	if view == nil {
+		return true
+	}
+	for _, sortField := range view.SortByFields {
+		field := sortField.Field
+		if field.Name == "" && field.DataType == "" && field.Kind == "" {
+			return false
+		}
+		if field.Name == "Title" || strings.EqualFold(field.DataType, "TITLE") || strings.EqualFold(field.DataType, "POSITION") {
+			continue
+		}
+		switch strings.ToUpper(field.DataType) {
+		case "TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "ITERATION", "MULTI_SELECT":
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func compareSortField(field github.Field, left, right github.Item, descending bool) int {
+	leftValue := itemSortValueFor(field, left)
+	rightValue := itemSortValueFor(field, right)
+	if !leftValue.present && !rightValue.present {
+		return 0
+	}
+	// GitHub keeps unset values together after populated values in a board
+	// sort; stable sorting preserves their existing project-position order.
+	if !leftValue.present {
+		return 1
+	}
+	if !rightValue.present {
+		return -1
+	}
+	comparison := 0
+	if leftValue.byText || rightValue.byText {
+		comparison = strings.Compare(strings.ToLower(leftValue.text), strings.ToLower(rightValue.text))
+	} else if leftValue.number < rightValue.number {
+		comparison = -1
+	} else if leftValue.number > rightValue.number {
+		comparison = 1
+	}
+	if descending {
+		return -comparison
+	}
+	return comparison
+}
+
+func itemSortValueFor(field github.Field, item github.Item) itemSortValue {
+	if field.Name == "Title" || strings.EqualFold(field.DataType, "TITLE") {
+		if item.Content == nil || strings.TrimSpace(item.Content.Title) == "" {
+			return itemSortValue{}
+		}
+		return itemSortValue{present: true, text: item.Content.Title, byText: true}
+	}
+	if strings.EqualFold(field.DataType, "POSITION") {
+		return itemSortValue{}
+	}
+	value, ok := itemFieldValue(field, item)
+	if !ok || !value.Available || (value.Value == "" && value.OptionID == "" && value.IterationID == "") {
+		return itemSortValue{}
+	}
+
+	if strings.EqualFold(field.DataType, "SINGLE_SELECT") {
+		for index, option := range field.Options {
+			if option.ID == value.OptionID {
+				return itemSortValue{present: true, number: float64(index)}
+			}
+		}
+	}
+	if strings.EqualFold(field.DataType, "ITERATION") {
+		for index, iteration := range field.Iterations {
+			if iteration.ID == value.IterationID {
+				return itemSortValue{present: true, number: float64(index)}
+			}
+		}
+	}
+	if strings.EqualFold(field.DataType, "NUMBER") {
+		if number, err := strconv.ParseFloat(value.Value, 64); err == nil {
+			return itemSortValue{present: true, number: number}
+		}
+	}
+	return itemSortValue{present: true, text: value.Value, byText: true}
 }
 
 func (m Model) selectedBoardItem() (github.Item, bool) {
@@ -47,13 +188,47 @@ func boardGroupField(view *github.View) (github.Field, string, bool) {
 	return github.Field{}, "", false
 }
 
+func parallelLaneItemsRequests(view *github.View) ([]laneItemsRequest, bool) {
+	field, _, grouped := boardGroupField(view)
+	if !grouped || !strings.EqualFold(field.Name, "Status") || (field.Kind != "ProjectV2SingleSelectField" && field.DataType != "SINGLE_SELECT") {
+		return nil, false
+	}
+	// Keep concurrency bounded to avoid trading latency for secondary-rate-limit
+	// failures on unusually large status configurations.
+	if len(field.Options) == 0 || len(field.Options)+2 > 8 {
+		return nil, false
+	}
+	base := strings.TrimSpace(view.Filter)
+	combine := func(filter string) string {
+		if base == "" {
+			return filter
+		}
+		return base + " " + filter
+	}
+	requests := make([]laneItemsRequest, 0, len(field.Options)+2)
+	otherFilters := make([]string, 0, len(field.Options)+1)
+	for _, option := range field.Options {
+		statusFilter := "status:" + strconv.Quote(option.Name)
+		requests = append(requests, laneItemsRequest{
+			key:    "option:" + option.ID,
+			name:   option.Name,
+			filter: combine(statusFilter),
+		})
+		otherFilters = append(otherFilters, "-"+statusFilter)
+	}
+	requests = append(requests, laneItemsRequest{key: "no-value", name: "No value", filter: combine("no:status")})
+	otherFilters = append(otherFilters, "-no:status")
+	requests = append(requests, laneItemsRequest{key: "other", name: "Other", filter: combine(strings.Join(otherFilters, " "))})
+	return requests, true
+}
+
 func lanesForView(view *github.View, items []github.Item) []boardLane {
 	if view == nil {
 		return nil
 	}
 	field, _, hasGroup := boardGroupField(view)
 	if !hasGroup {
-		return []boardLane{{Name: "All items", Items: append([]github.Item(nil), items...)}}
+		return []boardLane{{Key: "all", Name: "All items", Items: append([]github.Item(nil), items...)}}
 	}
 
 	definitions, supported := laneDefinitions(field)
@@ -61,10 +236,10 @@ func lanesForView(view *github.View, items []github.Item) []boardLane {
 	indexes := make(map[string]int, len(definitions))
 	for _, definition := range definitions {
 		indexes[definition.key] = len(lanes)
-		lanes = append(lanes, boardLane{Name: definition.name})
+		lanes = append(lanes, boardLane{Key: definition.key, Name: definition.name})
 	}
 	if !supported {
-		return []boardLane{{Name: "All items", Items: append([]github.Item(nil), items...)}}
+		return []boardLane{{Key: "all", Name: "All items", Items: append([]github.Item(nil), items...)}}
 	}
 
 	for _, item := range items {
@@ -79,7 +254,7 @@ func lanesForView(view *github.View, items []github.Item) []boardLane {
 				index = len(lanes) - 1
 				if index < 0 || lanes[index].Name == "No value" {
 					index = len(lanes)
-					lanes = append(lanes, boardLane{Name: "Other"})
+					lanes = append(lanes, boardLane{Key: "other", Name: "Other"})
 				}
 			}
 			// The card remains in one stable fallback lane; its actual
@@ -219,32 +394,32 @@ func (m Model) renderBoardContent(b *strings.Builder) {
 		}
 	}
 	if len(m.view.SortByFields) > 0 && !positionOnly(m.view) {
-		b.WriteString(statusStyle.Render("Sort: saved field sort is not applied yet; showing project position") + "\n")
+		if sortFieldsSupported(m.view) {
+			b.WriteString(statusStyle.Render("Sort: saved field sort applied") + "\n")
+		} else {
+			b.WriteString(statusStyle.Render("Sort: saved field sort is not applied yet; showing project position") + "\n")
+		}
 	}
 	fmt.Fprintf(b, "%s %d", mutedStyle.Render("Items:"), len(m.items))
 	if m.itemsLoading {
-		b.WriteString("  " + statusStyle.Render("[loading more]"))
+		b.WriteString("  " + statusStyle.Render(m.itemsLoadingSpinner()+" loading"))
 	}
 	b.WriteString("\n")
 
-	if m.itemsErr != nil && len(m.items) == 0 {
+	if m.itemsErr != nil && len(m.items) == 0 && !m.itemsLoading {
 		b.WriteString("\n" + errorStyle.Render("Items failed: "+m.itemsErr.Error()) + "\n")
 		b.WriteString(mutedStyle.Render("Press r to retry.") + "\n")
 		return
 	}
-	if len(m.items) == 0 {
-		if m.itemsLoading {
-			b.WriteString("\n" + sectionStyle.Render("Loading issues and pull requests...") + "\n")
-		} else {
-			b.WriteString("\n" + mutedStyle.Render("No issues, pull requests, or drafts match this view.") + "\n")
-		}
+	if len(m.items) == 0 && !m.itemsLoading {
+		b.WriteString("\n" + mutedStyle.Render("No issues, pull requests, or drafts match this view.") + "\n")
 		return
 	}
 
 	lanes := m.boardLanes()
 	b.WriteString("\n" + m.renderLaneGrid(lanes) + "\n")
 	if m.itemsErr != nil {
-		b.WriteString(errorStyle.Render("Loading stopped: "+m.itemsErr.Error()) + "\n")
+		b.WriteString(errorStyle.Render("Lane loading failed: "+m.itemsErr.Error()) + "\n")
 	}
 }
 
@@ -278,7 +453,7 @@ func (m Model) boardGrid(laneCount int) (int, int) {
 	if available < 20 {
 		available = 20
 	}
-	columns := available / 26
+	columns := available / 29
 	if columns < 1 {
 		columns = 1
 	}
@@ -298,14 +473,16 @@ func (m Model) boardGrid(laneCount int) (int, int) {
 
 func (m Model) renderLaneColumn(lane boardLane, laneIndex, width, viewportHeight int) string {
 	active := laneIndex == m.boardLane
-	marker := "  "
-	if active {
-		marker = "> "
-	}
-	header := laneTitleStyle(laneIndex).Render(fmt.Sprintf("%s[%s]  %s", marker, lane.Name, itemCountLabel(len(lane.Items))))
+	header := m.renderLaneHeader(lane, laneIndex, active)
 	lines := []string{header}
 	if len(lane.Items) == 0 {
-		lines = append(lines, mutedStyle.Render("No cards"))
+		if lane.Failed {
+			lines = append(lines, errorStyle.Render("Load failed; press r"))
+		} else if lane.Loading {
+			lines = append(lines, mutedStyle.Render("Loading cards..."))
+		} else {
+			lines = append(lines, mutedStyle.Render("No cards"))
+		}
 		return laneFrameStyle(laneIndex).Width(width).Render(strings.Join(lines, "\n"))
 	}
 
@@ -333,7 +510,7 @@ func (m Model) renderLaneColumn(lane boardLane, laneIndex, width, viewportHeight
 }
 
 func (m Model) renderLaneWindow(lane boardLane, laneIndex, width, start, end int, showEarlier, showLater, active bool) string {
-	lines := []string{laneTitleStyle(laneIndex).Render(fmt.Sprintf("%s[%s]  %s", map[bool]string{true: "> ", false: "  "}[active], lane.Name, itemCountLabel(len(lane.Items))))}
+	lines := []string{m.renderLaneHeader(lane, laneIndex, active)}
 	if showEarlier {
 		lines = append(lines, mutedStyle.Render(fmt.Sprintf("... %d earlier", start)))
 	}
@@ -343,7 +520,27 @@ func (m Model) renderLaneWindow(lane boardLane, laneIndex, width, start, end int
 	if showLater {
 		lines = append(lines, mutedStyle.Render(fmt.Sprintf("... %d more", len(lane.Items)-end)))
 	}
+	if lane.Failed {
+		lines = append(lines, errorStyle.Render("... incomplete; press r"))
+	}
 	return laneFrameStyle(laneIndex).Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderLaneHeader(lane boardLane, laneIndex int, active bool) string {
+	marker := "  "
+	if active {
+		marker = "> "
+	}
+	label := fmt.Sprintf("%s[%s]", marker, lane.Name)
+	if lane.Loading {
+		label += "  " + m.itemsLoadingSpinner()
+	} else {
+		label += "  " + itemCountLabel(len(lane.Items))
+	}
+	if lane.Failed {
+		label += " !"
+	}
+	return laneTitleStyle(laneIndex).Render(label)
 }
 
 func (m Model) renderLaneCard(item github.Item, selected bool, width int) string {
@@ -354,23 +551,114 @@ func (m Model) renderLaneCard(item github.Item, selected bool, width int) string
 	if item.Content == nil {
 		return cardStyle(selected).Width(cardWidth).Render(mutedStyle.Render("content unavailable"))
 	}
-	kind := contentKind(item.Content)
-	identity := kind
-	if item.Content.Number > 0 {
-		identity += fmt.Sprintf(" #%d", item.Content.Number)
+	identity := contentCardIdentity(item.Content)
+	icon := contentIcon(item.Content)
+	iconStyle := itemKindStyle(contentKind(item.Content))
+	if state := contentState(item.Content); state != "" {
+		iconStyle = itemStateStyle(state)
 	}
-	title := truncateText(item.Content.Title, cardWidth-2)
+	identityWidth := cardWidth - 2
+	prefix := ""
+	if selected {
+		prefix = "> "
+	}
+	identityAvailable := identityWidth - lipgloss.Width(prefix) - lipgloss.Width(icon) - 1
+	if identityAvailable > 0 {
+		identity = truncateText(identity, identityAvailable)
+	} else {
+		identity = ""
+	}
+	identityLine := prefix + iconStyle.Render(icon)
+	if identity != "" {
+		identityLine += " " + mutedStyle.Render(identity)
+	}
+	title := strings.TrimSpace(item.Content.Title)
 	if title == "" {
 		title = "(untitled)"
 	}
-	if selected {
-		identity = "> " + identity
+	titleLines := wrapText(title, cardWidth-2)
+	if len(titleLines) > 2 {
+		titleLines = titleLines[:2]
+		titleLines[1] = truncateText(titleLines[1]+"...", cardWidth-2)
 	}
-	lines := []string{itemKindStyle(kind).Render(identity), titleStyle.Render(title)}
-	if summary := cardFieldSummary(item, m.view); summary != "" {
+	lines := []string{identityLine}
+	for _, line := range titleLines {
+		lines = append(lines, titleStyle.Render(line))
+	}
+	if summary := subIssueSummary(item.Content); summary != "" {
 		lines = append(lines, mutedStyle.Render(truncateText(summary, cardWidth-2)))
 	}
 	return cardStyle(selected).Width(cardWidth).Render(strings.Join(lines, "\n"))
+}
+
+func contentCardIdentity(content *github.Content) string {
+	identity := ""
+	if content.Repository != "" {
+		identity = content.Repository
+	}
+	if content.Number > 0 {
+		if identity != "" {
+			identity += " "
+		}
+		identity += fmt.Sprintf("#%d", content.Number)
+	}
+	if identity == "" {
+		identity = contentKind(content)
+	}
+	return identity
+}
+
+func contentIcon(content *github.Content) string {
+	switch content.Kind {
+	case "Issue":
+		if strings.EqualFold(content.State, "CLOSED") {
+			return "✓"
+		}
+		return "○"
+	case "PullRequest":
+		if content.IsDraft {
+			return "◌"
+		}
+		if content.Merged {
+			return "↔"
+		}
+		if strings.EqualFold(content.State, "CLOSED") {
+			return "×"
+		}
+		return "↗"
+	case "DraftIssue":
+		return "◇"
+	default:
+		return "•"
+	}
+}
+
+func contentState(content *github.Content) string {
+	if content == nil {
+		return ""
+	}
+	if content.IsDraft {
+		return "DRAFT"
+	}
+	if content.Merged {
+		return "MERGED"
+	}
+	switch strings.ToUpper(content.State) {
+	case "OPEN":
+		return "OPEN"
+	case "CLOSED":
+		return "CLOSED"
+	default:
+		return ""
+	}
+}
+
+func subIssueSummary(content *github.Content) string {
+	if content == nil || content.SubIssueTotal <= 0 {
+		return ""
+	}
+	percent := (content.SubIssueDone*100 + content.SubIssueTotal/2) / content.SubIssueTotal
+	return fmt.Sprintf("Sub-issues: %d/%d (%d%%)", content.SubIssueDone, content.SubIssueTotal, percent)
 }
 
 func positionOnly(view *github.View) bool {
@@ -493,26 +781,6 @@ func (m Model) boardWindowForLane(lane boardLane, selected, width, viewportHeigh
 	return start, end
 }
 
-func boardCardLine(item github.Item, view *github.View) string {
-	if item.Content == nil {
-		return "(content unavailable)"
-	}
-	title := strings.TrimSpace(item.Content.Title)
-	if title == "" {
-		title = "(untitled)"
-	}
-	kind := contentKind(item.Content)
-	identity := kind
-	if item.Content.Number > 0 {
-		identity += fmt.Sprintf(" #%d", item.Content.Number)
-	}
-	values := cardFieldSummary(item, view)
-	if values == "" {
-		return fmt.Sprintf("%s - %s", identity, title)
-	}
-	return fmt.Sprintf("%s - %s [%s]", identity, title, values)
-}
-
 func contentKind(content *github.Content) string {
 	switch content.Kind {
 	case "Issue":
@@ -527,33 +795,4 @@ func contentKind(content *github.Content) string {
 		}
 		return content.Kind
 	}
-}
-
-func cardFieldSummary(item github.Item, view *github.View) string {
-	if view == nil {
-		return ""
-	}
-	parts := make([]string, 0, 3)
-	for _, field := range view.Fields {
-		value, ok := itemFieldValue(field, item)
-		if !ok {
-			continue
-		}
-		text := value.Value
-		if !value.Available {
-			text = "unavailable"
-		}
-		if text == "" {
-			text = "No value"
-		}
-		name := field.Name
-		if name == "" {
-			name = value.FieldName
-		}
-		parts = append(parts, name+": "+text)
-		if len(parts) == 3 {
-			break
-		}
-	}
-	return strings.Join(parts, ", ")
 }

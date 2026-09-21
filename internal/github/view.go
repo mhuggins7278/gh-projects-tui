@@ -9,7 +9,10 @@ const fieldConfigurationFragment = `
 fragment FieldConfiguration on ProjectV2FieldConfiguration {
   __typename
   ... on ProjectV2Field { id name dataType }
-  ... on ProjectV2SingleSelectField { id name dataType options { id name } }
+  ... on ProjectV2SingleSelectField {
+    id name dataType options { id name }
+    issueField { ... on IssueFieldSingleSelect { options { id name } } }
+  }
   ... on ProjectV2MultiSelectField { id name dataType }
   ... on ProjectV2IterationField {
     id name dataType
@@ -157,7 +160,12 @@ type rawField struct {
 	Name          string                  `json:"name"`
 	DataType      string                  `json:"dataType"`
 	Options       []FieldOption           `json:"options"`
+	IssueField    *rawIssueField          `json:"issueField"`
 	Configuration *iterationConfiguration `json:"configuration"`
+}
+
+type rawIssueField struct {
+	Options []FieldOption `json:"options"`
 }
 
 type iterationConfiguration struct {
@@ -317,7 +325,11 @@ func (c sortConnection) sorts() []SortField {
 }
 
 func (f rawField) project() Field {
-	result := Field{ID: f.ID, Name: f.Name, DataType: f.DataType, Kind: f.Kind, Options: f.Options}
+	options := f.Options
+	if len(options) == 0 && f.IssueField != nil {
+		options = f.IssueField.Options
+	}
+	result := Field{ID: f.ID, Name: f.Name, DataType: f.DataType, Kind: f.Kind, Options: options}
 	if f.Configuration != nil {
 		result.Iterations = append(result.Iterations, f.Configuration.Iterations...)
 		for _, iteration := range f.Configuration.CompletedIterations {

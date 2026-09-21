@@ -3,10 +3,13 @@
 Private, precompiled GitHub CLI extension for GitHub Projects v2.
 
 The current binary is a read-only board preview. It discovers owners and
-projects, opens saved views, progressively loads issues/pull requests/drafts,
-and groups cards by saved single-select or iteration metadata. Press `enter` on
-a card to load its project fields and accessible issue, pull request, or draft
-body in the detail panel. Project mutations remain disabled until sandbox
+projects, opens saved views, and progressively fetches issues, pull requests,
+and drafts behind per-lane loading states. Compatible Status lanes load in
+parallel and appear independently once their grouping and saved sorting are
+stable. Board cards show the content state/type, repository and number when
+available, sub-issue progress when available, and a wrapped title. Press `enter`
+on a card to load its project fields and accessible issue, pull request, or
+draft body in the detail panel. Project mutations remain disabled until sandbox
 semantics are verified.
 
 ## Development

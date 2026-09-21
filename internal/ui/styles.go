@@ -225,6 +225,21 @@ func itemKindStyle(kind string) lipgloss.Style {
 	}
 }
 
+func itemStateStyle(state string) lipgloss.Style {
+	switch state {
+	case "OPEN":
+		return lipgloss.NewStyle().Foreground(green).Bold(true)
+	case "CLOSED":
+		return lipgloss.NewStyle().Foreground(red).Bold(true)
+	case "MERGED":
+		return lipgloss.NewStyle().Foreground(purple).Bold(true)
+	case "DRAFT":
+		return lipgloss.NewStyle().Foreground(yellow).Bold(true)
+	default:
+		return titleStyle
+	}
+}
+
 func truncateText(value string, width int) string {
 	value = strings.Join(strings.Fields(value), " ")
 	if width <= 0 {

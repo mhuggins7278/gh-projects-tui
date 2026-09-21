@@ -196,7 +196,7 @@ func TestResolveOwnerFallsBackFromOrganizationToUser(t *testing.T) {
 func TestOpenViewProjectsFieldConfigurations(t *testing.T) {
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(query string, variables map[string]interface{}, response interface{}) error {
-			if variables["project"] != 7 || variables["view"] != 3 || !strings.Contains(query, "completedIterations") {
+			if variables["project"] != 7 || variables["view"] != 3 || !strings.Contains(query, "completedIterations") || !strings.Contains(query, "IssueFieldSingleSelect") {
 				t.Fatalf("view query or variables invalid: %q %#v", query, variables)
 			}
 			result := response.(*viewResponse)
@@ -204,7 +204,10 @@ func TestOpenViewProjectsFieldConfigurations(t *testing.T) {
 				ViewerCanUpdate: true,
 				View: &rawView{
 					ID: "view-id", Number: 3, Name: "Current", Layout: BoardLayout, Filter: "iteration:@current",
-					Fields:          fieldConnection{Nodes: []*rawField{{Kind: "ProjectV2SingleSelectField", ID: "status", Name: "Status", DataType: "SINGLE_SELECT", Options: []FieldOption{{ID: "todo", Name: "Todo"}}}}},
+					Fields: fieldConnection{Nodes: []*rawField{
+						{Kind: "ProjectV2SingleSelectField", ID: "status", Name: "Status", DataType: "SINGLE_SELECT", Options: []FieldOption{{ID: "todo", Name: "Todo"}}},
+						{Kind: "ProjectV2SingleSelectField", ID: "priority", Name: "Priority", DataType: "SINGLE_SELECT", IssueField: &rawIssueField{Options: []FieldOption{{ID: "medium", Name: "Medium"}, {ID: "low", Name: "Low"}}}},
+					}},
 					VerticalGroupBy: fieldConnection{Nodes: []*rawField{{Kind: "ProjectV2IterationField", ID: "iteration", Name: "Iteration", DataType: "ITERATION", Configuration: &iterationConfiguration{Iterations: []Iteration{{ID: "current", Title: "Current"}}, CompletedIterations: []Iteration{{ID: "old", Title: "Old"}}}}}},
 					SortByFields:    sortConnection{Nodes: []*rawSortField{{Direction: "ASC", Field: &rawField{Kind: "ProjectV2Field", ID: "position", Name: "Position", DataType: "POSITION"}}}},
 				},
@@ -220,7 +223,7 @@ func TestOpenViewProjectsFieldConfigurations(t *testing.T) {
 	if !view.ViewerCanUpdate || view.Layout != BoardLayout || view.Filter != "iteration:@current" {
 		t.Fatalf("view metadata = %#v", view)
 	}
-	if len(view.Fields) != 1 || len(view.Fields[0].Options) != 1 || view.Fields[0].Options[0].Name != "Todo" {
+	if len(view.Fields) != 2 || len(view.Fields[0].Options) != 1 || view.Fields[0].Options[0].Name != "Todo" || len(view.Fields[1].Options) != 2 || view.Fields[1].Options[0].Name != "Medium" {
 		t.Fatalf("fields = %#v", view.Fields)
 	}
 	if len(view.VerticalGroupBy) != 1 || len(view.VerticalGroupBy[0].Iterations) != 2 || !view.VerticalGroupBy[0].Iterations[1].Completed {
@@ -315,7 +318,7 @@ func TestListViewsPaginates(t *testing.T) {
 func TestPageItemsProjectsContentAndValues(t *testing.T) {
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(query string, variables map[string]interface{}, response interface{}) error {
-			if variables["filter"] != "assignee:@me" || variables["after"] != "cursor" || !strings.Contains(query, "ProjectV2ItemFieldDateValue") {
+			if variables["filter"] != "assignee:@me" || variables["after"] != "cursor" || !strings.Contains(query, "ProjectV2ItemFieldDateValue") || !strings.Contains(query, "IssueFieldSingleSelectValue") || !strings.Contains(query, "repository { name }") || !strings.Contains(query, "subIssuesSummary { total completed }") || !strings.Contains(query, "isDraft merged") {
 				t.Fatalf("item query or variables invalid: %q %#v", query, variables)
 			}
 			result := response.(*itemsResponse)
@@ -323,10 +326,11 @@ func TestPageItemsProjectsContentAndValues(t *testing.T) {
 				Items rawItemsPage `json:"items"`
 			}{Items: rawItemsPage{
 				Nodes: []*rawItem{{
-					ID: "item-1", Type: "ISSUE", Content: &rawContent{Kind: "Issue", ID: "issue-1", Number: 42, Title: "Fix it", URL: "https://example.invalid/42"},
+					ID: "item-1", Type: "ISSUE", Content: &rawContent{Kind: "Issue", ID: "issue-1", Number: 42, Title: "Fix it", URL: "https://example.invalid/42", Repository: &rawRepository{Name: "example"}, State: "OPEN", SubIssues: &rawSubIssues{Total: 8, Completed: 3}},
 					FieldValues: rawFieldValuePage{Nodes: []*rawFieldValue{
 						{Kind: "ProjectV2ItemFieldSingleSelectValue", Field: rawFieldRef{ID: "status", Name: "Status"}, OptionID: "todo", Name: "Todo"},
 						{Kind: "ProjectV2ItemFieldNumberValue", Field: rawFieldRef{ID: "estimate", Name: "Estimate"}, Number: floatPtr(2.5)},
+						{Kind: "ProjectV2ItemIssueFieldValue", Field: rawFieldRef{ID: "priority", Name: "Priority"}, IssueFieldValue: &rawIssueFieldValue{Kind: "IssueFieldSingleSelectValue", OptionID: "medium", Name: "Medium"}},
 					}, PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("next")}},
 				}},
 				PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("next")},
@@ -351,11 +355,42 @@ func TestPageItemsProjectsContentAndValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PageItems() error = %v", err)
 	}
-	if !page.HasNext || page.EndCursor != "next" || len(page.Items) != 1 || len(page.Items[0].FieldValues) != 3 {
+	if !page.HasNext || page.EndCursor != "next" || len(page.Items) != 1 || len(page.Items[0].FieldValues) != 4 {
 		t.Fatalf("page = %#v", page)
 	}
-	if page.Items[0].Content == nil || page.Items[0].Content.Title != "Fix it" || page.Items[0].FieldValues[1].Value != "2.5" {
+	if page.Items[0].Content == nil || page.Items[0].Content.Title != "Fix it" || page.Items[0].Content.Repository != "example" || page.Items[0].Content.State != "OPEN" || page.Items[0].Content.SubIssueTotal != 8 || page.Items[0].Content.SubIssueDone != 3 || page.Items[0].FieldValues[1].Value != "2.5" || page.Items[0].FieldValues[2].FieldName != "Priority" || page.Items[0].FieldValues[2].OptionID != "medium" || page.Items[0].FieldValues[2].Value != "Medium" || !page.Items[0].FieldValues[2].Available {
 		t.Fatalf("item = %#v", page.Items[0])
+	}
+}
+
+func TestPageItemsProjectsPullRequestMetadata(t *testing.T) {
+	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+		func(_ string, _ map[string]interface{}, response interface{}) error {
+			result := response.(*itemsResponse)
+			result.Organization = &itemOwner{Project: &struct {
+				Items rawItemsPage `json:"items"`
+			}{Items: rawItemsPage{Nodes: []*rawItem{
+				{ID: "pr-1", Type: "PULL_REQUEST", Content: &rawContent{Kind: "PullRequest", ID: "pull-1", Number: 7, Title: "Merge it", Repository: &rawRepository{Name: "example"}, State: "MERGED", Merged: true}},
+				{ID: "pr-2", Type: "PULL_REQUEST", Content: &rawContent{Kind: "PullRequest", ID: "pull-2", Number: 8, Title: "Work in progress", Repository: &rawRepository{Name: "example"}, State: "OPEN", IsDraft: true}},
+			}}}}
+			return nil
+		},
+	}}
+
+	page, err := newClient(graphql, &fakeREST{}).PageItems(context.Background(), Owner{Login: "org", Kind: OrganizationOwner}, 2, "", "")
+	if err != nil {
+		t.Fatalf("PageItems() error = %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("items = %#v", page.Items)
+	}
+	merged := page.Items[0].Content
+	draft := page.Items[1].Content
+	if merged.Repository != "example" || merged.State != "MERGED" || !merged.Merged {
+		t.Fatalf("merged pull request = %#v", merged)
+	}
+	if draft.Repository != "example" || draft.State != "OPEN" || !draft.IsDraft {
+		t.Fatalf("draft pull request = %#v", draft)
 	}
 }
 

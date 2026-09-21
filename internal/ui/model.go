@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
@@ -66,34 +67,38 @@ type Model struct {
 
 	host string
 
-	screen          screen
-	cursor          int
-	filter          string
-	filtering       bool
-	showHelp        bool
-	selectedOwner   *github.Owner
-	selectedProject *github.Project
-	views           []github.ViewSummary
-	viewsErr        error
-	loadingViews    bool
-	loadingDetail   bool
-	status          string
-	items           []github.Item
-	itemsLoading    bool
-	itemsHasNext    bool
-	itemsCursor     string
-	itemsErr        error
-	boardLane       int
-	boardCard       int
-	width           int
-	height          int
-	detailVisible   bool
-	detailLoading   bool
-	detailItemID    string
-	detail          *github.ItemDetail
-	detailErr       error
-	detailOffset    int
-	detailShowAll   bool
+	screen            screen
+	cursor            int
+	filter            string
+	filtering         bool
+	showHelp          bool
+	selectedOwner     *github.Owner
+	selectedProject   *github.Project
+	views             []github.ViewSummary
+	viewsErr          error
+	loadingViews      bool
+	loadingDetail     bool
+	status            string
+	items             []github.Item
+	itemsLoading      bool
+	itemsHasNext      bool
+	itemsCursor       string
+	itemsErr          error
+	itemsLoadFrame    int
+	itemsLanePending  int
+	itemsLoadingLanes map[string]bool
+	itemsFailedLanes  map[string]bool
+	boardLane         int
+	boardCard         int
+	width             int
+	height            int
+	detailVisible     bool
+	detailLoading     bool
+	detailItemID      string
+	detail            *github.ItemDetail
+	detailErr         error
+	detailOffset      int
+	detailShowAll     bool
 
 	loadPrefs func(string) (config.Selection, error)
 	savePrefs func(string, config.Selection) error
@@ -142,6 +147,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+	case itemsLoadingTickMsg:
+		if msg.generation != m.generation || !m.itemsLoading || m.screen != screenBoard {
+			return m, nil
+		}
+		m.itemsLoadFrame = (m.itemsLoadFrame + 1) % len(itemsLoadingFrames)
+		return m, itemsLoadingTick(m.generation)
 	case discoveryMsg:
 		return m.updateDiscovery(msg)
 	case viewsMsg:
@@ -189,9 +200,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenBoard
 		m.cursor = 0
 		m.persistSelection()
-		return m, m.startItemsLoad()
+		return m, m.startItemsLoadWithSpinner()
 	case itemsPageMsg:
 		return m.updateItems(msg)
+	case laneItemsMsg:
+		return m.updateLaneItems(msg)
 	case itemDetailMsg:
 		if msg.generation != m.generation || m.screen != screenBoard || msg.itemID != m.detailItemID {
 			return m, nil
@@ -223,7 +236,7 @@ func (m Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 	if m.selection.OwnerLogin != "" {
 		if m.view != nil {
 			m.enterBoardFromDiscovery()
-			return m, m.startItemsLoad()
+			return m, m.startItemsLoadWithSpinner()
 		}
 		if m.err != nil {
 			m.screen = screenOwnerPicker
@@ -326,6 +339,7 @@ func (m Model) persistSelection() {
 }
 
 func (m *Model) startViewsLoad() tea.Cmd {
+	m.cancelItemsLoad()
 	m.screen = screenViewPicker
 	m.view = nil
 	m.detailVisible = false
@@ -337,6 +351,9 @@ func (m *Model) startViewsLoad() tea.Cmd {
 	m.itemsHasNext = false
 	m.itemsCursor = ""
 	m.itemsErr = nil
+	m.itemsLanePending = 0
+	m.itemsLoadingLanes = nil
+	m.itemsFailedLanes = nil
 	m.loadingViews = true
 	m.views = nil
 	m.viewsErr = nil
@@ -400,6 +417,10 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	m.itemsHasNext = false
 	m.itemsCursor = ""
 	m.itemsErr = nil
+	m.itemsLoadFrame = 0
+	m.itemsLanePending = 0
+	m.itemsLoadingLanes = nil
+	m.itemsFailedLanes = nil
 	m.boardLane = 0
 	m.boardCard = 0
 	m.detailVisible = false
@@ -408,6 +429,26 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	m.detail = nil
 	m.detailErr = nil
 	return m.itemsPageCmd("", true)
+}
+
+func (m *Model) startItemsLoadWithSpinner() tea.Cmd {
+	load := m.startItemsLoad()
+	if load == nil {
+		return nil
+	}
+	commands := []tea.Cmd{itemsLoadingTick(m.generation)}
+	if requests, ok := parallelLaneItemsRequests(m.view); ok {
+		m.itemsLanePending = len(requests)
+		m.itemsLoadingLanes = make(map[string]bool, len(requests))
+		m.itemsFailedLanes = make(map[string]bool)
+		for _, request := range requests {
+			m.itemsLoadingLanes[request.key] = true
+			commands = append(commands, m.laneItemsCmd(request))
+		}
+	} else {
+		commands = append(commands, load)
+	}
+	return tea.Batch(commands...)
 }
 
 func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
@@ -460,6 +501,93 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	m.itemsLoading = false
 	m.clampBoardCursor()
 	return m, nil
+}
+
+func (m *Model) laneItemsCmd(request laneItemsRequest) tea.Cmd {
+	owner := *m.selectedOwner
+	project := m.selectedProject.Number
+	generation := m.generation
+	ctx := m.ctx
+	source := m.source
+	return func() tea.Msg {
+		loader, ok := source.(ItemsSource)
+		if !ok {
+			return laneItemsMsg{request: request, err: fmt.Errorf("item loading is not supported by this client"), generation: generation}
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		items := make([]github.Item, 0)
+		after := ""
+		for {
+			page, err := loader.PageItems(ctx, owner, project, request.filter, after)
+			if err != nil {
+				return laneItemsMsg{request: request, items: items, err: err, generation: generation}
+			}
+			items = append(items, page.Items...)
+			if !page.HasNext {
+				return laneItemsMsg{request: request, items: items, generation: generation}
+			}
+			after = page.EndCursor
+		}
+	}
+}
+
+func (m Model) updateLaneItems(msg laneItemsMsg) (tea.Model, tea.Cmd) {
+	if msg.generation != m.generation || m.screen != screenBoard || !m.itemsLoadingLanes[msg.request.key] {
+		return m, nil
+	}
+	m.items = appendUniqueItems(m.items, msg.items)
+	delete(m.itemsLoadingLanes, msg.request.key)
+	m.itemsLanePending--
+	if msg.err != nil && m.itemsErr == nil {
+		m.itemsErr = fmt.Errorf("%s: %w", msg.request.name, msg.err)
+	}
+	if msg.err != nil {
+		m.itemsFailedLanes[msg.request.key] = true
+	}
+	if m.itemsLanePending > 0 {
+		m.clampBoardCursor()
+		return m, nil
+	}
+	m.itemsLoading = false
+	m.itemsHasNext = false
+	m.itemsLoadingLanes = nil
+	m.clampBoardCursor()
+	return m, nil
+}
+
+func (m *Model) cancelItemsLoad() {
+	if !m.itemsLoading {
+		return
+	}
+	if m.cancel != nil {
+		m.cancel()
+	}
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.generation++
+	m.itemsLoading = false
+	m.itemsLanePending = 0
+	m.itemsLoadingLanes = nil
+}
+
+func appendUniqueItems(items, additions []github.Item) []github.Item {
+	seen := make(map[string]bool, len(items)+len(additions))
+	for _, item := range items {
+		if item.ID != "" {
+			seen[item.ID] = true
+		}
+	}
+	for _, item := range additions {
+		if item.ID != "" && seen[item.ID] {
+			continue
+		}
+		items = append(items, item)
+		if item.ID != "" {
+			seen[item.ID] = true
+		}
+	}
+	return items
 }
 
 func (m *Model) openItemDetailCmd() tea.Cmd {
@@ -587,12 +715,10 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.detailErr = nil
 				return m, nil
 			case "j", "down", "J":
-				m.detailOffset++
+				m.moveDetail(1)
 				return m, nil
 			case "k", "up", "K":
-				if m.detailOffset > 0 {
-					m.detailOffset--
-				}
+				m.moveDetail(-1)
 				return m, nil
 			case "g":
 				m.detailOffset = 0
@@ -639,6 +765,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m, m.selectCurrent()
 	case "p":
+		m.cancelItemsLoad()
 		if m.selectedOwner != nil && m.screen != screenProjectPicker {
 			m.screen = screenProjectPicker
 			m.cursor = 0
@@ -704,6 +831,7 @@ func (m *Model) goBack() tea.Cmd {
 		m.selectedOwner = nil
 		m.selectedProject = nil
 	case screenBoard:
+		m.cancelItemsLoad()
 		if m.selectedProject != nil {
 			m.screen = screenViewPicker
 			m.view = nil
@@ -776,6 +904,10 @@ func (m *Model) refresh() tea.Cmd {
 	}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.generation++
+	m.itemsLoading = false
+	m.itemsLanePending = 0
+	m.itemsLoadingLanes = nil
+	m.itemsFailedLanes = nil
 	m.loading = m.screen == screenLoading
 	m.err = nil
 	m.viewsErr = nil
@@ -1103,11 +1235,28 @@ type itemsPageMsg struct {
 	generation uint64
 }
 
+type itemsLoadingTickMsg struct {
+	generation uint64
+}
+
+type laneItemsMsg struct {
+	request    laneItemsRequest
+	items      []github.Item
+	err        error
+	generation uint64
+}
+
 type itemDetailMsg struct {
 	itemID     string
 	detail     *github.ItemDetail
 	err        error
 	generation uint64
+}
+
+func itemsLoadingTick(generation uint64) tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+		return itemsLoadingTickMsg{generation: generation}
+	})
 }
 
 func discover(source DiscoverySource, ctx context.Context, generation uint64) tea.Cmd {
