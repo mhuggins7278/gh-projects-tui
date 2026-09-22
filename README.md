@@ -6,6 +6,16 @@ A terminal UI for GitHub Projects v2, built with Go and Bubble Tea.
 precompiled extension downloads. Run it manually from source using the steps
 below. Features, keybindings, and supported view types are still evolving.
 
+## Screenshots
+
+These captures show the current pre-alpha interface running locally against a
+disposable GitHub Projects sandbox. They are illustrative, not a published
+binary or a promise of visual/API parity with GitHub's web UI.
+
+![Board view](docs/screenshots/board.png)
+
+![Table view](docs/screenshots/table.png)
+
 ## Run locally
 
 ### Prerequisites
