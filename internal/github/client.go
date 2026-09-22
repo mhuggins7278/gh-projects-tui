@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 )
@@ -133,8 +134,8 @@ type organization struct {
 }
 
 // Discover loads the viewer, membership-derived organization owners, and each
-// owner's open project list. An individual owner failure is kept alongside
-// successful results.
+// owner's open project list. Owners whose projects are inaccessible are omitted
+// from the picker; unexpected owner failures are kept alongside successful results.
 func (c *Client) Discover(ctx context.Context) (Discovery, error) {
 	var response projectsResponse
 	if err := c.graphql.DoWithContext(ctx, viewerProjectsQuery, map[string]interface{}{"after": nil}, &response); err != nil {
@@ -174,15 +175,24 @@ func (c *Client) Discover(ctx context.Context) (Discovery, error) {
 	}
 	for _, organization := range organizations {
 		owner := Owner{Login: organization.Login, Kind: OrganizationOwner}
-		discovery.Owners = append(discovery.Owners, owner)
 		projects, err := c.projects(ctx, owner)
 		if err != nil {
-			discovery.OwnerErrors = append(discovery.OwnerErrors, OwnerFailure{Owner: owner, Err: err})
+			if !isSAMLProtectedError(err) {
+				discovery.OwnerErrors = append(discovery.OwnerErrors, OwnerFailure{Owner: owner, Err: err})
+			}
 			continue
 		}
+		discovery.Owners = append(discovery.Owners, owner)
 		discovery.Projects[owner.Login] = projects
 	}
 	return discovery, nil
+}
+
+func isSAMLProtectedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "organization saml enforcement")
 }
 
 func (c *Client) memberships(ctx context.Context) ([]organization, error) {

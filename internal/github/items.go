@@ -7,12 +7,7 @@ import (
 	"strings"
 )
 
-const itemFieldValueFragments = `
-fragment FieldValuesPage on ProjectV2ItemFieldValueConnection {
-  nodes { ...FieldValue }
-  pageInfo { hasNextPage endCursor }
-}
-
+const fieldValueFragment = `
 fragment FieldValue on ProjectV2ItemFieldValue {
   __typename
   ... on ProjectV2ItemFieldDateValue {
@@ -72,6 +67,51 @@ fragment FieldValue on ProjectV2ItemFieldValue {
       ... on IssueFieldSingleSelectValue { optionId name }
       ... on IssueFieldTextValue { text: value }
     }
+  }
+}`
+
+const itemFieldValueFragments = `
+fragment FieldValuesPage on ProjectV2ItemFieldValueConnection {
+  nodes { ...FieldValue }
+  pageInfo { hasNextPage endCursor }
+}
+` + fieldValueFragment
+
+const itemDetailFieldValueFragments = `
+fragment DetailFieldValuesPage on ProjectV2ItemFieldValueConnection {
+  nodes { ...DetailFieldValue }
+  pageInfo { hasNextPage endCursor }
+}
+
+fragment DetailFieldValue on ProjectV2ItemFieldValue {
+  ...FieldValue
+  ... on ProjectV2ItemFieldLabelValue {
+    labels(first: 100) { nodes { name } pageInfo { hasNextPage endCursor } }
+  }
+  ... on ProjectV2ItemFieldMilestoneValue {
+    milestone { title }
+  }
+  ... on ProjectV2ItemFieldPullRequestValue {
+    pullRequests(first: 100) {
+      nodes { number title url repository { nameWithOwner } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+  ... on ProjectV2ItemFieldRepositoryValue {
+    repository { name nameWithOwner }
+  }
+  ... on ProjectV2ItemFieldReviewerValue {
+    reviewers(first: 100) {
+      nodes {
+        __typename
+        ... on User { login }
+        ... on Team { name }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+  ... on ProjectV2ItemFieldUserValue {
+    users(first: 100) { nodes { login } pageInfo { hasNextPage endCursor } }
   }
 }`
 
@@ -189,7 +229,8 @@ type rawContent struct {
 }
 
 type rawRepository struct {
-	Name string `json:"name"`
+	Name          string `json:"name"`
+	NameWithOwner string `json:"nameWithOwner"`
 }
 
 type rawSubIssues struct {
@@ -203,18 +244,69 @@ type rawFieldValuePage struct {
 }
 
 type rawFieldValue struct {
-	Kind            string              `json:"__typename"`
-	Field           rawFieldRef         `json:"field"`
-	OptionID        string              `json:"optionId"`
-	Name            string              `json:"name"`
-	Text            string              `json:"text"`
-	Date            string              `json:"date"`
-	Number          *float64            `json:"number"`
-	IterationID     string              `json:"iterationId"`
-	Title           string              `json:"title"`
-	Value           string              `json:"value"`
-	Options         []FieldOption       `json:"options"`
-	IssueFieldValue *rawIssueFieldValue `json:"issueFieldValue"`
+	Kind            string                          `json:"__typename"`
+	Field           rawFieldRef                     `json:"field"`
+	OptionID        string                          `json:"optionId"`
+	Name            string                          `json:"name"`
+	Text            string                          `json:"text"`
+	Date            string                          `json:"date"`
+	Number          *float64                        `json:"number"`
+	IterationID     string                          `json:"iterationId"`
+	Title           string                          `json:"title"`
+	Value           string                          `json:"value"`
+	Options         []FieldOption                   `json:"options"`
+	IssueFieldValue *rawIssueFieldValue             `json:"issueFieldValue"`
+	Labels          *rawLabelConnection             `json:"labels"`
+	Milestone       *rawMilestone                   `json:"milestone"`
+	PullRequests    *rawPullRequestConnection       `json:"pullRequests"`
+	Repository      *rawRepository                  `json:"repository"`
+	Reviewers       *rawRequestedReviewerConnection `json:"reviewers"`
+	Users           *rawUserConnection              `json:"users"`
+}
+
+type rawLabelConnection struct {
+	Nodes    []rawLabel `json:"nodes"`
+	PageInfo pageInfo   `json:"pageInfo"`
+}
+
+type rawLabel struct {
+	Name string `json:"name"`
+}
+
+type rawMilestone struct {
+	Title string `json:"title"`
+}
+
+type rawPullRequestConnection struct {
+	Nodes    []rawPullRequest `json:"nodes"`
+	PageInfo pageInfo         `json:"pageInfo"`
+}
+
+type rawPullRequest struct {
+	Number     int            `json:"number"`
+	Title      string         `json:"title"`
+	URL        string         `json:"url"`
+	Repository *rawRepository `json:"repository"`
+}
+
+type rawRequestedReviewerConnection struct {
+	Nodes    []rawRequestedReviewer `json:"nodes"`
+	PageInfo pageInfo               `json:"pageInfo"`
+}
+
+type rawRequestedReviewer struct {
+	Kind  string `json:"__typename"`
+	Login string `json:"login"`
+	Name  string `json:"name"`
+}
+
+type rawUserConnection struct {
+	Nodes    []rawUser `json:"nodes"`
+	PageInfo pageInfo  `json:"pageInfo"`
+}
+
+type rawUser struct {
+	Login string `json:"login"`
 }
 
 type rawIssueFieldValue struct {
@@ -369,15 +461,92 @@ func (value rawFieldValue) project() FieldValue {
 			Available: value.IssueFieldValue.hasValue(),
 		}
 	}
-	return FieldValue{
+	projected := FieldValue{
 		Kind:        value.Kind,
 		FieldID:     value.Field.ID,
 		FieldName:   value.Field.Name,
 		OptionID:    value.OptionID,
-		Value:       valueValue(value),
 		IterationID: value.IterationID,
-		Available:   value.hasScalarValue(),
 	}
+	switch value.Kind {
+	case "ProjectV2ItemFieldLabelValue":
+		if value.Labels != nil {
+			projected.Value = joinNames(value.Labels.Nodes, func(label rawLabel) string { return label.Name }, value.Labels.PageInfo.HasNextPage)
+			projected.Available = true
+		}
+	case "ProjectV2ItemFieldMilestoneValue":
+		if value.Milestone != nil {
+			projected.Value = value.Milestone.Title
+			projected.Available = true
+		}
+	case "ProjectV2ItemFieldPullRequestValue":
+		if value.PullRequests != nil {
+			projected.Value = joinNames(value.PullRequests.Nodes, func(request rawPullRequest) string {
+				label := ""
+				if request.Repository != nil {
+					label = request.Repository.NameWithOwner
+					if label == "" {
+						label = request.Repository.Name
+					}
+				}
+				if request.Number > 0 {
+					if label != "" {
+						label += " "
+					}
+					label += fmt.Sprintf("#%d", request.Number)
+				}
+				if label == "" {
+					label = request.Title
+				}
+				return label
+			}, value.PullRequests.PageInfo.HasNextPage)
+			projected.Available = true
+		}
+	case "ProjectV2ItemFieldRepositoryValue":
+		if value.Repository != nil {
+			projected.Value = value.Repository.NameWithOwner
+			if projected.Value == "" {
+				projected.Value = value.Repository.Name
+			}
+			projected.Available = true
+		}
+	case "ProjectV2ItemFieldReviewerValue":
+		if value.Reviewers != nil {
+			projected.Value = joinNames(value.Reviewers.Nodes, func(reviewer rawRequestedReviewer) string {
+				if reviewer.Login != "" {
+					return reviewer.Login
+				}
+				return reviewer.Name
+			}, value.Reviewers.PageInfo.HasNextPage)
+			projected.Available = true
+		}
+	case "ProjectV2ItemFieldUserValue":
+		if value.Users != nil {
+			projected.Value = joinNames(value.Users.Nodes, func(user rawUser) string { return user.Login }, value.Users.PageInfo.HasNextPage)
+			projected.Available = true
+		}
+	default:
+		projected.Value = valueValue(value)
+		projected.Available = value.hasScalarValue()
+	}
+	return projected
+}
+
+func joinNames[T any](values []T, name func(T) string, truncated bool) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		if valueName := name(value); valueName != "" {
+			parts = append(parts, valueName)
+		}
+	}
+	result := strings.Join(parts, ", ")
+	if truncated {
+		if result != "" {
+			result += ", "
+		}
+		result += "..."
+	}
+	return result
 }
 
 func (value rawIssueFieldValue) hasValue() bool {

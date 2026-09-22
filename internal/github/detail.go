@@ -14,7 +14,7 @@ fragment ItemDetailFields on ProjectV2Item {
     ... on PullRequest { id number title url body }
     ... on DraftIssue { id title body }
   }
-  fieldValues(first: 100, after: $valuesAfter) { ...FieldValuesPage }
+  fieldValues(first: 100, after: $valuesAfter) { ...DetailFieldValuesPage }
 }`
 
 const userItemDetailQuery = `
@@ -28,7 +28,7 @@ query UserProjectItemDetail($login: String!, $project: Int!, $itemID: ID!, $fiel
     }
   }
   node(id: $itemID) { ...ItemDetailFields }
-}` + itemDetailFields + itemFieldValueFragments + fieldConfigurationFragment
+}` + itemDetailFields + fieldValueFragment + itemDetailFieldValueFragments + fieldConfigurationFragment
 
 const organizationItemDetailQuery = `
 query OrganizationProjectItemDetail($login: String!, $project: Int!, $itemID: ID!, $fieldsAfter: String, $valuesAfter: String) {
@@ -41,7 +41,7 @@ query OrganizationProjectItemDetail($login: String!, $project: Int!, $itemID: ID
     }
   }
   node(id: $itemID) { ...ItemDetailFields }
-}` + itemDetailFields + itemFieldValueFragments + fieldConfigurationFragment
+}` + itemDetailFields + fieldValueFragment + itemDetailFieldValueFragments + fieldConfigurationFragment
 
 type ItemDetail struct {
 	ID      string

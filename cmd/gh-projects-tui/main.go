@@ -23,17 +23,18 @@ func main() {
 	host := config.DefaultHost()
 	remembered, _ := config.Load(host)
 	explicit := config.Selection{Owner: *owner, Project: *project, View: *view}
+	selection := startupSelection(explicit, remembered)
 	// A project needs an explicit or remembered owner; a view needs an
 	// explicit or remembered project. Ancestor changes discard descendants.
-	if explicit.Project != 0 && explicit.Owner == "" && remembered.Owner == "" {
+	if explicit.Project != 0 && selection.Owner == "" {
 		fmt.Fprintln(os.Stderr, "--project requires --owner (or a remembered owner)")
 		os.Exit(2)
 	}
-	if explicit.View != 0 && explicit.Project == 0 && remembered.Project == 0 {
+	if explicit.View != 0 && selection.Project == 0 {
 		fmt.Fprintln(os.Stderr, "--view requires --project (or a remembered project)")
 		os.Exit(2)
 	}
-	if explicit.View != 0 && explicit.Owner == "" && remembered.Owner == "" {
+	if explicit.View != 0 && selection.Owner == "" {
 		fmt.Fprintln(os.Stderr, "--view requires --owner (or a remembered owner)")
 		os.Exit(2)
 	}
@@ -43,9 +44,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	model := ui.NewModelWithHost(client, ui.Selection{OwnerLogin: *owner, ProjectNumber: *project, ViewNumber: *view}, host)
+	model := ui.NewModelWithHost(client, ui.Selection{OwnerLogin: selection.Owner, ProjectNumber: selection.Project, ViewNumber: selection.View}, host)
 	if _, err := tea.NewProgram(model).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func startupSelection(explicit, remembered config.Selection) config.Selection {
+	if explicit.Owner == "" && explicit.Project == 0 && explicit.View == 0 {
+		return config.Selection{}
+	}
+	return config.Resolve(explicit, remembered)
 }

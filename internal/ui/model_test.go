@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/mhuggins7278/gh-projects-tui/internal/config"
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
 
@@ -17,6 +18,22 @@ type fakeDiscoverySource struct {
 func (f *fakeDiscoverySource) Discover(ctx context.Context) (github.Discovery, error) {
 	f.contexts = append(f.contexts, ctx)
 	return github.Discovery{}, nil
+}
+
+type rememberedDiscoverySource struct {
+	discovery     github.Discovery
+	discoveries   int
+	ownerResolves int
+}
+
+func (s *rememberedDiscoverySource) Discover(context.Context) (github.Discovery, error) {
+	s.discoveries++
+	return s.discovery, nil
+}
+
+func (s *rememberedDiscoverySource) ResolveOwner(context.Context, string) (github.Owner, []github.Project, error) {
+	s.ownerResolves++
+	return github.Owner{}, nil, errors.New("direct owner path should not run")
 }
 
 type fakeSelectionSource struct{}
@@ -85,5 +102,29 @@ func TestDirectSelectionSkipsMembershipDiscovery(t *testing.T) {
 	result := updated.(Model)
 	if result.err != nil || result.view == nil || result.view.Name != "Board" {
 		t.Fatalf("direct selection result = %#v", result)
+	}
+}
+
+func TestNoArgumentStartupDiscoversAllOwnersBeforeRememberedSelection(t *testing.T) {
+	source := &rememberedDiscoverySource{discovery: github.Discovery{
+		Owners: []github.Owner{
+			{Login: "org-one", Kind: github.OrganizationOwner},
+			{Login: "org-two", Kind: github.OrganizationOwner},
+		},
+		Projects: map[string][]github.Project{},
+	}}
+	model := NewModelWithHost(source, Selection{}, "github.com")
+	model.loadPrefs = func(string) (config.Selection, error) {
+		return config.Selection{Owner: "stale-org", Project: 7, View: 3}, nil
+	}
+
+	message := model.Init()()
+	if source.discoveries != 1 || source.ownerResolves != 0 {
+		t.Fatalf("startup calls = discoveries %d, direct resolves %d", source.discoveries, source.ownerResolves)
+	}
+	updated, _ := model.Update(message)
+	result := updated.(Model)
+	if result.screen != screenOwnerPicker || len(result.discovery.Owners) != 2 {
+		t.Fatalf("startup discovery state = screen %v, owners %#v", result.screen, result.discovery.Owners)
 	}
 }

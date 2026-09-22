@@ -22,6 +22,10 @@ type fakePickerSource struct {
 	itemPagesByFilter  map[string]map[string]github.ItemsPage
 	itemErrorsByFilter map[string]map[string]error
 	detail             github.ItemDetail
+	mutations          *[]string
+	mutationErr        error
+	viewCalls          *int
+	itemCalls          *int
 }
 
 func (f fakePickerSource) Discover(context.Context) (github.Discovery, error) {
@@ -42,10 +46,16 @@ func (f fakePickerSource) ListViews(context.Context, github.Owner, int) ([]githu
 }
 
 func (f fakePickerSource) OpenView(context.Context, github.Owner, int, int) (github.View, error) {
+	if f.viewCalls != nil {
+		*f.viewCalls++
+	}
 	return f.view, nil
 }
 
 func (f fakePickerSource) PageItems(_ context.Context, _ github.Owner, _ int, filter, after string) (github.ItemsPage, error) {
+	if f.itemCalls != nil {
+		*f.itemCalls++
+	}
 	if errorsByCursor, ok := f.itemErrorsByFilter[filter]; ok {
 		if err := errorsByCursor[after]; err != nil {
 			return github.ItemsPage{}, err
@@ -62,6 +72,35 @@ func (f fakePickerSource) PageItems(_ context.Context, _ github.Owner, _ int, fi
 
 func (f fakePickerSource) LoadItemDetail(context.Context, github.Owner, int, string) (github.ItemDetail, error) {
 	return f.detail, nil
+}
+
+func (f fakePickerSource) UpdateItemFieldValue(_ context.Context, request github.ItemFieldValueUpdate) error {
+	if f.mutations != nil {
+		value := ""
+		if request.Value.SingleSelectOptionID != nil {
+			value = *request.Value.SingleSelectOptionID
+		}
+		*f.mutations = append(*f.mutations, "field:"+value)
+	}
+	return f.mutationErr
+}
+
+func (f fakePickerSource) ClearItemFieldValue(_ context.Context, _ github.ItemFieldValueClear) error {
+	if f.mutations != nil {
+		*f.mutations = append(*f.mutations, "clear")
+	}
+	return f.mutationErr
+}
+
+func (f fakePickerSource) UpdateItemPosition(_ context.Context, request github.ItemPositionUpdate) error {
+	if f.mutations != nil {
+		anchor := "top"
+		if request.AfterID != nil {
+			anchor = *request.AfterID
+		}
+		*f.mutations = append(*f.mutations, "position:"+anchor)
+	}
+	return f.mutationErr
 }
 
 func keyPress(s string) tea.KeyPressMsg {
@@ -266,6 +305,7 @@ func TestBoardLoadsPagesAndGroupsItems(t *testing.T) {
 	model := newPickerModel(source)
 	model.screen = screenBoard
 	model.view = &view
+	model.width = 120
 	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
 	model.selectedProject = &github.Project{Number: 1}
 
@@ -276,7 +316,7 @@ func TestBoardLoadsPagesAndGroupsItems(t *testing.T) {
 		t.Fatalf("first page state = %#v, next nil = %v", model, next == nil)
 	}
 	loading := ansi.Strip(model.View().Content)
-	if strings.Contains(loading, "Fix the thing") || !strings.Contains(loading, "Loading cards...") || strings.Count(loading, "⠋") < 2 {
+	if !strings.Contains(loading, "Fix the thing") || strings.Contains(loading, "Ship the thing") || !strings.Contains(loading, "Loading cards...") || strings.Count(loading, "⠋") < 2 {
 		t.Fatalf("partial board did not show lane loading states: %q", loading)
 	}
 	updated, tick := model.Update(itemsLoadingTickMsg{generation: model.generation})
@@ -290,8 +330,11 @@ func TestBoardLoadsPagesAndGroupsItems(t *testing.T) {
 		t.Fatalf("final page state = %#v, next nil = %v", model, next == nil)
 	}
 	lanes := model.boardLanes()
-	if len(lanes) != 3 || len(lanes[0].Items) != 1 || len(lanes[1].Items) != 1 || len(lanes[2].Items) != 0 {
+	if len(lanes) != 3 || len(lanes[0].Items) != 0 || len(lanes[1].Items) != 1 || len(lanes[2].Items) != 1 {
 		t.Fatalf("lanes = %#v", lanes)
+	}
+	if names := []string{lanes[0].Name, lanes[1].Name, lanes[2].Name}; !reflect.DeepEqual(names, []string{"No Status", "Todo", "Done"}) {
+		t.Fatalf("lane order = %#v", names)
 	}
 	content := model.View().Content
 	if strings.Contains(content, "Loading cards...") || strings.Contains(content, "⠙") {
@@ -338,6 +381,7 @@ func TestBoardLoadsStatusLanesInParallel(t *testing.T) {
 	model := newPickerModel(source)
 	model.screen = screenBoard
 	model.view = &view
+	model.width = 180
 	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
 	model.selectedProject = &github.Project{Number: 1}
 
@@ -445,6 +489,7 @@ func TestBoardLaneAndCardNavigation(t *testing.T) {
 		{ID: "b", Content: &github.Content{Kind: "Issue", Title: "B"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
 		{ID: "c", Content: &github.Content{Kind: "Issue", Title: "C"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "two", Available: true}}},
 	}
+	model.boardLane = 1
 	updated, _ := model.Update(keyPress("j"))
 	model = updated.(Model)
 	if model.boardCard != 1 {
@@ -452,13 +497,258 @@ func TestBoardLaneAndCardNavigation(t *testing.T) {
 	}
 	updated, _ = model.Update(keyPress("l"))
 	model = updated.(Model)
-	if model.boardLane != 1 || model.boardCard != 0 {
+	if model.boardLane != 2 || model.boardCard != 0 {
 		t.Fatalf("lane cursor = %d, card cursor = %d", model.boardLane, model.boardCard)
 	}
 	updated, _ = model.Update(keyPress("k"))
 	model = updated.(Model)
 	if model.boardCard != 0 {
 		t.Fatalf("card cursor after clamp = %d", model.boardCard)
+	}
+}
+
+func TestWritableBoardMoveUpdatesFieldAndAppendsDestination(t *testing.T) {
+	status := github.Field{
+		ID:       "status",
+		Name:     "Status",
+		Kind:     "ProjectV2SingleSelectField",
+		DataType: "SINGLE_SELECT",
+		Options:  []github.FieldOption{{ID: "one", Name: "One"}, {ID: "two", Name: "Two"}},
+	}
+	view := github.View{ProjectID: "project", ViewerCanUpdate: true, GroupByFields: []github.Field{status}}
+	mutations := []string{}
+	model := newPickerModel(fakePickerSource{mutations: &mutations})
+	model.screen = screenBoard
+	model.view = &view
+	model.items = []github.Item{
+		{ID: "a", Content: &github.Content{Kind: "Issue", Title: "A"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
+		{ID: "b", Content: &github.Content{Kind: "Issue", Title: "B"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "two", Available: true}}},
+	}
+	model.boardLane = 1
+
+	updated, cmd := model.Update(keyPress("L"))
+	model = updated.(Model)
+	if cmd == nil || !model.mutationLoading {
+		t.Fatalf("move state = %#v, cmd nil = %v", model, cmd == nil)
+	}
+	if len(mutations) != 0 || model.boardLane != 2 || model.boardCard != 1 {
+		t.Fatalf("optimistic move state = lane %d card %d mutations %#v", model.boardLane, model.boardCard, mutations)
+	}
+	if lanes := model.boardLanes(); len(lanes[2].Items) != 2 || lanes[2].Items[1].ID != "a" || lanes[2].Items[1].FieldValues[0].OptionID != "two" {
+		t.Fatalf("optimistic destination lane = %#v", lanes[2])
+	}
+	message, ok := cmd().(boardMutationMsg)
+	if !ok || message.err != nil {
+		t.Fatalf("move message = %#v, type ok = %v", message, ok)
+	}
+	if !reflect.DeepEqual(mutations, []string{"field:two", "position:b"}) {
+		t.Fatalf("mutation calls = %#v", mutations)
+	}
+}
+
+func TestWritableVerticalBoardMoveUpdatesFieldAndAppendsDestination(t *testing.T) {
+	status := github.Field{
+		ID:       "status",
+		Name:     "Status",
+		Kind:     "ProjectV2SingleSelectField",
+		DataType: "SINGLE_SELECT",
+		Options:  []github.FieldOption{{ID: "one", Name: "One"}, {ID: "two", Name: "Two"}},
+	}
+	view := github.View{ProjectID: "project", ViewerCanUpdate: true, VerticalGroupBy: []github.Field{status}}
+	mutations := []string{}
+	model := newPickerModel(fakePickerSource{mutations: &mutations})
+	model.screen = screenBoard
+	model.view = &view
+	model.items = []github.Item{
+		{ID: "a", Content: &github.Content{Kind: "Issue", Title: "A"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
+		{ID: "b", Content: &github.Content{Kind: "Issue", Title: "B"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "two", Available: true}}},
+	}
+	model.boardLane = 1
+
+	updated, cmd := model.Update(keyPress("L"))
+	model = updated.(Model)
+	if cmd == nil || !model.mutationLoading {
+		t.Fatalf("vertical move state = %#v, cmd nil = %v", model, cmd == nil)
+	}
+	message, ok := cmd().(boardMutationMsg)
+	if !ok || message.err != nil {
+		t.Fatalf("vertical move message = %#v, type ok = %v", message, ok)
+	}
+	if !reflect.DeepEqual(mutations, []string{"field:two", "position:b"}) {
+		t.Fatalf("vertical mutation calls = %#v", mutations)
+	}
+}
+
+func TestSuccessfulMutationKeepsOptimisticStateWithoutReloading(t *testing.T) {
+	status := github.Field{
+		ID:       "status",
+		Name:     "Status",
+		Kind:     "ProjectV2SingleSelectField",
+		DataType: "SINGLE_SELECT",
+		Options:  []github.FieldOption{{ID: "one", Name: "One"}, {ID: "two", Name: "Two"}},
+	}
+	view := github.View{ProjectID: "project", ViewerCanUpdate: true, GroupByFields: []github.Field{status}}
+	mutations := []string{}
+	viewCalls := 0
+	itemCalls := 0
+	source := fakePickerSource{
+		mutations: &mutations,
+		viewCalls: &viewCalls,
+		itemCalls: &itemCalls,
+	}
+	model := newPickerModel(source)
+	model.screen = screenBoard
+	model.view = &view
+	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+	model.selectedProject = &github.Project{Number: 1}
+	model.items = []github.Item{{ID: "a", Content: &github.Content{Kind: "Issue", Title: "A"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}}}
+	model.boardLane = 1
+
+	updated, mutationCmd := model.Update(keyPress("L"))
+	model = updated.(Model)
+	mutationMessage := mutationCmd().(boardMutationMsg)
+	updated, next := model.Update(mutationMessage)
+	model = updated.(Model)
+	if next != nil || model.itemsLoading {
+		t.Fatalf("successful mutation triggered refresh: state=%#v, next nil=%v", model, next == nil)
+	}
+	if viewCalls != 0 || model.view != &view {
+		t.Fatalf("mutation reloaded view: calls=%d view=%p want=%p", viewCalls, model.view, &view)
+	}
+	if itemCalls != 0 || model.status != "Move card saved" || model.pendingStatus != "" || model.mutationLoading {
+		t.Fatalf("successful mutation state = items %d status %q pending %q loading=%v", itemCalls, model.status, model.pendingStatus, model.mutationLoading)
+	}
+}
+
+func TestFailedMutationRollsBackOptimisticMove(t *testing.T) {
+	status := github.Field{
+		ID:       "status",
+		Name:     "Status",
+		Kind:     "ProjectV2SingleSelectField",
+		DataType: "SINGLE_SELECT",
+		Options:  []github.FieldOption{{ID: "one", Name: "One"}, {ID: "two", Name: "Two"}},
+	}
+	view := github.View{ProjectID: "project", ViewerCanUpdate: true, GroupByFields: []github.Field{status}}
+	model := newPickerModel(fakePickerSource{mutationErr: errors.New("permission denied")})
+	model.screen = screenBoard
+	model.view = &view
+	model.items = []github.Item{
+		{ID: "a", Content: &github.Content{Kind: "Issue", Title: "A"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
+		{ID: "b", Content: &github.Content{Kind: "Issue", Title: "B"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "two", Available: true}}},
+	}
+	model.boardLane = 1
+
+	updated, mutationCmd := model.Update(keyPress("L"))
+	model = updated.(Model)
+	if model.boardLane != 2 || len(model.items) != 2 || model.items[1].ID != "a" || model.items[1].FieldValues[0].OptionID != "two" {
+		t.Fatalf("optimistic state was not applied: lane=%d items=%#v", model.boardLane, model.items)
+	}
+	message := mutationCmd().(boardMutationMsg)
+	updated, _ = model.Update(message)
+	model = updated.(Model)
+	if model.boardLane != 1 || model.boardCard != 0 || model.items[0].FieldValues[0].OptionID != "one" || model.optimisticRollback != nil {
+		t.Fatalf("rollback state = lane %d card %d items %#v rollback=%#v", model.boardLane, model.boardCard, model.items, model.optimisticRollback)
+	}
+	if !strings.Contains(model.status, "Move card failed") {
+		t.Fatalf("rollback status = %q", model.status)
+	}
+}
+
+func TestCombinedSwimlaneBoardDoesNotOfferMutations(t *testing.T) {
+	priority := github.Field{ID: "priority", Name: "Priority", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "p0", Name: "P0"}, {ID: "p1", Name: "P1"}}}
+	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "todo", Name: "Todo"}, {ID: "done", Name: "Done"}}}
+	view := github.View{ProjectID: "project", ViewerCanUpdate: true, GroupByFields: []github.Field{priority}, VerticalGroupBy: []github.Field{status}}
+	model := newPickerModel(fakePickerSource{})
+	model.screen = screenBoard
+	model.view = &view
+	model.items = []github.Item{{ID: "item", Content: &github.Content{Kind: "Issue", Title: "Item"}}}
+
+	updated, cmd := model.Update(keyPress("L"))
+	result := updated.(Model)
+	if cmd != nil || result.mutationLoading || !strings.Contains(result.status, "swimlane") {
+		t.Fatalf("combined mutation state = %#v, cmd nil = %v", result, cmd == nil)
+	}
+}
+
+func TestSavedFilteredBoardDoesNotOfferMutations(t *testing.T) {
+	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "one", Name: "One"}, {ID: "two", Name: "Two"}}}
+	view := github.View{ProjectID: "project", ViewerCanUpdate: true, Filter: "iteration:@current", GroupByFields: []github.Field{status}}
+	model := newPickerModel(fakePickerSource{})
+	model.screen = screenBoard
+	model.view = &view
+	model.items = []github.Item{{ID: "item", Content: &github.Content{Kind: "Issue", Title: "Item"}}}
+
+	updated, cmd := model.Update(keyPress("L"))
+	result := updated.(Model)
+	if cmd != nil || result.mutationLoading || !strings.Contains(result.status, "filtered") {
+		t.Fatalf("filtered mutation state = %#v, cmd nil = %v", result, cmd == nil)
+	}
+}
+
+func TestWritableBoardReorderUsesVisibleAnchors(t *testing.T) {
+	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "one", Name: "One"}}}
+	view := github.View{ProjectID: "project", ViewerCanUpdate: true, GroupByFields: []github.Field{status}}
+	mutations := []string{}
+	model := newPickerModel(fakePickerSource{mutations: &mutations})
+	model.screen = screenBoard
+	model.view = &view
+	model.items = []github.Item{
+		{ID: "a", Content: &github.Content{Kind: "Issue", Title: "A"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
+		{ID: "b", Content: &github.Content{Kind: "Issue", Title: "B"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
+		{ID: "c", Content: &github.Content{Kind: "Issue", Title: "C"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
+	}
+	model.boardLane = 1
+	model.boardCard = 1
+	updated, cmd := model.Update(keyPress("J"))
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("downward reorder did not start")
+	}
+	_ = cmd()
+	if !reflect.DeepEqual(mutations, []string{"position:c"}) {
+		t.Fatalf("downward reorder calls = %#v", mutations)
+	}
+
+	mutations = nil
+	model.mutationLoading = false
+	model.boardCard = 2
+	updated, cmd = model.Update(keyPress("K"))
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("upward reorder did not start")
+	}
+	_ = cmd()
+	if !reflect.DeepEqual(mutations, []string{"position:a"}) {
+		t.Fatalf("upward reorder calls = %#v", mutations)
+	}
+}
+
+func TestWritableBoardReorderMovesSecondCardAboveFirst(t *testing.T) {
+	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "one", Name: "One"}}}
+	view := github.View{ProjectID: "project", ViewerCanUpdate: true, GroupByFields: []github.Field{status}}
+	mutations := []string{}
+	model := newPickerModel(fakePickerSource{mutations: &mutations})
+	model.screen = screenBoard
+	model.view = &view
+	model.items = []github.Item{
+		{ID: "anchor", Content: &github.Content{Kind: "Issue", Title: "Anchor"}},
+		{ID: "first", Content: &github.Content{Kind: "Issue", Title: "First"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
+		{ID: "second", Content: &github.Content{Kind: "Issue", Title: "Second"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
+	}
+	model.boardLane = 1
+	model.boardCard = 1
+
+	updated, cmd := model.Update(keyPress("K"))
+	model = updated.(Model)
+	if cmd == nil || model.boardCard != 0 {
+		t.Fatalf("second-card move state = lane %d card %d cmd nil=%v", model.boardLane, model.boardCard, cmd == nil)
+	}
+	if lanes := model.boardLanes(); len(lanes[1].Items) != 2 || lanes[1].Items[0].ID != "second" || lanes[1].Items[1].ID != "first" {
+		t.Fatalf("optimistic lane order = %#v", lanes[1].Items)
+	}
+	_ = cmd()
+	if !reflect.DeepEqual(mutations, []string{"position:anchor"}) {
+		t.Fatalf("second-card mutation = %#v", mutations)
 	}
 }
 
@@ -486,6 +776,58 @@ func TestBoardAppliesSavedFieldSortAndPreservesPositionTies(t *testing.T) {
 	lanes = lanesForView(&view, sortedItemsForView(&view, items))
 	if got := []string{lanes[0].Items[0].ID, lanes[0].Items[1].ID, lanes[0].Items[2].ID, lanes[0].Items[3].ID}; !reflect.DeepEqual(got, []string{"low", "high", "unset", "unset-2"}) {
 		t.Fatalf("descending sorted items = %#v", got)
+	}
+}
+
+func TestBoardSearchFiltersLoadedCards(t *testing.T) {
+	model := newPickerModel(fakePickerSource{})
+	model.screen = screenBoard
+	model.view = &github.View{Name: "Board", Layout: github.BoardLayout}
+	model.items = []github.Item{
+		{ID: "alpha", Content: &github.Content{Kind: "Issue", Title: "Fix alpha"}},
+		{ID: "beta", Content: &github.Content{Kind: "Issue", Title: "Fix beta"}},
+	}
+
+	updated, _ := model.Update(keyPress("/"))
+	model = updated.(Model)
+	for _, key := range []string{"a", "l", "p", "h", "a"} {
+		updated, _ = model.Update(keyPress(key))
+		model = updated.(Model)
+	}
+	updated, _ = model.Update(keyPress("enter"))
+	model = updated.(Model)
+
+	lanes := model.boardLanes()
+	if len(lanes) != 1 || len(lanes[0].Items) != 1 || lanes[0].Items[0].ID != "alpha" {
+		t.Fatalf("filtered lanes = %#v", lanes)
+	}
+	if len(model.items) != 2 || model.filtering || model.filter != "alpha" {
+		t.Fatalf("search state = %#v", model)
+	}
+	content := ansi.Strip(model.View().Content)
+	if !strings.Contains(content, "Search: alpha") || !strings.Contains(content, "Items: 1/2") || strings.Contains(content, "Fix beta") {
+		t.Fatalf("search rendering = %q", content)
+	}
+}
+
+func TestBoardFocusFollowsItemAcrossPages(t *testing.T) {
+	model := newPickerModel(fakePickerSource{})
+	model.screen = screenBoard
+	model.view = &github.View{Name: "Board", Layout: github.BoardLayout}
+	model.items = []github.Item{{ID: "focused", Content: &github.Content{Kind: "Issue", Title: "Focused"}}}
+	model.clampBoardCursor()
+	if model.boardFocusID != "focused" {
+		t.Fatalf("initial focus = %q", model.boardFocusID)
+	}
+
+	model.items = []github.Item{
+		{ID: "new", Content: &github.Content{Kind: "Issue", Title: "New item"}},
+		{ID: "focused", Content: &github.Content{Kind: "Issue", Title: "Focused"}},
+	}
+	model.clampBoardCursor()
+	selected, ok := model.selectedBoardItem()
+	if !ok || selected.ID != "focused" || model.boardCard != 1 {
+		t.Fatalf("focus after page arrival = item=%#v lane=%d card=%d", selected, model.boardLane, model.boardCard)
 	}
 }
 
@@ -552,6 +894,34 @@ func TestBoardCardsShowMetadataAndClampTitles(t *testing.T) {
 	}
 }
 
+func TestBoardCardsShowSavedVisibleFields(t *testing.T) {
+	model := newPickerModel(fakePickerSource{})
+	view := &github.View{Fields: []github.Field{
+		{Name: "Title", DataType: "TITLE"},
+		{ID: "status", Name: "Status", DataType: "SINGLE_SELECT"},
+		{ID: "priority", Name: "Priority", DataType: "SINGLE_SELECT"},
+		{ID: "labels", Name: "Labels", DataType: "MULTI_SELECT"},
+	}}
+	item := github.Item{
+		Content: &github.Content{Kind: "Issue", Title: "Visible fields"},
+		FieldValues: []github.FieldValue{
+			{FieldID: "status", FieldName: "Status", Value: "In progress", Available: true},
+			{FieldID: "priority", FieldName: "Priority", Value: "High", Available: true},
+			{FieldID: "labels", FieldName: "Labels", Available: false},
+		},
+	}
+	model.view = view
+	card := ansi.Strip(model.renderLaneCard(item, false, 60))
+	for _, expected := range []string{"Status: In progress", "Priority: High"} {
+		if !strings.Contains(card, expected) {
+			t.Fatalf("card missing saved field %q: %q", expected, card)
+		}
+	}
+	if strings.Contains(card, "Labels") {
+		t.Fatalf("card rendered unavailable field: %q", card)
+	}
+}
+
 func TestBoardUsesVerticalGroupingWhenColumnsAreUnset(t *testing.T) {
 	status := github.Field{
 		ID:       "status",
@@ -563,8 +933,64 @@ func TestBoardUsesVerticalGroupingWhenColumnsAreUnset(t *testing.T) {
 	view := github.View{VerticalGroupBy: []github.Field{status}}
 	item := github.Item{Content: &github.Content{Kind: "Issue", Title: "Vertical item"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "todo", Available: true}}}
 	lanes := lanesForView(&view, []github.Item{item})
-	if len(lanes) != 2 || lanes[0].Name != "Todo" || len(lanes[0].Items) != 1 {
+	if len(lanes) != 2 || lanes[0].Name != "No Status" || len(lanes[0].Items) != 0 || lanes[1].Name != "Todo" || len(lanes[1].Items) != 1 {
 		t.Fatalf("vertical lanes = %#v", lanes)
+	}
+}
+
+func TestBoardProjectsCombinedGroupingIntoSwimlaneRows(t *testing.T) {
+	priority := github.Field{
+		ID:       "priority",
+		Name:     "Priority",
+		Kind:     "ProjectV2SingleSelectField",
+		DataType: "SINGLE_SELECT",
+		Options:  []github.FieldOption{{ID: "p0", Name: "P0"}, {ID: "p1", Name: "P1"}},
+	}
+	status := github.Field{
+		ID:       "status",
+		Name:     "Status",
+		Kind:     "ProjectV2SingleSelectField",
+		DataType: "SINGLE_SELECT",
+		Options:  []github.FieldOption{{ID: "todo", Name: "Todo"}, {ID: "done", Name: "Done"}},
+	}
+	view := github.View{GroupByFields: []github.Field{priority}, VerticalGroupBy: []github.Field{status}}
+	items := []github.Item{
+		{ID: "todo-p0", Content: &github.Content{Kind: "Issue", Title: "Todo P0"}, FieldValues: []github.FieldValue{
+			{FieldID: "priority", OptionID: "p0", Available: true},
+			{FieldID: "status", OptionID: "todo", Available: true},
+		}},
+		{ID: "done-p1", Content: &github.Content{Kind: "Issue", Title: "Done P1"}, FieldValues: []github.FieldValue{
+			{FieldID: "priority", OptionID: "p1", Available: true},
+			{FieldID: "status", OptionID: "done", Available: true},
+		}},
+		{ID: "todo-unset", Content: &github.Content{Kind: "Issue", Title: "Todo unset"}, FieldValues: []github.FieldValue{
+			{FieldID: "status", OptionID: "todo", Available: true},
+		}},
+	}
+
+	lanes := lanesForView(&view, items)
+	if len(lanes) != 9 {
+		t.Fatalf("combined lanes = %d, want 9: %#v", len(lanes), lanes)
+	}
+	if lanes[4].RowName != "Todo" || lanes[4].Name != "P0" || lanes[4].Items[0].ID != "todo-p0" {
+		t.Fatalf("first populated combined lane = %#v", lanes[4])
+	}
+	if lanes[8].RowName != "Done" || lanes[8].Name != "P1" || lanes[8].Items[0].ID != "done-p1" {
+		t.Fatalf("second populated combined lane = %#v", lanes[8])
+	}
+	if lanes[3].Name != "No value" || lanes[3].Items[0].ID != "todo-unset" {
+		t.Fatalf("unset column lane = %#v", lanes[3])
+	}
+
+	model := newPickerModel(fakePickerSource{})
+	model.view = &view
+	model.width = 180
+	model.items = items
+	rendered := ansi.Strip(model.renderLaneGrid(lanes))
+	for _, expected := range []string{"Swimlane: Todo", "Swimlane: Done", "Todo P0", "Done P1"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("combined board missing %q: %q", expected, rendered)
+		}
 	}
 }
 
@@ -657,6 +1083,28 @@ func TestEnterLoadsAndShowsItemDetail(t *testing.T) {
 	model = updated.(Model)
 	if model.detailVisible {
 		t.Fatal("detail overlay did not close")
+	}
+	updated, cmd = model.Update(keyPress("enter"))
+	model = updated.(Model)
+	if cmd != nil || model.detailLoading || model.detail == nil || !model.detailVisible {
+		t.Fatalf("cached detail was not used: loading=%v detail=%#v cmd nil=%v", model.detailLoading, model.detail, cmd == nil)
+	}
+	updated, _ = model.Update(keyPress("esc"))
+	model = updated.(Model)
+}
+
+func TestDetailCacheClearsWhenBoardReloads(t *testing.T) {
+	model := newPickerModel(fakePickerSource{})
+	model.view = &github.View{Name: "Board", Layout: github.BoardLayout}
+	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+	model.selectedProject = &github.Project{Number: 1}
+	model.detailCache["item-1"] = github.ItemDetail{ID: "item-1"}
+
+	if cmd := model.startItemsLoad(); cmd == nil {
+		t.Fatal("board reload did not return an item command")
+	}
+	if model.detailCache != nil {
+		t.Fatalf("detail cache survived board reload: %#v", model.detailCache)
 	}
 }
 

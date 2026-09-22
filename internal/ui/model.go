@@ -36,6 +36,12 @@ type ItemDetailSource interface {
 	LoadItemDetail(context.Context, github.Owner, int, string) (github.ItemDetail, error)
 }
 
+type ItemMutationSource interface {
+	UpdateItemFieldValue(context.Context, github.ItemFieldValueUpdate) error
+	ClearItemFieldValue(context.Context, github.ItemFieldValueClear) error
+	UpdateItemPosition(context.Context, github.ItemPositionUpdate) error
+}
+
 type Selection struct {
 	OwnerLogin    string
 	ProjectNumber int
@@ -52,8 +58,8 @@ const (
 	screenBoard
 )
 
-// Model drives the read-only picker and board preview. Mutations stay disabled
-// until sandbox anchor semantics are verified.
+// Model drives the picker and board. Unsupported mutation paths remain
+// read-only until their reconciliation and safety rules are implemented.
 type Model struct {
 	source     DiscoverySource
 	ctx        context.Context
@@ -67,38 +73,45 @@ type Model struct {
 
 	host string
 
-	screen            screen
-	cursor            int
-	filter            string
-	filtering         bool
-	showHelp          bool
-	selectedOwner     *github.Owner
-	selectedProject   *github.Project
-	views             []github.ViewSummary
-	viewsErr          error
-	loadingViews      bool
-	loadingDetail     bool
-	status            string
-	items             []github.Item
-	itemsLoading      bool
-	itemsHasNext      bool
-	itemsCursor       string
-	itemsErr          error
-	itemsLoadFrame    int
-	itemsLanePending  int
-	itemsLoadingLanes map[string]bool
-	itemsFailedLanes  map[string]bool
-	boardLane         int
-	boardCard         int
-	width             int
-	height            int
-	detailVisible     bool
-	detailLoading     bool
-	detailItemID      string
-	detail            *github.ItemDetail
-	detailErr         error
-	detailOffset      int
-	detailShowAll     bool
+	screen             screen
+	cursor             int
+	filter             string
+	filtering          bool
+	showHelp           bool
+	selectedOwner      *github.Owner
+	selectedProject    *github.Project
+	views              []github.ViewSummary
+	viewsErr           error
+	loadingViews       bool
+	loadingDetail      bool
+	status             string
+	items              []github.Item
+	itemsLoading       bool
+	itemsHasNext       bool
+	itemsCursor        string
+	itemsErr           error
+	itemsLoadFrame     int
+	itemsLanePending   int
+	itemsLoadingLanes  map[string]bool
+	itemsFailedLanes   map[string]bool
+	boardLane          int
+	boardCard          int
+	boardFocusID       string
+	width              int
+	height             int
+	detailVisible      bool
+	detailLoading      bool
+	detailItemID       string
+	detail             *github.ItemDetail
+	detailCache        map[string]github.ItemDetail
+	detailErr          error
+	detailOffset       int
+	detailShowAll      bool
+	mutationLoading    bool
+	mutationItemID     string
+	optimisticRollback *boardMutationRollback
+	mutationQueue      []queuedBoardMutation
+	pendingStatus      string
 
 	loadPrefs func(string) (config.Selection, error)
 	savePrefs func(string, config.Selection) error
@@ -111,15 +124,16 @@ func NewModel(source DiscoverySource) Model {
 func NewModelWithSelection(source DiscoverySource, selection Selection) Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	return Model{
-		source:    source,
-		ctx:       ctx,
-		cancel:    cancel,
-		selection: selection,
-		loading:   true,
-		screen:    screenLoading,
-		host:      config.DefaultHost(),
-		loadPrefs: config.Load,
-		savePrefs: config.Save,
+		source:      source,
+		ctx:         ctx,
+		cancel:      cancel,
+		selection:   selection,
+		loading:     true,
+		screen:      screenLoading,
+		host:        config.DefaultHost(),
+		loadPrefs:   config.Load,
+		savePrefs:   config.Save,
+		detailCache: make(map[string]github.ItemDetail),
 	}
 }
 
@@ -194,9 +208,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("View load failed: %v", msg.err)
 			return m, nil
 		}
+		if msg.view == nil {
+			m.status = "View load returned no view"
+			return m, nil
+		}
+		if compatibility := evaluateViewCompatibility(*msg.view); !compatibility.supported() {
+			m.rejectView(*msg.view, compatibility)
+			return m, nil
+		}
 		m.view = msg.view
 		m.err = nil
-		m.status = ""
+		m.status = m.pendingStatus
+		m.pendingStatus = ""
 		m.screen = screenBoard
 		m.cursor = 0
 		m.persistSelection()
@@ -211,9 +234,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.detailLoading = false
 		m.detailErr = msg.err
-		if msg.err == nil {
+		if msg.err == nil && msg.detail != nil {
 			m.detail = msg.detail
+			if m.detailCache == nil {
+				m.detailCache = make(map[string]github.ItemDetail)
+			}
+			m.detailCache[msg.itemID] = *msg.detail
 		}
+		return m, nil
+	case boardMutationMsg:
+		if msg.generation != m.generation || m.screen != screenBoard || msg.itemID != m.mutationItemID {
+			return m, nil
+		}
+		m.mutationLoading = false
+		m.mutationItemID = ""
+		if msg.err != nil {
+			m.mutationQueue = nil
+			m.restoreOptimisticMutation()
+			if msg.partial {
+				m.status = fmt.Sprintf("%s partially saved: %v; refresh and verify", msg.description, msg.err)
+				cmd := m.startItemsLoadWithSpinner()
+				m.pendingStatus = m.status
+				m.boardFocusID = msg.itemID
+				return m, cmd
+			} else {
+				m.status = fmt.Sprintf("%s failed: %v", msg.description, msg.err)
+			}
+			return m, nil
+		}
+		m.optimisticRollback = nil
+		delete(m.detailCache, msg.itemID)
+		if len(m.mutationQueue) > 0 {
+			next := m.mutationQueue[0]
+			m.mutationQueue = m.mutationQueue[1:]
+			m.optimisticRollback = next.rollback
+			m.mutationLoading = true
+			m.mutationItemID = next.itemID
+			m.status = fmt.Sprintf("Saving moves (%d queued)...", len(m.mutationQueue))
+			return m, next.command
+		}
+		m.status = msg.description + " saved"
+		m.pendingStatus = ""
 		return m, nil
 	}
 	return m, nil
@@ -235,6 +296,11 @@ func (m Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 	// Direct-selection path (explicit --owner/--project/--view).
 	if m.selection.OwnerLogin != "" {
 		if m.view != nil {
+			if compatibility := evaluateViewCompatibility(*m.view); !compatibility.supported() {
+				m.setDiscoverySelection()
+				m.rejectView(*m.view, compatibility)
+				return m, nil
+			}
 			m.enterBoardFromDiscovery()
 			return m, m.startItemsLoadWithSpinner()
 		}
@@ -300,6 +366,11 @@ func (m Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 func (m *Model) enterBoardFromDiscovery() {
 	m.screen = screenBoard
 	m.cursor = 0
+	m.setDiscoverySelection()
+	m.persistSelection()
+}
+
+func (m *Model) setDiscoverySelection() {
 	for _, owner := range m.discovery.Owners {
 		if strings.EqualFold(owner.Login, m.selection.OwnerLogin) {
 			ownerCopy := owner
@@ -314,7 +385,40 @@ func (m *Model) enterBoardFromDiscovery() {
 			break
 		}
 	}
-	m.persistSelection()
+}
+
+func (m *Model) rejectView(view github.View, compatibility viewCompatibility) {
+	m.view = nil
+	m.loading = false
+	m.loadingDetail = false
+	m.items = nil
+	m.itemsLoading = false
+	m.itemsHasNext = false
+	m.itemsCursor = ""
+	m.itemsErr = nil
+	m.itemsLanePending = 0
+	m.itemsLoadingLanes = nil
+	m.itemsFailedLanes = nil
+	m.detailVisible = false
+	m.detailLoading = false
+	m.detail = nil
+	m.detailCache = nil
+	m.detailErr = nil
+	m.mutationLoading = false
+	m.mutationItemID = ""
+	m.pendingStatus = ""
+	m.screen = screenViewPicker
+	m.cursor = 0
+	m.viewsErr = nil
+	m.loadingViews = false
+	m.status = unsupportedViewStatus(view, compatibility)
+
+	for _, summary := range m.views {
+		if summary.Number == view.Number {
+			return
+		}
+	}
+	m.views = []github.ViewSummary{{Number: view.Number, Name: view.Name, Layout: view.Layout}}
 }
 
 func (m Model) remembered() (config.Selection, error) {
@@ -345,7 +449,11 @@ func (m *Model) startViewsLoad() tea.Cmd {
 	m.detailVisible = false
 	m.detailLoading = false
 	m.detail = nil
+	m.detailCache = nil
 	m.detailErr = nil
+	m.mutationLoading = false
+	m.mutationItemID = ""
+	m.pendingStatus = ""
 	m.items = nil
 	m.itemsLoading = false
 	m.itemsHasNext = false
@@ -423,11 +531,16 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	m.itemsFailedLanes = nil
 	m.boardLane = 0
 	m.boardCard = 0
+	m.boardFocusID = ""
 	m.detailVisible = false
 	m.detailLoading = false
 	m.detailItemID = ""
 	m.detail = nil
+	m.detailCache = nil
 	m.detailErr = nil
+	m.mutationLoading = false
+	m.mutationItemID = ""
+	m.pendingStatus = ""
 	return m.itemsPageCmd("", true)
 }
 
@@ -482,6 +595,7 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 		m.items = nil
 		m.boardLane = 0
 		m.boardCard = 0
+		m.boardFocusID = ""
 	}
 	if msg.err != nil {
 		m.itemsLoading = false
@@ -500,6 +614,7 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	}
 	m.itemsLoading = false
 	m.clampBoardCursor()
+	m.finishItemsRefresh()
 	return m, nil
 }
 
@@ -554,7 +669,16 @@ func (m Model) updateLaneItems(msg laneItemsMsg) (tea.Model, tea.Cmd) {
 	m.itemsHasNext = false
 	m.itemsLoadingLanes = nil
 	m.clampBoardCursor()
+	m.finishItemsRefresh()
 	return m, nil
+}
+
+func (m *Model) finishItemsRefresh() {
+	if m.pendingStatus == "" {
+		return
+	}
+	m.status = m.pendingStatus
+	m.pendingStatus = ""
 }
 
 func (m *Model) cancelItemsLoad() {
@@ -599,12 +723,18 @@ func (m *Model) openItemDetailCmd() tea.Cmd {
 		return nil
 	}
 	m.detailVisible = true
-	m.detailLoading = true
 	m.detailItemID = item.ID
+	m.boardFocusID = item.ID
 	m.detail = nil
 	m.detailErr = nil
 	m.detailOffset = 0
 	m.detailShowAll = false
+	if cached, ok := m.detailCache[item.ID]; ok {
+		m.detail = &cached
+		m.detailLoading = false
+		return nil
+	}
+	m.detailLoading = true
 	owner := *m.selectedOwner
 	project := m.selectedProject.Number
 	generation := m.generation
@@ -623,12 +753,101 @@ func (m *Model) openItemDetailCmd() tea.Cmd {
 	}
 }
 
+type boardMutationAction func(context.Context, ItemMutationSource) (error, bool)
+
+type queuedBoardMutation struct {
+	itemID   string
+	rollback *boardMutationRollback
+	command  tea.Cmd
+}
+
+func (m *Model) beginBoardMutation(itemID, description string, action boardMutationAction, optimistic func()) tea.Cmd {
+	loader, ok := m.source.(ItemMutationSource)
+	if !ok {
+		m.status = "Mutations are unavailable for this client"
+		return nil
+	}
+	var rollback *boardMutationRollback
+	if optimistic != nil {
+		rollback = &boardMutationRollback{
+			items:        cloneItems(m.items),
+			boardLane:    m.boardLane,
+			boardCard:    m.boardCard,
+			boardFocusID: m.boardFocusID,
+		}
+		optimistic()
+	}
+	generation := m.generation
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithoutCancel(ctx)
+	command := func() tea.Msg {
+		err, partial := action(ctx, loader)
+		return boardMutationMsg{
+			itemID:      itemID,
+			description: description,
+			partial:     partial,
+			err:         err,
+			generation:  generation,
+		}
+	}
+	if m.mutationLoading {
+		m.mutationQueue = append(m.mutationQueue, queuedBoardMutation{itemID: itemID, rollback: rollback, command: command})
+		m.status = fmt.Sprintf("Saving moves (%d queued)...", len(m.mutationQueue))
+		return nil
+	}
+	m.optimisticRollback = rollback
+	m.mutationLoading = true
+	m.mutationItemID = itemID
+	m.status = description + "..."
+	return command
+}
+
+type boardMutationRollback struct {
+	items        []github.Item
+	boardLane    int
+	boardCard    int
+	boardFocusID string
+}
+
+func cloneItems(items []github.Item) []github.Item {
+	cloned := append([]github.Item(nil), items...)
+	for index := range cloned {
+		cloned[index].FieldValues = append([]github.FieldValue(nil), items[index].FieldValues...)
+	}
+	return cloned
+}
+
+func (m *Model) restoreOptimisticMutation() {
+	if m.optimisticRollback == nil {
+		return
+	}
+	m.items = m.optimisticRollback.items
+	m.boardLane = m.optimisticRollback.boardLane
+	m.boardCard = m.optimisticRollback.boardCard
+	m.boardFocusID = m.optimisticRollback.boardFocusID
+	m.optimisticRollback = nil
+}
+
 func (m *Model) clampBoardCursor() {
 	lanes := m.boardLanes()
 	if len(lanes) == 0 {
 		m.boardLane = 0
 		m.boardCard = 0
 		return
+	}
+	if m.boardFocusID != "" {
+		for laneIndex, lane := range lanes {
+			for cardIndex, item := range lane.Items {
+				if item.ID == m.boardFocusID {
+					m.boardLane = laneIndex
+					m.boardCard = cardIndex
+					return
+				}
+			}
+		}
 	}
 	if m.boardLane >= len(lanes) {
 		m.boardLane = len(lanes) - 1
@@ -637,6 +856,14 @@ func (m *Model) clampBoardCursor() {
 		m.boardLane = 0
 	}
 	if len(lanes[m.boardLane].Items) == 0 {
+		for laneIndex, lane := range lanes {
+			if len(lane.Items) > 0 {
+				m.boardLane = laneIndex
+				m.boardCard = 0
+				m.boardFocusID = lane.Items[0].ID
+				return
+			}
+		}
 		m.boardCard = 0
 		return
 	}
@@ -645,6 +872,15 @@ func (m *Model) clampBoardCursor() {
 	}
 	if m.boardCard < 0 {
 		m.boardCard = 0
+	}
+	if item := lanes[m.boardLane].Items[m.boardCard]; item.ID != "" {
+		m.boardFocusID = item.ID
+	}
+}
+
+func (m *Model) rememberBoardFocus() {
+	if item, ok := m.selectedBoardItem(); ok && item.ID != "" {
+		m.boardFocusID = item.ID
 	}
 }
 
@@ -665,6 +901,9 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.filtering {
+		if m.screen == screenBoard {
+			return m.updateBoardSearchKey(key)
+		}
 		switch key {
 		case "enter":
 			m.filtering = false
@@ -706,6 +945,13 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.screen == screenBoard {
+		if m.mutationLoading {
+			switch key {
+			case "H", "L", "J", "K", "h", "l", "j", "k", "left", "right", "up", "down":
+			default:
+				return m, nil
+			}
+		}
 		if m.detailVisible {
 			switch key {
 			case "esc":
@@ -731,16 +977,24 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch key {
-		case "h", "left", "H":
+		case "H":
+			return m, m.moveBoardLaneMutation(-1)
+		case "L":
+			return m, m.moveBoardLaneMutation(1)
+		case "J":
+			return m, m.reorderBoardItem(1)
+		case "K":
+			return m, m.reorderBoardItem(-1)
+		case "h", "left":
 			m.moveBoardLane(-1)
 			return m, nil
-		case "l", "right", "L":
+		case "l", "right":
 			m.moveBoardLane(1)
 			return m, nil
-		case "j", "down", "J":
+		case "j", "down":
 			m.moveBoardCard(1)
 			return m, nil
-		case "k", "up", "K":
+		case "k", "up":
 			m.moveBoardCard(-1)
 			return m, nil
 		case "enter":
@@ -751,6 +1005,10 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "/":
 		m.filtering = true
+		if m.screen == screenBoard {
+			m.filter = ""
+			m.clampBoardCursor()
+		}
 		return m, nil
 	case "esc":
 		return m, m.goBack()
@@ -802,6 +1060,33 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) updateBoardSearchKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "enter":
+		m.filtering = false
+		m.clampBoardCursor()
+	case "esc":
+		m.filtering = false
+		m.filter = ""
+		m.clampBoardCursor()
+	case "backspace":
+		runes := []rune(m.filter)
+		if len(runes) > 0 {
+			m.filter = string(runes[:len(runes)-1])
+			m.clampBoardCursor()
+		}
+	case "ctrl+u":
+		m.filter = ""
+		m.clampBoardCursor()
+	default:
+		if len([]rune(key)) == 1 {
+			m.filter += key
+			m.clampBoardCursor()
+		}
+	}
+	return *m, nil
+}
+
 func (m *Model) moveCursor(delta int) {
 	n := m.currentListLen()
 	if n == 0 {
@@ -820,6 +1105,7 @@ func (m *Model) moveCursor(delta int) {
 func (m *Model) goBack() tea.Cmd {
 	m.filter = ""
 	m.filtering = false
+	m.pendingStatus = ""
 	m.cursor = 0
 	m.status = ""
 	switch m.screen {
@@ -886,6 +1172,11 @@ func (m *Model) selectCurrent() tea.Cmd {
 			return nil
 		}
 		selected := views[m.cursor]
+		summaryView := github.View{Number: selected.Number, Name: selected.Name, Layout: selected.Layout}
+		if compatibility := evaluateViewCompatibility(summaryView); !compatibility.supported() {
+			m.status = unsupportedViewStatus(summaryView, compatibility)
+			return nil
+		}
 		m.loadingDetail = true
 		m.loading = false
 		m.status = fmt.Sprintf("Loading view #%d...", selected.Number)
@@ -1194,18 +1485,19 @@ func (m Model) footerHints() string {
 	case screenViewPicker:
 		return "j/k move · enter open · / filter · esc projects · p projects · r refresh · ? help · q quit"
 	case screenBoard:
-		return "h/l lanes · j/k cards · v views · p projects · r refresh · o browser · ? help · q quit"
+		return "h/l lanes · j/k cards · H/L move · J/K reorder · / search · v views · p projects · r refresh · o browser · ? help · q quit"
 	default:
 		return "Loading... q to quit"
 	}
 }
 
 func (m Model) helpText() string {
-	return "Keys: j/k or up/down move · enter select · / filter (enter done, esc clear) ·\n" +
+	return "Keys: j/k or up/down move · enter select · / filter/search (enter done, esc clear) ·\n" +
 		"esc/backspace back · p projects · v reload views · r refresh · o browser URL ·\n" +
 		"? toggle help · q quit.\n" +
-		"On the board, h/l changes lanes, j/k changes cards, and enter opens detail.\n" +
-		"In detail, j/k scrolls, f toggles all project fields, and esc returns to the board. The board is read-only."
+		"On the board, h/l changes lanes, j/k changes cards, / searches loaded cards, and enter opens detail.\n" +
+		"H/L moves cards and J/K reorders cards when the view is writable and fully loaded.\n" +
+		"In detail, j/k scrolls, f toggles all project fields, and esc returns to the board."
 }
 
 type discoveryMsg struct {
@@ -1251,6 +1543,14 @@ type itemDetailMsg struct {
 	detail     *github.ItemDetail
 	err        error
 	generation uint64
+}
+
+type boardMutationMsg struct {
+	itemID      string
+	description string
+	partial     bool
+	err         error
+	generation  uint64
 }
 
 func itemsLoadingTick(generation uint64) tea.Cmd {

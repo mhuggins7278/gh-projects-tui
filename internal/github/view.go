@@ -35,14 +35,14 @@ fragment ViewFields on ProjectV2View {
 const userViewQuery = `
 query UserProjectView($login: String!, $project: Int!, $view: Int!, $fieldsAfter: String, $groupsAfter: String, $verticalGroupsAfter: String, $sortsAfter: String) {
   user(login: $login) {
-    projectV2(number: $project) { viewerCanUpdate view(number: $view) { ...ViewFields } }
+    projectV2(number: $project) { id viewerCanUpdate view(number: $view) { ...ViewFields } }
   }
 }` + viewFieldsFragment
 
 const organizationViewQuery = `
 query OrganizationProjectView($login: String!, $project: Int!, $view: Int!, $fieldsAfter: String, $groupsAfter: String, $verticalGroupsAfter: String, $sortsAfter: String) {
   organization(login: $login) {
-    projectV2(number: $project) { viewerCanUpdate view(number: $view) { ...ViewFields } }
+    projectV2(number: $project) { id viewerCanUpdate view(number: $view) { ...ViewFields } }
   }
 }` + viewFieldsFragment
 
@@ -79,6 +79,7 @@ const (
 )
 
 type View struct {
+	ProjectID       string
 	ID              string
 	Number          int
 	Name            string
@@ -128,6 +129,7 @@ type viewOwner struct {
 }
 
 type viewProject struct {
+	ProjectID       string   `json:"id"`
 	ViewerCanUpdate bool     `json:"viewerCanUpdate"`
 	View            *rawView `json:"view"`
 }
@@ -250,6 +252,7 @@ func (c *Client) OpenView(ctx context.Context, owner Owner, projectNumber, viewN
 	}
 
 	return View{
+		ProjectID:       project.ProjectID,
 		ID:              raw.ID,
 		Number:          raw.Number,
 		Name:            raw.Name,

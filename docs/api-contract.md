@@ -1,14 +1,14 @@
 # API Contract Gate
 
-Status: partial. This record covers the GitHub.com schema and read probes observed on 2026-09-17.
+Status: partial. This record covers the GitHub.com schema and read probes observed on 2026-09-17, plus mutation schema introspection observed on 2026-09-21.
 
 ## Environment
 
 - Host: `github.com`
 - Client path: `gh api graphql`
 - Authenticated user: configured through `gh auth`; identity is intentionally not recorded
-- Observed token scopes: `read:org`, `read:project`, `repo`
-- No project mutation was submitted
+- Observed token scopes: `project`, `read:org`, `repo`
+- No mutation was submitted to a work project; disposable personal-project mutations were submitted and reconciled
 
 ## Verified Schema Capabilities
 
@@ -23,6 +23,16 @@ The live GraphQL schema reports the following fields:
 - Mutations: `updateProjectV2ItemFieldValue`, `clearProjectV2ItemFieldValue`, and `updateProjectV2ItemPosition`
 - `ProjectV2.viewerCanUpdate`
 
+The mutation input and payload types report these fields:
+
+- `UpdateProjectV2ItemFieldValueInput`: optional `clientMutationId`; required `projectId: ID!`, `itemId: ID!`, `fieldId: ID!`, and `value: ProjectV2FieldValue!`
+- `ClearProjectV2ItemFieldValueInput`: optional `clientMutationId`; required `projectId: ID!`, `itemId: ID!`, and `fieldId: ID!`
+- `UpdateProjectV2ItemPositionInput`: optional `clientMutationId`; required `projectId: ID!` and `itemId: ID!`; optional `afterId: ID`
+- `ProjectV2FieldValue`: optional `text: String`, `number: Float`, `date: Date`, `singleSelectOptionId: String`, `multiSelectOptionIds: [String!]`, and `iterationId: String`
+- The field-value mutation payloads return `clientMutationId` and `projectV2Item`; the position mutation payload returns `clientMutationId` and `items: ProjectV2ItemConnection`
+
+These schema observations were followed by write probes against a disposable personal project; work projects were not modified.
+
 The `items.query` argument is present in the target schema. This supersedes the earlier assumption in `PLAN.md` that server-side filtering might be absent, but behavior still requires representative saved-view validation.
 
 ## Read Probe Results
@@ -35,9 +45,11 @@ Results below are intentionally aggregate and contain no project names, item tit
 - That project exposed five views: two boards, two tables, and one roadmap.
 - The unfiltered position-ordered item probe returned 49 items, all issues or pull requests, on one page.
 - The sampled saved filter `iteration:@current` was accepted by `items(query:)` and returned zero items.
+- Additional read-only filter probes were accepted by `items(query:)`: `status:"Todo"` returned one item, `no:status` returned three, `-status:"Todo"` returned 48, and `assignee:@me` returned zero. These counts validate the query shapes on the target project but do not establish semantics for every field value or compound expression.
 - The board metadata probe returned visible-field metadata for all five views. Grouping and sorting metadata were present on the board views, including a board with vertical grouping and position sorting.
+- Representative board probes preserve saved metadata order: the vertical `Status` options were returned as `Todo`, `In Progress`, `Done`, `Staged`; the two-axis board exposed `Priority` columns (`P0`, `P1`, `P2`) and `Status` vertical groups; the single-axis board reported an ascending `Priority` sort.
 - The first board's field configuration decoded as title, assignees, three single-select fields, a number field, and an iteration field. Single-select options and iteration configuration are returned as inline lists, not cursor connections.
-- Item reads use owner-specific GraphQL branches, position ordering, and the saved filter. Scalar project and issue-backed field values plus issue/pull-request repository, state, and aggregate sub-issue progress metadata are loaded during board reads; multi-valued label, user, reviewer, repository, milestone, and pull-request project-field values are identified but marked unavailable until their nested connections are deliberately loaded.
+- Item reads use owner-specific GraphQL branches, position ordering, and the saved filter. Scalar project and issue-backed field values plus issue/pull-request repository, state, and aggregate sub-issue progress metadata are loaded during board reads. Detail reads additionally request the first 100 labels, users, reviewers, linked pull requests, repositories, and milestones for project field values; unavailable nested objects remain explicitly marked unavailable.
 
 These results establish that the intended discovery, view metadata, position ordering, and server-side filter read shapes work on the target host. They do not establish that every GitHub filter expression or saved-view display rule has matching semantics.
 
@@ -91,16 +103,54 @@ query ProjectItems($login: String!, $project: Int!, $filter: String, $after: Str
 REST membership paths are passed to `go-gh` without a leading slash, for example
 `user/orgs?per_page=100&page=1`, so configured `/api/v3/` prefixes and host routing remain intact.
 
+## Sanitized Mutation Shapes
+
+The following shapes match the introspected mutation inputs and payloads. Field-value and position mutations were submitted only against the disposable project:
+
+```graphql
+mutation UpdateProjectItemFieldValue($input: UpdateProjectV2ItemFieldValueInput!) {
+  updateProjectV2ItemFieldValue(input: $input) {
+    clientMutationId
+    projectV2Item { id }
+  }
+}
+
+mutation ClearProjectItemFieldValue($input: ClearProjectV2ItemFieldValueInput!) {
+  clearProjectV2ItemFieldValue(input: $input) {
+    clientMutationId
+    projectV2Item { id }
+  }
+}
+
+mutation UpdateProjectItemPosition($input: UpdateProjectV2ItemPositionInput!) {
+  updateProjectV2ItemPosition(input: $input) {
+    clientMutationId
+    items(first: 100) { nodes { id } }
+  }
+}
+```
+
+## Disposable Sandbox Write Results
+
+The following results are intentionally aggregate and contain no project names, item titles, IDs, or bodies:
+
+- A private personal project with the default single-select `Status` field was used with three temporary draft items.
+- Setting one item's `Status` to `In Progress` persisted and was returned by a subsequent read.
+- Clearing that `Status` removed the value and the subsequent item read omitted the field value.
+- Moving an item with `afterId` placed it after the anchor in project position order.
+- Omitting `afterId` moved an item to the project top. The temporary items were restored to their original order afterward.
+- The position mutation payload requires a pagination boundary when its `items` connection is selected. The client therefore requests only `clientMutationId` and refetches canonical item order.
+
 ## Remaining Empirical Checks
 
 The following items remain unverified:
 
-- Field configuration option order, iteration state, and unset values
+- Iteration state and unset values beyond the sampled single-select boards
 - Sort null placement and tie behavior
-- Grouping-axis mapping and display settings
-- Nested multi-valued field loading beyond the explicit unavailable marker
-- Mutation permission and position-anchor semantics in a disposable sandbox
+- Grouping-axis mapping and display settings beyond the sampled board views
+- Nested multi-valued field loading beyond the first 100 values and explicit unavailable markers
+- Mutation failure, partial-completion, timeout reconciliation, and stale-anchor handling
 
 ## Gate To Continue
 
-Run the remaining probes against representative board views. A disposable sandbox with project write access is required before enabling or testing mutations. Until those checks are recorded, the implementation must remain read-only and must not claim rendering or write compatibility.
+Run the remaining probes against representative board views. Sandbox write semantics are verified; single-axis unfiltered boards expose guarded lane moves, and position-sorted views additionally expose manual reordering. Unsupported or saved-filtered paths remain read-only until mutation serialization, reconciliation, and broader partial-failure handling are implemented and tested.

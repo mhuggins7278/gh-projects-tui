@@ -110,10 +110,20 @@ func (m Model) bodyCanvasHeight() int {
 
 func (m Model) renderHeader() string {
 	mode := "READ ONLY"
-	if m.screen == screenBoard && m.itemsLoading {
-		mode = "SYNCING"
+	modeStyle := readOnlyBadgeStyle
+	if m.screen == screenBoard {
+		switch {
+		case m.mutationLoading:
+			mode = "SAVING"
+			modeStyle = statusPillStyle
+		case m.itemsLoading:
+			mode = "SYNCING"
+		case m.boardMutationUnavailable() == "":
+			mode = "WRITABLE"
+			modeStyle = statusPillStyle
+		}
 	}
-	modeBadge := readOnlyBadgeStyle.Render(mode)
+	modeBadge := modeStyle.Render(mode)
 	top := lipgloss.JoinHorizontal(
 		lipgloss.Center,
 		brandStyle.Render("gh projects-tui"),

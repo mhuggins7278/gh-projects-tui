@@ -108,7 +108,7 @@ func TestDiscoverKeepsSuccessfulOwnersWhenOneFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
-	if discovery.Viewer != "me" || len(discovery.Owners) != 3 {
+	if discovery.Viewer != "me" || len(discovery.Owners) != 2 {
 		t.Fatalf("discovery identity = %#v", discovery)
 	}
 	if !reflect.DeepEqual(discovery.Projects["me"], []Project{*viewer, *viewerNext}) {
@@ -122,6 +122,33 @@ func TestDiscoverKeepsSuccessfulOwnersWhenOneFails(t *testing.T) {
 	}
 	if len(rest.paths) != 1 || rest.paths[0] != "user/orgs?per_page=100&page=1" || rest.methods[0] != "GET" {
 		t.Fatalf("membership requests = %#v %#v", rest.methods, rest.paths)
+	}
+}
+
+func TestDiscoverSkipsSAMLProtectedOrganization(t *testing.T) {
+	failure := errors.New("GraphQL: Resource protected by organization SAML enforcement. You must grant your OAuth token access to this organization. (organization.projectsV2.nodes.0)")
+	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+		func(_ string, _ map[string]interface{}, response interface{}) error {
+			result := response.(*projectsResponse)
+			result.Viewer.Login = "me"
+			return nil
+		},
+		func(_ string, variables map[string]interface{}, _ interface{}) error {
+			if variables["login"] != "glg" {
+				t.Fatalf("organization login = %#v", variables["login"])
+			}
+			return failure
+		},
+	}}
+	discovery, err := newClient(graphql, &fakeREST{organizations: [][]organization{{{Login: "glg"}}}}).Discover(context.Background())
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if len(discovery.Owners) != 1 || discovery.Owners[0].Login != "me" {
+		t.Fatalf("owners = %#v", discovery.Owners)
+	}
+	if len(discovery.OwnerErrors) != 0 {
+		t.Fatalf("SAML owner errors = %#v", discovery.OwnerErrors)
 	}
 }
 
@@ -196,11 +223,12 @@ func TestResolveOwnerFallsBackFromOrganizationToUser(t *testing.T) {
 func TestOpenViewProjectsFieldConfigurations(t *testing.T) {
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(query string, variables map[string]interface{}, response interface{}) error {
-			if variables["project"] != 7 || variables["view"] != 3 || !strings.Contains(query, "completedIterations") || !strings.Contains(query, "IssueFieldSingleSelect") {
+			if variables["project"] != 7 || variables["view"] != 3 || !strings.Contains(query, "projectV2(number: $project) { id viewerCanUpdate") || !strings.Contains(query, "completedIterations") || !strings.Contains(query, "IssueFieldSingleSelect") {
 				t.Fatalf("view query or variables invalid: %q %#v", query, variables)
 			}
 			result := response.(*viewResponse)
 			result.Organization = &viewOwner{Project: &viewProject{
+				ProjectID:       "project-id",
 				ViewerCanUpdate: true,
 				View: &rawView{
 					ID: "view-id", Number: 3, Name: "Current", Layout: BoardLayout, Filter: "iteration:@current",
@@ -220,7 +248,7 @@ func TestOpenViewProjectsFieldConfigurations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenView() error = %v", err)
 	}
-	if !view.ViewerCanUpdate || view.Layout != BoardLayout || view.Filter != "iteration:@current" {
+	if view.ProjectID != "project-id" || !view.ViewerCanUpdate || view.Layout != BoardLayout || view.Filter != "iteration:@current" {
 		t.Fatalf("view metadata = %#v", view)
 	}
 	if len(view.Fields) != 2 || len(view.Fields[0].Options) != 1 || view.Fields[0].Options[0].Name != "Todo" || len(view.Fields[1].Options) != 2 || view.Fields[1].Options[0].Name != "Medium" {
@@ -394,11 +422,79 @@ func TestPageItemsProjectsPullRequestMetadata(t *testing.T) {
 	}
 }
 
+func TestNestedDetailFieldValuesProjectToDisplayStrings(t *testing.T) {
+	cases := []struct {
+		name      string
+		value     rawFieldValue
+		want      string
+		available bool
+	}{
+		{
+			name: "labels",
+			value: rawFieldValue{
+				Kind:   "ProjectV2ItemFieldLabelValue",
+				Labels: &rawLabelConnection{Nodes: []rawLabel{{Name: "bug"}, {Name: "urgent"}}},
+			},
+			want:      "bug, urgent",
+			available: true,
+		},
+		{
+			name:      "milestone",
+			value:     rawFieldValue{Kind: "ProjectV2ItemFieldMilestoneValue", Milestone: &rawMilestone{Title: "v1.0"}},
+			want:      "v1.0",
+			available: true,
+		},
+		{
+			name: "pull requests",
+			value: rawFieldValue{
+				Kind:         "ProjectV2ItemFieldPullRequestValue",
+				PullRequests: &rawPullRequestConnection{Nodes: []rawPullRequest{{Number: 12, Repository: &rawRepository{NameWithOwner: "org/repo"}}}},
+			},
+			want:      "org/repo #12",
+			available: true,
+		},
+		{
+			name:      "repository",
+			value:     rawFieldValue{Kind: "ProjectV2ItemFieldRepositoryValue", Repository: &rawRepository{NameWithOwner: "org/repo"}},
+			want:      "org/repo",
+			available: true,
+		},
+		{
+			name: "reviewers",
+			value: rawFieldValue{
+				Kind:      "ProjectV2ItemFieldReviewerValue",
+				Reviewers: &rawRequestedReviewerConnection{Nodes: []rawRequestedReviewer{{Login: "octocat"}, {Name: "Platform"}}},
+			},
+			want:      "octocat, Platform",
+			available: true,
+		},
+		{
+			name:      "users",
+			value:     rawFieldValue{Kind: "ProjectV2ItemFieldUserValue", Users: &rawUserConnection{Nodes: []rawUser{{Login: "octocat"}}}},
+			want:      "octocat",
+			available: true,
+		},
+		{
+			name:      "inaccessible labels",
+			value:     rawFieldValue{Kind: "ProjectV2ItemFieldLabelValue"},
+			available: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			projected := tc.value.project()
+			if projected.Value != tc.want || projected.Available != tc.available {
+				t.Fatalf("projected = %#v, want value %q available %v", projected, tc.want, tc.available)
+			}
+		})
+	}
+}
+
 func TestLoadItemDetailPaginatesFieldsAndValues(t *testing.T) {
 	body := "## Details\n\nA body"
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(query string, variables map[string]interface{}, response interface{}) error {
-			if variables["fieldsAfter"] != nil || variables["valuesAfter"] != nil || !strings.Contains(query, "body") || !strings.Contains(query, "FieldConfiguration") {
+			if variables["fieldsAfter"] != nil || variables["valuesAfter"] != nil || !strings.Contains(query, "body") || !strings.Contains(query, "FieldConfiguration") || !strings.Contains(query, "labels(first: 100)") || !strings.Contains(query, "pullRequests(first: 100)") {
 				t.Fatalf("detail query = %q, variables = %#v", query, variables)
 			}
 			result := response.(*itemDetailResponse)
