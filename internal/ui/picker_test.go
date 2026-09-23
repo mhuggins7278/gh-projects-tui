@@ -10,7 +10,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/mhuggins7278/gh-projects-tui/internal/config"
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
 
@@ -18,7 +17,6 @@ type fakePickerSource struct {
 	discovery          github.Discovery
 	views              []github.ViewSummary
 	view               github.View
-	viewErr            error
 	itemPages          map[string]github.ItemsPage
 	itemPagesByFilter  map[string]map[string]github.ItemsPage
 	itemErrorsByFilter map[string]map[string]error
@@ -27,20 +25,6 @@ type fakePickerSource struct {
 	mutationErr        error
 	viewCalls          *int
 	itemCalls          *int
-}
-
-type fakeStatusFallbackSource struct {
-	fakePickerSource
-	fallback      github.View
-	fallbackErr   error
-	fallbackCalls *int
-}
-
-func (f fakeStatusFallbackSource) OpenStatusFallback(context.Context, github.Owner, int) (github.View, error) {
-	if f.fallbackCalls != nil {
-		*f.fallbackCalls++
-	}
-	return f.fallback, f.fallbackErr
 }
 
 func (f fakePickerSource) Discover(context.Context) (github.Discovery, error) {
@@ -64,7 +48,7 @@ func (f fakePickerSource) OpenView(context.Context, github.Owner, int, int) (git
 	if f.viewCalls != nil {
 		*f.viewCalls++
 	}
-	return f.view, f.viewErr
+	return f.view, nil
 }
 
 func (f fakePickerSource) PageItems(_ context.Context, _ github.Owner, _ int, filter, after string) (github.ItemsPage, error) {
@@ -153,10 +137,7 @@ func testDiscovery() github.Discovery {
 }
 
 func newPickerModel(source DiscoverySource) Model {
-	model := NewModel(source)
-	model.loadPrefs = func(string) (config.Selection, error) { return config.Selection{}, nil }
-	model.savePrefs = func(string, config.Selection) error { return nil }
-	return model
+	return NewModel(source)
 }
 
 func feedDiscovery(t *testing.T, model Model, source fakePickerSource) Model {
@@ -851,6 +832,36 @@ func TestBoardSavedSortKeepsUnsetValuesLastInBothDirectionsAndPreservesTies(t *t
 	assertOrder("first-tie", "second-tie", "lower", "unset-a", "unset-b")
 }
 
+func TestBoardSortsIterationValuesByChronologicalStartDate(t *testing.T) {
+	iteration := github.Field{
+		ID: "iteration", Name: "Iteration", Kind: "ProjectV2IterationField", DataType: "ITERATION",
+		Iterations: []github.Iteration{
+			{ID: "current", Title: "Current", StartDate: "2026-09-22"},
+			{ID: "past", Title: "Past", StartDate: "2026-09-15", Completed: true},
+		},
+	}
+	items := []github.Item{
+		{ID: "current", FieldValues: []github.FieldValue{{FieldID: "iteration", IterationID: "current", Value: "Current", Available: true}}},
+		{ID: "past", FieldValues: []github.FieldValue{{FieldID: "iteration", IterationID: "past", Value: "Past", Available: true}}},
+		{ID: "unset"},
+	}
+	view := github.View{SortByFields: []github.SortField{{Direction: "ASC", Field: iteration}}}
+	assertOrder := func(want ...string) {
+		t.Helper()
+		got := sortedItemsForView(&view, items)
+		ids := make([]string, len(got))
+		for index := range got {
+			ids[index] = got[index].ID
+		}
+		if !reflect.DeepEqual(ids, want) {
+			t.Fatalf("sorted IDs = %#v, want %#v", ids, want)
+		}
+	}
+	assertOrder("past", "current", "unset")
+	view.SortByFields[0].Direction = "DESC"
+	assertOrder("current", "past", "unset")
+}
+
 func TestBoardSearchFiltersLoadedCards(t *testing.T) {
 	model := newPickerModel(fakePickerSource{})
 	model.screen = screenBoard
@@ -1014,28 +1025,6 @@ func TestBoardCardsOmitGroupingFieldsFromInlineSummary(t *testing.T) {
 	}
 	if fields := cardFieldSummary(item, &github.View{Fields: view.Fields}); !strings.Contains(fields, "Status: In Progress") {
 		t.Fatalf("ungrouped field summary omitted status: %q", fields)
-	}
-}
-
-func TestStatusFallbackUsesGuardedLaneMutationPath(t *testing.T) {
-	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "todo", Name: "Todo"}, {ID: "doing", Name: "Doing"}}}
-	mutations := []string{}
-	model := newPickerModel(fakePickerSource{mutations: &mutations})
-	model.screen = screenBoard
-	model.view = &github.View{ProjectID: "project", Name: "Unfiltered Status fallback", Layout: github.BoardLayout, ViewerCanUpdate: true, GroupByFields: []github.Field{status}, Fallback: true}
-	model.items = []github.Item{{ID: "item", Content: &github.Content{Kind: "Issue", Title: "Fallback item"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "todo", Available: true}}}}
-	model.boardLane = 1
-	updated, cmd := model.Update(keyPress("L"))
-	model = updated.(Model)
-	if cmd == nil || !model.mutationLoading {
-		t.Fatalf("writable fallback move did not start: status=%q", model.status)
-	}
-	_ = cmd()
-	if !reflect.DeepEqual(mutations, []string{"field:doing"}) {
-		t.Fatalf("fallback mutation = %#v", mutations)
-	}
-	if reason := model.boardMutationUnavailable(); reason != "" {
-		t.Fatalf("fallback rejected by normal write guard: %q", reason)
 	}
 }
 

@@ -70,26 +70,6 @@ query OrganizationProjectViews($login: String!, $project: Int!, $after: String) 
   }
 }`
 
-const userProjectFieldsQuery = `
-query UserProjectFields($login: String!, $project: Int!, $after: String) {
-  user(login: $login) {
-    projectV2(number: $project) {
-      id viewerCanUpdate
-      fields(first: 100, after: $after) { nodes { ...FieldConfiguration } pageInfo { hasNextPage endCursor } }
-    }
-  }
-}` + fieldConfigurationFragment
-
-const organizationProjectFieldsQuery = `
-query OrganizationProjectFields($login: String!, $project: Int!, $after: String) {
-  organization(login: $login) {
-    projectV2(number: $project) {
-      id viewerCanUpdate
-      fields(first: 100, after: $after) { nodes { ...FieldConfiguration } pageInfo { hasNextPage endCursor } }
-    }
-  }
-}` + fieldConfigurationFragment
-
 type ViewLayout string
 
 const (
@@ -110,7 +90,6 @@ type View struct {
 	GroupByFields   []Field
 	VerticalGroupBy []Field
 	SortByFields    []SortField
-	Fallback        bool
 }
 
 type Field struct {
@@ -370,10 +349,9 @@ func (f rawField) project() Field {
 
 // ViewSummary is the lightweight row used by the view picker.
 type ViewSummary struct {
-	Number   int
-	Name     string
-	Layout   ViewLayout
-	Fallback bool
+	Number int
+	Name   string
+	Layout ViewLayout
 }
 
 type viewsResponse struct {
@@ -387,109 +365,6 @@ type viewsOwner struct {
 
 type viewsProject struct {
 	Views rawViewsPage `json:"views"`
-}
-
-type projectFieldsResponse struct {
-	User         *projectFieldsOwner `json:"user"`
-	Organization *projectFieldsOwner `json:"organization"`
-}
-
-type projectFieldsOwner struct {
-	Project *projectFieldsProject `json:"projectV2"`
-}
-
-type projectFieldsProject struct {
-	ID              string          `json:"id"`
-	ViewerCanUpdate bool            `json:"viewerCanUpdate"`
-	Fields          fieldConnection `json:"fields"`
-}
-
-// OpenStatusFallback builds an unfiltered board from a project's Status field.
-// It does not rely on any saved view metadata.
-func (c *Client) OpenStatusFallback(ctx context.Context, owner Owner, projectNumber int) (View, error) {
-	project, err := c.fetchProjectFieldsPage(ctx, owner, projectNumber, "")
-	if err != nil {
-		return View{}, err
-	}
-	fields := append([]*rawField(nil), project.Fields.Nodes...)
-	after := ""
-	for project.Fields.PageInfo.HasNextPage {
-		next, cursorErr := nextCursor(project.Fields.PageInfo, after)
-		if cursorErr != nil {
-			return View{}, cursorErr
-		}
-		page, fetchErr := c.fetchProjectFieldsPage(ctx, owner, projectNumber, next)
-		if fetchErr != nil {
-			return View{}, fetchErr
-		}
-		fields = append(fields, page.Fields.Nodes...)
-		project.Fields = page.Fields
-		after = next
-	}
-
-	var status *Field
-	var assignees *Field
-	for _, raw := range fields {
-		if raw == nil {
-			continue
-		}
-		field := raw.project()
-		if field.Name == "Status" && (field.Kind == "ProjectV2SingleSelectField" || field.DataType == "SINGLE_SELECT") {
-			fieldCopy := field
-			status = &fieldCopy
-		}
-		if field.Name == "Assignees" {
-			fieldCopy := field
-			assignees = &fieldCopy
-		}
-	}
-	if status == nil || len(status.Options) == 0 {
-		return View{}, fmt.Errorf("project %d has no configurable single-select Status field", projectNumber)
-	}
-	visibleFields := []Field{{Name: "Title", DataType: "TITLE"}}
-	if assignees != nil {
-		visibleFields = append(visibleFields, *assignees)
-	}
-	return View{
-		ProjectID:       project.ID,
-		Name:            "Unfiltered Status fallback",
-		Layout:          BoardLayout,
-		ViewerCanUpdate: project.ViewerCanUpdate,
-		Fields:          visibleFields,
-		GroupByFields:   []Field{*status},
-		Fallback:        true,
-	}, nil
-}
-
-func (c *Client) fetchProjectFieldsPage(ctx context.Context, owner Owner, projectNumber int, after string) (*projectFieldsProject, error) {
-	var response projectFieldsResponse
-	variables := map[string]interface{}{
-		"login": owner.Login, "project": projectNumber, "after": nullableCursor(after),
-	}
-	query := organizationProjectFieldsQuery
-	if owner.Kind == UserOwner {
-		query = userProjectFieldsQuery
-	}
-	if err := c.graphql.DoWithContext(ctx, query, variables, &response); err != nil {
-		return nil, err
-	}
-	var project *projectFieldsProject
-	switch owner.Kind {
-	case UserOwner:
-		if response.User != nil {
-			project = response.User.Project
-		}
-	case OrganizationOwner:
-		if response.Organization != nil {
-			project = response.Organization.Project
-		}
-	default:
-		return nil, fmt.Errorf("unsupported owner kind %q", owner.Kind)
-	}
-	if project == nil {
-		return nil, fmt.Errorf("project %d for %s %q was not found", projectNumber, owner.Kind, owner.Login)
-	}
-	return project, nil
 }
 
 type rawViewsPage struct {

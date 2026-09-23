@@ -16,26 +16,9 @@ func main() {
 	project := flag.Int("project", 0, "owner-scoped project number")
 	view := flag.Int("view", 0, "project-scoped view number")
 	flag.Parse()
-	if *project < 0 || *view < 0 {
-		fmt.Fprintln(os.Stderr, "--project and --view must be positive")
-		os.Exit(2)
-	}
 	host := config.DefaultHost()
-	remembered, _ := config.Load(host)
-	explicit := config.Selection{Owner: *owner, Project: *project, View: *view}
-	selection := startupSelection(explicit, remembered)
-	// A project needs an explicit or remembered owner; a view needs an
-	// explicit or remembered project. Ancestor changes discard descendants.
-	if explicit.Project != 0 && selection.Owner == "" {
-		fmt.Fprintln(os.Stderr, "--project requires --owner (or a remembered owner)")
-		os.Exit(2)
-	}
-	if explicit.View != 0 && selection.Project == 0 {
-		fmt.Fprintln(os.Stderr, "--view requires --project (or a remembered project)")
-		os.Exit(2)
-	}
-	if explicit.View != 0 && selection.Owner == "" {
-		fmt.Fprintln(os.Stderr, "--view requires --owner (or a remembered owner)")
+	if err := validateFlags(*owner, *project, *view); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 
@@ -44,16 +27,26 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	model := ui.NewModelWithHost(client, ui.Selection{OwnerLogin: selection.Owner, ProjectNumber: selection.Project, ViewNumber: selection.View, Fallback: selection.Fallback}, host)
+	selection := ui.Selection{OwnerLogin: *owner, ProjectNumber: *project, ViewNumber: *view}
+	model := ui.NewModelWithHost(client, selection, host)
 	if _, err := tea.NewProgram(model).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func startupSelection(explicit, remembered config.Selection) config.Selection {
-	if explicit.Owner == "" && explicit.Project == 0 && explicit.View == 0 {
-		return config.Selection{}
+func validateFlags(owner string, project, view int) error {
+	if project < 0 || view < 0 {
+		return fmt.Errorf("--project and --view must be positive")
 	}
-	return config.Resolve(explicit, remembered)
+	if project != 0 && owner == "" {
+		return fmt.Errorf("--project requires --owner")
+	}
+	if view != 0 && project == 0 {
+		return fmt.Errorf("--view requires --project")
+	}
+	if view != 0 && owner == "" {
+		return fmt.Errorf("--view requires --owner")
+	}
+	return nil
 }

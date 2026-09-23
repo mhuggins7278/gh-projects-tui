@@ -25,10 +25,12 @@ Build a private, precompiled GitHub CLI extension invoked as `gh projects-tui` t
 - Exit condition: sanitized examples and the completed matrix demonstrate the intended work-board read path and supported sandbox writes. Unproven capabilities remain unsupported.
 
 ## Saved-View Compatibility Contract
+Current implementation coverage and empirical limits are tracked in [docs/api-contract.md](docs/api-contract.md#current-compatibility-matrix). This table describes the intended contract; fixture-only behavior is identified separately in that record.
+
 | Feature | MVP contract | Unsupported behavior |
 | --- | --- | --- |
 | Layout | Saved `BOARD_LAYOUT` views. | Explain why table/roadmap views cannot open as boards. |
-| Filter | Verified server-side behavior, or the explicit locally evaluated subset established in Slice 0. | Block the saved view; offer only a clearly labeled, explicitly selected fallback. |
+| Filter | Verified server-side behavior, or the explicit locally evaluated subset established in Slice 0. | Block the saved view with an explanation; do not substitute an unfiltered board. |
 | Column/swimlane grouping | Single-select and iteration projection first; preserve option order, distinguish active/completed iterations, and include unset values. Validate which metadata axis maps to each board axis. | Other types require validated projection before rendering. Multi-valued groups must define duplicate-card identity/navigation; otherwise mark the view unsupported. |
 | Sorting | Project position plus an explicit Slice 0 list of supported field sorts, null placement, comparison rules, and tie-breaking. | Unsupported sort semantics make the view unsupported; supported explicit field sorts disable manual reorder. |
 | Visible fields/detail | Validated card-field renderers; detail combines project field definitions with values so unset fields appear too. | Mark unavailable values/content explicitly, distinct from empty values/body. |
@@ -40,15 +42,15 @@ Build a private, precompiled GitHub CLI extension invoked as `gh projects-tui` t
    - Use `go-gh` so authentication, `GH_HOST`, environment tokens, and existing `gh auth` configuration behave like native `gh` commands.
    - Query the viewer plus organizations returned by the authenticated organization-membership API, then paginate each owner’s open projects explicitly. This is not an exhaustive enumeration of all accessible owners; token visibility and outside-collaborator access can differ.
    - Keep successful discovery results usable when an individual organization fails, with an owner-specific explanation. Direct owner lookup operates independently of membership discovery.
-   - Present a searchable owner/project picker and remember only the host and last owner/project/view identifiers, scoped by host.
-   - `--owner` accepts a login; `--project` and `--view` accept owner-scoped project and project-scoped view numbers respectively. Explicit flags override remembered selections. Changing an ancestor selection discards remembered descendants; missing selections open the corresponding picker. A project number requires an explicit or remembered owner on the active host, and a view number similarly requires a resolved project.
+   - Present a searchable owner/project picker. Do not persist or automatically restore the previous selection; direct startup uses explicit flags.
+   - `--owner` accepts a login; `--project` and `--view` accept owner-scoped project and project-scoped view numbers respectively. A project number requires an explicit owner, and a view number requires explicit owner and project flags. Missing selections open the corresponding picker.
    - Never persist item titles, bodies, field values, or tokens.
 
 2. **Saved-view selection**
    - List the selected project’s saved views and support `BOARD_LAYOUT` in the MVP.
    - Apply the view’s filter, visible fields, column grouping, optional swimlane grouping, and sort rules according to the compatibility contract; explain incompatibility before rendering.
    - Preserve field-option order and include a “No value” lane where applicable.
-   - If no compatible board view exists, offer an explicit Status-board fallback rather than silently changing semantics.
+   - If no compatible board view exists, explain incompatibility; never silently switch to an unfiltered Status board.
    - Show table and roadmap views as unsupported for now, with a clear explanation.
 
 3. **Board experience**
@@ -58,7 +60,7 @@ Build a private, precompiled GitHub CLI extension invoked as `gh projects-tui` t
    - Core keys: `h/l` lanes, `j/k` cards, `/` local search, `enter` details, `p` project picker, `v` view picker, `r` refresh, `o` browser, `?` help, and `q` quit.
 
 4. **Responsive data loading**
-   - Load project/view/field metadata first, then paginate compatible Status lanes concurrently behind per-lane loading states. Reveal each lane when its grouping and saved sorting are stable; use a whole-board paginated fallback for unsupported grouping configurations.
+   - Load project/view/field metadata first, then paginate compatible Status lanes concurrently behind per-lane loading states. Reveal each lane when its grouping and saved sorting are stable; use whole-board pagination for unsupported grouping configurations.
    - Fetch only core metadata plus fields required for grouping, sorting, and cards during board load.
    - Lazy-load the selected item’s full field set and body after a short selection debounce; cache details in memory only. Paginate nested connections as needed, including field values and multi-valued fields, and combine them with project field definitions.
    - Cancel obsolete reads when the user switches projects or views, avoid N+1 requests, and surface rate-limit/auth failures inside the TUI. Tag asynchronous messages with host/project/view generation and item identity where applicable; discard stale read results even if cancellation arrives too late.
@@ -81,7 +83,7 @@ Build a private, precompiled GitHub CLI extension invoked as `gh projects-tui` t
 - `internal/github`: one deep Projects v2 module hiding owner branching, GraphQL unions, pagination, schema translation, auth errors, and mutations. Its small interface covers discovery, opening a view, paging items, loading detail, moving, and reordering.
 - `internal/board`: pure domain model for fields, lane/swimlane projection, saved-view filtering metadata, ordering, and mutation rollback state.
 - `internal/ui`: Bubble Tea screens and state transitions; network work runs as commands and returns generation-tagged typed messages, with cancellable reads and separately reconciled write outcomes.
-- `internal/config`: minimal XDG-compatible preference storage for host-scoped, non-sensitive identifiers only.
+- `internal/config`: GitHub host resolution only; user selections are not persisted.
 - Tests use a fake Projects adapter at the same seam; no production-only abstraction layers or pass-through wrappers.
 
 ## Implementation Slices
@@ -95,7 +97,7 @@ Build a private, precompiled GitHub CLI extension invoked as `gh projects-tui` t
 7. Package tagged binaries with `cli/gh-extension-precompile`, install from the private release, and document keybindings, scopes, and limitations.
 
 ## Verification
-- Unit tests: owner discovery with partial failures and independent direct lookup, host/flag preference resolution, nested cursor pagination, GraphQL union decoding, unset/inaccessible fields, supported filters/sorts, null/tie handling, lane/iteration ordering, unsupported grouping, and auth/error classification.
+- Unit tests: owner discovery with partial failures and independent direct lookup, explicit flag validation, nested cursor pagination, GraphQL union decoding, unset/inaccessible fields, supported filters/sorts, null/tie handling, lane/iteration ordering, unsupported grouping, and auth/error classification.
 - Model tests: fixed-size Bubble Tea navigation, loading, resize, search, detail overlay, read-only mode, and error states; identity-stable selection during progressive sorting; obsolete responses after selection/view/project changes; and control gating during loading/search.
 - Mutation tests: same-lane reorder, first/empty destination, hidden-item anchors, cross-lane move preserving swimlane, clear/set “No value,” sorted-view field-only moves, filter-driven disappearance/focus, denied permission, stale item/anchor, first/second mutation failure, rollback/refetch, interleaved moves on different items, and ambiguous completion after timeout or view switch.
 - Performance fixture: at least 1,000 sanitized items with deliberately delayed pages. On a documented reference machine and terminal size, target p95 input-to-model/view-update latency under 100 ms during loading; show the first page before the final page arrives and keep navigation responsive during detail fetching. Record timings and request counts.

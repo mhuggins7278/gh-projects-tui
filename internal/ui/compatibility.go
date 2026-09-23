@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
@@ -103,7 +104,17 @@ func supportedSortField(field github.Field) bool {
 		return true
 	}
 	switch strings.ToUpper(field.DataType) {
-	case "TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "ITERATION":
+	case "TEXT", "NUMBER", "DATE", "SINGLE_SELECT":
+		return true
+	case "ITERATION":
+		if len(field.Iterations) == 0 {
+			return false
+		}
+		for _, iteration := range field.Iterations {
+			if _, err := time.Parse("2006-01-02", iteration.StartDate); err != nil {
+				return false
+			}
+		}
 		return true
 	default:
 		return false

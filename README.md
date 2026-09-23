@@ -52,7 +52,8 @@ go run ./cmd/gh-projects-tui
 ```
 
 Running without flags discovers your personal projects and accessible organization
-projects, then restores your remembered selection when available.
+projects, then opens the owner picker. The app does not persist or automatically
+restore the previous owner, project, or view.
 
 To open a specific project/view directly:
 
@@ -61,9 +62,8 @@ go run ./cmd/gh-projects-tui --owner OWNER --project NUMBER --view NUMBER
 ```
 
 You can also pass only `--owner` to start at that owner's project picker.
-`--project` needs an explicit or remembered owner; `--view` also needs an explicit
-or remembered project. Changing an owner or project discards remembered selections
-below it.
+`--project` requires `--owner`, and `--view` requires both `--owner` and
+`--project`.
 
 ### Build a local binary
 
@@ -82,12 +82,10 @@ are the current way to run the unpublished app. After pulling updates, rerun
 
 ## Current features
 
-- Owner, project, and saved-view pickers with filtering and remembered selections.
+- Owner, project, and saved-view pickers with filtering.
 - Progressive board loading, with parallel Status-lane loading where supported.
 - Single-select and iteration grouping, including combined columns/swimlanes.
 - Saved visible fields, supported field sorting, and local card search.
-- An explicit unfiltered Status fallback when a project has no compatible saved
-  board view; fallback card moves use the same permission and loading guards.
 - Read-only table rendering using saved fields.
 - Issue, pull request, and draft details, including Markdown bodies and project
   fields. Details are cached in memory until refresh or view changes.
@@ -132,11 +130,10 @@ values), and `esc` closes the panel.
 - Supported saved filters are currently no filter, `iteration:@current`,
   `status:"value"`, `no:status`, `-status:"value"`, `assignee:@me`, and
   verified two-term conjunctions of Status with `assignee:@me`, negated Status
-  with `assignee:@me`, or `iteration:@current` with Status. Other expressions and unsupported
-  grouping/sorting semantics stay in the picker with an explanation.
-- If no compatible saved board exists, the picker offers an explicitly labeled,
-  unfiltered Status fallback. It is distinct from saved views and is remembered
-  as a fallback selection, not a saved view number.
+  with `assignee:@me`, or `iteration:@current` with Status. Other expressions and
+  unsupported grouping/sorting semantics stay in the picker with an explanation.
+- If a project has no compatible saved board, unsupported views stay in the
+  picker with an explanation; the TUI never substitutes an unfiltered board.
 - Card mutations require a writable, fully loaded, unfiltered single-axis board
   grouped by single-select or iteration. Clear local search before moving cards.
 - Manual reordering requires project-position sorting. Combined-axis boards and
@@ -144,9 +141,8 @@ values), and `esc` closes the panel.
 - Table support is an early preview; full parity with GitHub's table UI is not
   implemented.
 
-Selections are stored per host in `gh-projects-tui/config.json` under your OS user
-configuration directory (typically `~/.config/gh-projects-tui/config.json` on
-Linux). This stores owner/project/view identifiers, not tokens or item content.
+Owner, project, and view selections are not saved between runs. Use the explicit
+flags above when you want to open a specific board directly.
 
 ## Development
 

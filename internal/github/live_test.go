@@ -42,29 +42,3 @@ func TestLiveReadContract(t *testing.T) {
 		}
 	}
 }
-
-func TestLiveStatusFallbackContract(t *testing.T) {
-	if os.Getenv("GH_PROJECTS_TUI_LIVE_STATUS_FALLBACK") != "1" {
-		t.Skip("set GH_PROJECTS_TUI_LIVE_STATUS_FALLBACK=1 to probe a project with a single-select Status field")
-	}
-	login := os.Getenv("GH_PROJECTS_TUI_LIVE_OWNER")
-	projectNumber, _ := strconv.Atoi(os.Getenv("GH_PROJECTS_TUI_LIVE_PROJECT"))
-	if login == "" || projectNumber == 0 {
-		t.Fatal("set GH_PROJECTS_TUI_LIVE_OWNER and GH_PROJECTS_TUI_LIVE_PROJECT")
-	}
-	ownerKind := OrganizationOwner
-	if os.Getenv("GH_PROJECTS_TUI_LIVE_OWNER_KIND") == "user" {
-		ownerKind = UserOwner
-	}
-	client, err := NewClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fallback, err := client.OpenStatusFallback(context.Background(), Owner{Login: login, Kind: ownerKind}, projectNumber)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !fallback.Fallback || len(fallback.GroupByFields) != 1 || fallback.GroupByFields[0].Name != "Status" {
-		t.Fatalf("Status fallback metadata = %#v", fallback)
-	}
-}

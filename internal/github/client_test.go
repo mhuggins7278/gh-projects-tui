@@ -310,61 +310,6 @@ func TestOpenViewPaginatesFieldMetadata(t *testing.T) {
 	}
 }
 
-func TestOpenStatusFallbackLoadsAndPaginatesProjectFields(t *testing.T) {
-	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
-		func(query string, variables map[string]interface{}, response interface{}) error {
-			if variables["after"] != nil || !strings.Contains(query, "viewerCanUpdate") || !strings.Contains(query, "fields(first: 100, after: $after)") || !strings.Contains(query, "OrganizationProjectFields") {
-				t.Fatalf("initial fallback fields query = %q vars=%#v", query, variables)
-			}
-			result := response.(*projectFieldsResponse)
-			result.Organization = &projectFieldsOwner{Project: &projectFieldsProject{
-				ID: "project-id", ViewerCanUpdate: true,
-				Fields: fieldConnection{
-					Nodes:    []*rawField{{Kind: "ProjectV2SingleSelectField", ID: "status", Name: "Status", DataType: "SINGLE_SELECT", Options: []FieldOption{{ID: "todo", Name: "Todo"}}}},
-					PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("fields-next")},
-				},
-			}}
-			return nil
-		},
-		func(_ string, variables map[string]interface{}, response interface{}) error {
-			if variables["after"] != "fields-next" {
-				t.Fatalf("next fallback fields cursor = %#v", variables["after"])
-			}
-			result := response.(*projectFieldsResponse)
-			result.Organization = &projectFieldsOwner{Project: &projectFieldsProject{
-				ID: "project-id", ViewerCanUpdate: true,
-				Fields: fieldConnection{Nodes: []*rawField{{Kind: "ProjectV2Field", ID: "assignees", Name: "Assignees", DataType: "ASSIGNEES"}}},
-			}}
-			return nil
-		},
-	}}
-
-	view, err := newClient(graphql, &fakeREST{}).OpenStatusFallback(context.Background(), Owner{Login: "org", Kind: OrganizationOwner}, 7)
-	if err != nil {
-		t.Fatalf("OpenStatusFallback() error = %v", err)
-	}
-	if !view.Fallback || view.ProjectID != "project-id" || !view.ViewerCanUpdate || view.Filter != "" || len(view.GroupByFields) != 1 || view.GroupByFields[0].ID != "status" || len(view.Fields) != 2 || view.Fields[1].ID != "assignees" {
-		t.Fatalf("fallback view = %#v", view)
-	}
-}
-
-func TestOpenStatusFallbackRequiresSingleSelectStatus(t *testing.T) {
-	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
-		func(_ string, _ map[string]interface{}, response interface{}) error {
-			result := response.(*projectFieldsResponse)
-			result.User = &projectFieldsOwner{Project: &projectFieldsProject{
-				ID:     "project-id",
-				Fields: fieldConnection{Nodes: []*rawField{{Kind: "ProjectV2Field", ID: "status", Name: "Status", DataType: "TEXT"}}},
-			}}
-			return nil
-		},
-	}}
-	_, err := newClient(graphql, &fakeREST{}).OpenStatusFallback(context.Background(), Owner{Login: "me", Kind: UserOwner}, 2)
-	if err == nil || !strings.Contains(err.Error(), "single-select Status") {
-		t.Fatalf("missing writable Status error = %v", err)
-	}
-}
-
 func TestListViewsPaginates(t *testing.T) {
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(query string, variables map[string]interface{}, response interface{}) error {

@@ -175,11 +175,12 @@ func itemSortValueFor(field github.Field, item github.Item) itemSortValue {
 		}
 	}
 	if strings.EqualFold(field.DataType, "ITERATION") {
-		for index, iteration := range field.Iterations {
+		for _, iteration := range field.Iterations {
 			if iteration.ID == value.IterationID {
-				return itemSortValue{present: true, number: float64(index)}
+				return itemSortValue{present: true, text: iteration.StartDate, byText: true}
 			}
 		}
+		return itemSortValue{}
 	}
 	if strings.EqualFold(field.DataType, "NUMBER") {
 		if number, err := strconv.ParseFloat(value.Value, 64); err == nil {
@@ -434,9 +435,6 @@ func (m Model) boardMutationUnavailable() string {
 	}
 	if m.loadingDetail {
 		return "Wait for the view metadata to finish refreshing"
-	}
-	if m.view.Fallback && m.err != nil {
-		return "Status fallback metadata could not be refreshed; retry before moving cards"
 	}
 	if !m.view.ViewerCanUpdate {
 		return "This project is read-only"
@@ -822,12 +820,7 @@ func (m Model) renderBoardContent(b *strings.Builder) {
 		return
 	}
 
-	if m.view.Fallback {
-		fmt.Fprintf(b, "%s  %s  %s\n", titleStyle.Render(m.view.Name), statusStyle.Render("FALLBACK · UNFILTERED"), layoutBadge(string(m.view.Layout)))
-		b.WriteString(statusStyle.Render("Unfiltered Status fallback; not a saved GitHub view.") + "\n")
-	} else {
-		fmt.Fprintf(b, "%s  %s  %s\n", titleStyle.Render(m.view.Name), mutedStyle.Render(fmt.Sprintf("#%d", m.view.Number)), layoutBadge(string(m.view.Layout)))
-	}
+	fmt.Fprintf(b, "%s  %s  %s\n", titleStyle.Render(m.view.Name), mutedStyle.Render(fmt.Sprintf("#%d", m.view.Number)), layoutBadge(string(m.view.Layout)))
 	b.WriteString(mutedStyle.Render("Display note: collapsed-group state is not exposed by this API; groups follow saved field and option order.") + "\n")
 	if m.view.Filter != "" {
 		fmt.Fprintf(b, "%s %s\n", mutedStyle.Render("Filter:"), m.view.Filter)

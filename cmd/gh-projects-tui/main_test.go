@@ -1,33 +1,34 @@
 package main
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/mhuggins7278/gh-projects-tui/internal/config"
-)
-
-func TestStartupSelectionLeavesNoFlagsOnDiscoveryPath(t *testing.T) {
-	remembered := config.Selection{Owner: "stale", Project: 7, View: 3}
-	if got := startupSelection(config.Selection{}, remembered); got != (config.Selection{}) {
-		t.Fatalf("no-flag startup selection = %#v", got)
-	}
-}
-
-func TestStartupSelectionResolvesExplicitFlags(t *testing.T) {
-	remembered := config.Selection{Owner: "org", Project: 7, View: 3}
-	cases := []struct {
-		name     string
-		explicit config.Selection
-		want     config.Selection
+func TestValidateFlagsRequiresExplicitAncestors(t *testing.T) {
+	tests := []struct {
+		name        string
+		owner       string
+		project     int
+		view        int
+		wantErrText string
 	}{
-		{name: "owner", explicit: config.Selection{Owner: "new"}, want: config.Selection{Owner: "new"}},
-		{name: "project", explicit: config.Selection{Project: 9}, want: config.Selection{Owner: "org", Project: 9}},
-		{name: "view", explicit: config.Selection{View: 4}, want: config.Selection{Owner: "org", Project: 7, View: 4}},
+		{name: "picker startup"},
+		{name: "owner picker", owner: "org"},
+		{name: "project selection", owner: "org", project: 7},
+		{name: "specific view", owner: "org", project: 7, view: 3},
+		{name: "project requires owner", project: 7, wantErrText: "--project requires --owner"},
+		{name: "view requires project", owner: "org", view: 3, wantErrText: "--view requires --project"},
+		{name: "negative value", owner: "org", project: -1, wantErrText: "--project and --view must be positive"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := startupSelection(tc.explicit, remembered); got != tc.want {
-				t.Fatalf("startup selection = %#v, want %#v", got, tc.want)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateFlags(test.owner, test.project, test.view)
+			if test.wantErrText == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || err.Error() != test.wantErrText {
+				t.Fatalf("error = %v, want %q", err, test.wantErrText)
 			}
 		})
 	}
