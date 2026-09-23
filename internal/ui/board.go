@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strconv"
@@ -433,6 +432,15 @@ func (m Model) boardMutationUnavailable() string {
 	if m.view == nil {
 		return "Mutations require a loaded board view"
 	}
+	if m.mutationSession != nil {
+		session := m.mutationSession
+		if m.selectedOwner == nil || m.selectedProject == nil || !sameMutationProject(session, *m.selectedOwner, m.selectedProject.Number) || session.projectID != m.view.ProjectID || session.view.Number != m.view.Number {
+			return "A save from another project or view is still being reconciled"
+		}
+		if session.blocked {
+			return "A previous save has an unknown outcome; press r to reconcile before making another change"
+		}
+	}
 	if m.loadingDetail {
 		return "Wait for the view metadata to finish refreshing"
 	}
@@ -527,39 +535,11 @@ func (m *Model) moveBoardLaneMutation(delta int) tea.Cmd {
 		m.status = "No card is selected"
 		return nil
 	}
-	field, _ := mutationGroupingField(m.view)
-	value, clear, err := fieldValueInputForLane(field, lanes[targetLane])
-	if err != nil {
-		m.status = err.Error()
-		return nil
-	}
-	projectID := m.view.ProjectID
-	afterID := ""
-	if positionOnly(m.view) && len(lanes[targetLane].Items) > 0 {
-		afterID = lanes[targetLane].Items[len(lanes[targetLane].Items)-1].ID
-	}
-	action := func(ctx context.Context, source ItemMutationSource) (error, bool) {
-		if clear {
-			err := source.ClearItemFieldValue(ctx, github.ItemFieldValueClear{ProjectID: projectID, ItemID: item.ID, FieldID: field.ID})
-			if err != nil {
-				return err, false
-			}
-		} else {
-			err := source.UpdateItemFieldValue(ctx, github.ItemFieldValueUpdate{ProjectID: projectID, ItemID: item.ID, FieldID: field.ID, Value: value})
-			if err != nil {
-				return err, false
-			}
-		}
-		if afterID == "" {
-			return nil, false
-		}
-		if err := source.UpdateItemPosition(ctx, github.ItemPositionUpdate{ProjectID: projectID, ItemID: item.ID, AfterID: &afterID}); err != nil {
-			return err, true
-		}
-		return nil, false
-	}
-	return m.beginBoardMutation(item.ID, "Move card", action, func() {
-		m.applyOptimisticLaneMove(item.ID, field, value, clear, afterID)
+	return m.enqueueBoardMutation(boardMutationIntent{
+		kind:        boardMutationMoveLane,
+		itemID:      item.ID,
+		direction:   delta,
+		description: "Move card",
 	})
 }
 
@@ -586,71 +566,17 @@ func (m *Model) reorderBoardItem(delta int) tea.Cmd {
 		m.status = "No card is selected"
 		return nil
 	}
-	target := m.boardCard + delta
-	if target < 0 || target >= len(lane.Items) {
+	if target := m.boardCard + delta; target < 0 || target >= len(lane.Items) {
 		m.status = "No card in that direction"
 		return nil
 	}
 	item := lane.Items[m.boardCard]
-	var afterID *string
-	if delta > 0 {
-		anchor := lane.Items[target].ID
-		afterID = &anchor
-	} else if m.boardCard > 1 {
-		anchor := lane.Items[m.boardCard-2].ID
-		afterID = &anchor
-	} else if anchor := previousLaneAnchor(lanes, m.boardLane); anchor != "" {
-		afterID = &anchor
-	}
-	projectID := m.view.ProjectID
-	action := func(ctx context.Context, source ItemMutationSource) (error, bool) {
-		return source.UpdateItemPosition(ctx, github.ItemPositionUpdate{ProjectID: projectID, ItemID: item.ID, AfterID: afterID}), false
-	}
-	optimisticAfterID := ""
-	if afterID != nil {
-		optimisticAfterID = *afterID
-	}
-	return m.beginBoardMutation(item.ID, "Reorder card", action, func() {
-		m.applyOptimisticPosition(item.ID, optimisticAfterID)
+	return m.enqueueBoardMutation(boardMutationIntent{
+		kind:        boardMutationReorder,
+		itemID:      item.ID,
+		direction:   delta,
+		description: "Reorder card",
 	})
-}
-
-func (m *Model) applyOptimisticLaneMove(itemID string, field github.Field, input github.FieldValueInput, clear bool, afterID string) {
-	for index := range m.items {
-		if m.items[index].ID != itemID {
-			continue
-		}
-		if clear {
-			m.items[index].FieldValues = removeFieldValue(m.items[index].FieldValues, field)
-		} else {
-			m.items[index].FieldValues = replaceFieldValue(m.items[index].FieldValues, field, input)
-		}
-		break
-	}
-	if afterID != "" {
-		m.items = moveItemAfter(m.items, itemID, afterID)
-	}
-	m.boardFocusID = itemID
-	m.clampBoardCursor()
-}
-
-func (m *Model) applyOptimisticPosition(itemID, afterID string) {
-	if afterID == "" {
-		m.items = moveItemToTop(m.items, itemID)
-	} else {
-		m.items = moveItemAfter(m.items, itemID, afterID)
-	}
-	m.boardFocusID = itemID
-	m.clampBoardCursor()
-}
-
-func previousLaneAnchor(lanes []boardLane, laneIndex int) string {
-	for index := laneIndex - 1; index >= 0; index-- {
-		if len(lanes[index].Items) > 0 {
-			return lanes[index].Items[len(lanes[index].Items)-1].ID
-		}
-	}
-	return ""
 }
 
 func replaceFieldValue(values []github.FieldValue, field github.Field, input github.FieldValueInput) []github.FieldValue {

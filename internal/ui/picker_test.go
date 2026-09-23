@@ -14,17 +14,26 @@ import (
 )
 
 type fakePickerSource struct {
-	discovery          github.Discovery
-	views              []github.ViewSummary
-	view               github.View
-	itemPages          map[string]github.ItemsPage
-	itemPagesByFilter  map[string]map[string]github.ItemsPage
-	itemErrorsByFilter map[string]map[string]error
-	detail             github.ItemDetail
-	mutations          *[]string
-	mutationErr        error
-	viewCalls          *int
-	itemCalls          *int
+	discovery           github.Discovery
+	views               []github.ViewSummary
+	view                github.View
+	itemPages           map[string]github.ItemsPage
+	itemPagesByFilter   map[string]map[string]github.ItemsPage
+	itemErrorsByFilter  map[string]map[string]error
+	canonicalItems      *[]github.Item
+	canonicalPages      map[string]github.ItemsPage
+	canonicalErr        error
+	detail              github.ItemDetail
+	mutations           *[]string
+	mutationErrors      *[]error
+	mutationErr         error
+	fieldMutationErr    error
+	positionMutationErr error
+	applyMutationErrors bool
+	viewCalls           *int
+	itemCalls           *int
+	mutationWait        <-chan struct{}
+	mutationContextErr  *error
 }
 
 func (f fakePickerSource) Discover(context.Context) (github.Discovery, error) {
@@ -55,6 +64,19 @@ func (f fakePickerSource) PageItems(_ context.Context, _ github.Owner, _ int, fi
 	if f.itemCalls != nil {
 		*f.itemCalls++
 	}
+	if filter == "" && f.canonicalItems != nil {
+		if f.canonicalErr != nil {
+			return github.ItemsPage{}, f.canonicalErr
+		}
+		if f.canonicalPages != nil {
+			page, ok := f.canonicalPages[after]
+			if !ok {
+				return github.ItemsPage{}, errors.New("unexpected canonical cursor")
+			}
+			return page, nil
+		}
+		return github.ItemsPage{Items: cloneItems(*f.canonicalItems)}, nil
+	}
 	if errorsByCursor, ok := f.itemErrorsByFilter[filter]; ok {
 		if err := errorsByCursor[after]; err != nil {
 			return github.ItemsPage{}, err
@@ -73,7 +95,13 @@ func (f fakePickerSource) LoadItemDetail(context.Context, github.Owner, int, str
 	return f.detail, nil
 }
 
-func (f fakePickerSource) UpdateItemFieldValue(_ context.Context, request github.ItemFieldValueUpdate) error {
+func (f fakePickerSource) UpdateItemFieldValue(ctx context.Context, request github.ItemFieldValueUpdate) error {
+	if f.mutationWait != nil {
+		<-f.mutationWait
+	}
+	if f.mutationContextErr != nil {
+		*f.mutationContextErr = ctx.Err()
+	}
 	if f.mutations != nil {
 		value := ""
 		if request.Value.SingleSelectOptionID != nil {
@@ -81,14 +109,22 @@ func (f fakePickerSource) UpdateItemFieldValue(_ context.Context, request github
 		}
 		*f.mutations = append(*f.mutations, "field:"+value)
 	}
-	return f.mutationErr
+	err := f.nextMutationError(f.fieldMutationErr)
+	if err == nil || f.applyMutationErrors {
+		f.applyFakeFieldValue(request)
+	}
+	return err
 }
 
-func (f fakePickerSource) ClearItemFieldValue(_ context.Context, _ github.ItemFieldValueClear) error {
+func (f fakePickerSource) ClearItemFieldValue(_ context.Context, request github.ItemFieldValueClear) error {
 	if f.mutations != nil {
 		*f.mutations = append(*f.mutations, "clear")
 	}
-	return f.mutationErr
+	err := f.nextMutationError(f.fieldMutationErr)
+	if err == nil || f.applyMutationErrors {
+		f.clearFakeFieldValue(request)
+	}
+	return err
 }
 
 func (f fakePickerSource) UpdateItemPosition(_ context.Context, request github.ItemPositionUpdate) error {
@@ -99,7 +135,114 @@ func (f fakePickerSource) UpdateItemPosition(_ context.Context, request github.I
 		}
 		*f.mutations = append(*f.mutations, "position:"+anchor)
 	}
+	err := f.nextMutationError(f.positionMutationErr)
+	if err == nil || f.applyMutationErrors {
+		if moveFakeItemPosition(f.canonicalItems, request) != nil {
+			return errors.New("position anchor not found")
+		}
+	}
+	return err
+}
+
+func (f fakePickerSource) nextMutationError(fallback error) error {
+	if f.mutationErrors != nil {
+		if len(*f.mutationErrors) == 0 {
+			return nil
+		}
+		err := (*f.mutationErrors)[0]
+		*f.mutationErrors = (*f.mutationErrors)[1:]
+		return err
+	}
+	if fallback != nil {
+		return fallback
+	}
 	return f.mutationErr
+}
+
+func (f fakePickerSource) applyFakeFieldValue(request github.ItemFieldValueUpdate) {
+	if f.canonicalItems == nil {
+		return
+	}
+	for itemIndex := range *f.canonicalItems {
+		item := &(*f.canonicalItems)[itemIndex]
+		if item.ID != request.ItemID {
+			continue
+		}
+		updated := github.FieldValue{FieldID: request.FieldID, Available: true}
+		if request.Value.SingleSelectOptionID != nil {
+			updated.OptionID = *request.Value.SingleSelectOptionID
+			updated.Value = updated.OptionID
+		}
+		if request.Value.IterationID != nil {
+			updated.IterationID = *request.Value.IterationID
+			updated.Value = updated.IterationID
+		}
+		for index, value := range item.FieldValues {
+			if value.FieldID == request.FieldID {
+				item.FieldValues[index] = updated
+				return
+			}
+		}
+		item.FieldValues = append(item.FieldValues, updated)
+		return
+	}
+}
+
+func (f fakePickerSource) clearFakeFieldValue(request github.ItemFieldValueClear) {
+	if f.canonicalItems == nil {
+		return
+	}
+	for itemIndex := range *f.canonicalItems {
+		item := &(*f.canonicalItems)[itemIndex]
+		if item.ID != request.ItemID {
+			continue
+		}
+		values := item.FieldValues[:0]
+		for _, value := range item.FieldValues {
+			if value.FieldID != request.FieldID {
+				values = append(values, value)
+			}
+		}
+		item.FieldValues = values
+		return
+	}
+}
+
+func moveFakeItemPosition(items *[]github.Item, request github.ItemPositionUpdate) error {
+	if items == nil {
+		return nil
+	}
+	current := -1
+	for index, item := range *items {
+		if item.ID == request.ItemID {
+			current = index
+			break
+		}
+	}
+	if current < 0 {
+		return errors.New("item not found")
+	}
+	item := (*items)[current]
+	without := append((*items)[:current:current], (*items)[current+1:]...)
+	insertAt := 0
+	if request.AfterID != nil {
+		anchor := -1
+		for index, candidate := range without {
+			if candidate.ID == *request.AfterID {
+				anchor = index
+				break
+			}
+		}
+		if anchor < 0 {
+			return errors.New("anchor not found")
+		}
+		insertAt = anchor + 1
+	}
+	without = append(without, github.Item{})
+	copy(without[insertAt+1:], without[insertAt:])
+	without[insertAt] = item
+	*items = without
+	return nil
 }
 
 func keyPress(s string) tea.KeyPressMsg {
@@ -544,13 +687,16 @@ func TestWritableBoardMoveUpdatesFieldAndAppendsDestination(t *testing.T) {
 	}
 	view := github.View{ProjectID: "project", ViewerCanUpdate: true, GroupByFields: []github.Field{status}}
 	mutations := []string{}
-	model := newPickerModel(fakePickerSource{mutations: &mutations})
-	model.screen = screenBoard
-	model.view = &view
-	model.items = []github.Item{
+	canonical := []github.Item{
 		{ID: "a", Content: &github.Content{Kind: "Issue", Title: "A"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
 		{ID: "b", Content: &github.Content{Kind: "Issue", Title: "B"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "two", Available: true}}},
 	}
+	model := newPickerModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical})
+	model.screen = screenBoard
+	model.view = &view
+	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+	model.selectedProject = &github.Project{Number: 1}
+	model.items = cloneItems(canonical)
 	model.boardLane = 1
 
 	updated, cmd := model.Update(keyPress("L"))
@@ -564,12 +710,12 @@ func TestWritableBoardMoveUpdatesFieldAndAppendsDestination(t *testing.T) {
 	if lanes := model.boardLanes(); len(lanes[2].Items) != 2 || lanes[2].Items[1].ID != "a" || lanes[2].Items[1].FieldValues[0].OptionID != "two" {
 		t.Fatalf("optimistic destination lane = %#v", lanes[2])
 	}
-	message, ok := cmd().(boardMutationMsg)
-	if !ok || message.err != nil {
-		t.Fatalf("move message = %#v, type ok = %v", message, ok)
-	}
+	model = runMutationCommands(t, model, cmd)
 	if !reflect.DeepEqual(mutations, []string{"field:two", "position:b"}) {
 		t.Fatalf("mutation calls = %#v", mutations)
+	}
+	if model.mutationSession != nil || model.items[0].FieldValues[0].OptionID != "two" {
+		t.Fatalf("move did not reconcile canonical project state: session=%#v items=%#v", model.mutationSession, model.items)
 	}
 }
 
@@ -583,13 +729,16 @@ func TestWritableVerticalBoardMoveUpdatesFieldAndAppendsDestination(t *testing.T
 	}
 	view := github.View{ProjectID: "project", ViewerCanUpdate: true, VerticalGroupBy: []github.Field{status}}
 	mutations := []string{}
-	model := newPickerModel(fakePickerSource{mutations: &mutations})
-	model.screen = screenBoard
-	model.view = &view
-	model.items = []github.Item{
+	canonical := []github.Item{
 		{ID: "a", Content: &github.Content{Kind: "Issue", Title: "A"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
 		{ID: "b", Content: &github.Content{Kind: "Issue", Title: "B"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "two", Available: true}}},
 	}
+	model := newPickerModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical})
+	model.screen = screenBoard
+	model.view = &view
+	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+	model.selectedProject = &github.Project{Number: 1}
+	model.items = cloneItems(canonical)
 	model.boardLane = 1
 
 	updated, cmd := model.Update(keyPress("L"))
@@ -597,16 +746,13 @@ func TestWritableVerticalBoardMoveUpdatesFieldAndAppendsDestination(t *testing.T
 	if cmd == nil || !model.mutationLoading {
 		t.Fatalf("vertical move state = %#v, cmd nil = %v", model, cmd == nil)
 	}
-	message, ok := cmd().(boardMutationMsg)
-	if !ok || message.err != nil {
-		t.Fatalf("vertical move message = %#v, type ok = %v", message, ok)
-	}
+	model = runMutationCommands(t, model, cmd)
 	if !reflect.DeepEqual(mutations, []string{"field:two", "position:b"}) {
 		t.Fatalf("vertical mutation calls = %#v", mutations)
 	}
 }
 
-func TestSuccessfulMutationKeepsOptimisticStateWithoutReloading(t *testing.T) {
+func TestSuccessfulMutationReconcilesCanonicalState(t *testing.T) {
 	status := github.Field{
 		ID:       "status",
 		Name:     "Status",
@@ -618,36 +764,33 @@ func TestSuccessfulMutationKeepsOptimisticStateWithoutReloading(t *testing.T) {
 	mutations := []string{}
 	viewCalls := 0
 	itemCalls := 0
+	canonical := []github.Item{{ID: "a", Content: &github.Content{Kind: "Issue", Title: "A"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}}}
 	source := fakePickerSource{
-		mutations: &mutations,
-		viewCalls: &viewCalls,
-		itemCalls: &itemCalls,
+		mutations:      &mutations,
+		viewCalls:      &viewCalls,
+		itemCalls:      &itemCalls,
+		canonicalItems: &canonical,
 	}
 	model := newPickerModel(source)
 	model.screen = screenBoard
 	model.view = &view
 	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
 	model.selectedProject = &github.Project{Number: 1}
-	model.items = []github.Item{{ID: "a", Content: &github.Content{Kind: "Issue", Title: "A"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}}}
+	model.items = cloneItems(canonical)
 	model.boardLane = 1
 
 	updated, mutationCmd := model.Update(keyPress("L"))
 	model = updated.(Model)
-	mutationMessage := mutationCmd().(boardMutationMsg)
-	updated, next := model.Update(mutationMessage)
-	model = updated.(Model)
-	if next != nil || model.itemsLoading {
-		t.Fatalf("successful mutation triggered refresh: state=%#v, next nil=%v", model, next == nil)
-	}
+	model = runMutationCommands(t, model, mutationCmd)
 	if viewCalls != 0 || model.view != &view {
 		t.Fatalf("mutation reloaded view: calls=%d view=%p want=%p", viewCalls, model.view, &view)
 	}
-	if itemCalls != 0 || model.status != "Move card saved" || model.pendingStatus != "" || model.mutationLoading {
-		t.Fatalf("successful mutation state = items %d status %q pending %q loading=%v", itemCalls, model.status, model.pendingStatus, model.mutationLoading)
+	if itemCalls != 2 || model.status != "Move card saved" || model.mutationLoading || model.mutationSession != nil {
+		t.Fatalf("successful mutation state = items %d status %q loading=%v session=%#v", itemCalls, model.status, model.mutationLoading, model.mutationSession)
 	}
 }
 
-func TestFailedMutationRollsBackOptimisticMove(t *testing.T) {
+func TestDefinitiveMutationFailureUsesCanonicalReadback(t *testing.T) {
 	status := github.Field{
 		ID:       "status",
 		Name:     "Status",
@@ -656,13 +799,16 @@ func TestFailedMutationRollsBackOptimisticMove(t *testing.T) {
 		Options:  []github.FieldOption{{ID: "one", Name: "One"}, {ID: "two", Name: "Two"}},
 	}
 	view := github.View{ProjectID: "project", ViewerCanUpdate: true, GroupByFields: []github.Field{status}}
-	model := newPickerModel(fakePickerSource{mutationErr: errors.New("permission denied")})
-	model.screen = screenBoard
-	model.view = &view
-	model.items = []github.Item{
+	canonical := []github.Item{
 		{ID: "a", Content: &github.Content{Kind: "Issue", Title: "A"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
 		{ID: "b", Content: &github.Content{Kind: "Issue", Title: "B"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "two", Available: true}}},
 	}
+	model := newPickerModel(fakePickerSource{canonicalItems: &canonical, mutationErr: &github.MutationError{Err: errors.New("permission denied"), Ambiguous: false}})
+	model.screen = screenBoard
+	model.view = &view
+	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+	model.selectedProject = &github.Project{Number: 1}
+	model.items = cloneItems(canonical)
 	model.boardLane = 1
 
 	updated, mutationCmd := model.Update(keyPress("L"))
@@ -670,11 +816,9 @@ func TestFailedMutationRollsBackOptimisticMove(t *testing.T) {
 	if model.boardLane != 2 || len(model.items) != 2 || model.items[1].ID != "a" || model.items[1].FieldValues[0].OptionID != "two" {
 		t.Fatalf("optimistic state was not applied: lane=%d items=%#v", model.boardLane, model.items)
 	}
-	message := mutationCmd().(boardMutationMsg)
-	updated, _ = model.Update(message)
-	model = updated.(Model)
-	if model.boardLane != 1 || model.boardCard != 0 || model.items[0].FieldValues[0].OptionID != "one" || model.optimisticRollback != nil {
-		t.Fatalf("rollback state = lane %d card %d items %#v rollback=%#v", model.boardLane, model.boardCard, model.items, model.optimisticRollback)
+	model = runMutationCommands(t, model, mutationCmd)
+	if model.boardLane != 1 || model.boardCard != 0 || model.items[0].FieldValues[0].OptionID != "one" || model.mutationSession != nil {
+		t.Fatalf("reconciled state = lane %d card %d items %#v session=%#v", model.boardLane, model.boardCard, model.items, model.mutationSession)
 	}
 	if !strings.Contains(model.status, "Move card failed") {
 		t.Fatalf("rollback status = %q", model.status)
@@ -716,14 +860,17 @@ func TestWritableBoardReorderUsesVisibleAnchors(t *testing.T) {
 	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "one", Name: "One"}}}
 	view := github.View{ProjectID: "project", ViewerCanUpdate: true, GroupByFields: []github.Field{status}}
 	mutations := []string{}
-	model := newPickerModel(fakePickerSource{mutations: &mutations})
-	model.screen = screenBoard
-	model.view = &view
-	model.items = []github.Item{
+	canonical := []github.Item{
 		{ID: "a", Content: &github.Content{Kind: "Issue", Title: "A"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
 		{ID: "b", Content: &github.Content{Kind: "Issue", Title: "B"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
 		{ID: "c", Content: &github.Content{Kind: "Issue", Title: "C"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
 	}
+	model := newPickerModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical})
+	model.screen = screenBoard
+	model.view = &view
+	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+	model.selectedProject = &github.Project{Number: 1}
+	model.items = cloneItems(canonical)
 	model.boardLane = 1
 	model.boardCard = 1
 	updated, cmd := model.Update(keyPress("J"))
@@ -731,20 +878,19 @@ func TestWritableBoardReorderUsesVisibleAnchors(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("downward reorder did not start")
 	}
-	_ = cmd()
+	model = runMutationCommands(t, model, cmd)
 	if !reflect.DeepEqual(mutations, []string{"position:c"}) {
 		t.Fatalf("downward reorder calls = %#v", mutations)
 	}
 
 	mutations = nil
-	model.mutationLoading = false
 	model.boardCard = 2
 	updated, cmd = model.Update(keyPress("K"))
 	model = updated.(Model)
 	if cmd == nil {
 		t.Fatal("upward reorder did not start")
 	}
-	_ = cmd()
+	model = runMutationCommands(t, model, cmd)
 	if !reflect.DeepEqual(mutations, []string{"position:a"}) {
 		t.Fatalf("upward reorder calls = %#v", mutations)
 	}
@@ -754,14 +900,17 @@ func TestWritableBoardReorderMovesSecondCardAboveFirst(t *testing.T) {
 	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "one", Name: "One"}}}
 	view := github.View{ProjectID: "project", ViewerCanUpdate: true, GroupByFields: []github.Field{status}}
 	mutations := []string{}
-	model := newPickerModel(fakePickerSource{mutations: &mutations})
-	model.screen = screenBoard
-	model.view = &view
-	model.items = []github.Item{
+	canonical := []github.Item{
 		{ID: "anchor", Content: &github.Content{Kind: "Issue", Title: "Anchor"}},
 		{ID: "first", Content: &github.Content{Kind: "Issue", Title: "First"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
 		{ID: "second", Content: &github.Content{Kind: "Issue", Title: "Second"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}},
 	}
+	model := newPickerModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical})
+	model.screen = screenBoard
+	model.view = &view
+	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+	model.selectedProject = &github.Project{Number: 1}
+	model.items = cloneItems(canonical)
 	model.boardLane = 1
 	model.boardCard = 1
 
@@ -773,7 +922,7 @@ func TestWritableBoardReorderMovesSecondCardAboveFirst(t *testing.T) {
 	if lanes := model.boardLanes(); len(lanes[1].Items) != 2 || lanes[1].Items[0].ID != "second" || lanes[1].Items[1].ID != "first" {
 		t.Fatalf("optimistic lane order = %#v", lanes[1].Items)
 	}
-	_ = cmd()
+	model = runMutationCommands(t, model, cmd)
 	if !reflect.DeepEqual(mutations, []string{"position:anchor"}) {
 		t.Fatalf("second-card mutation = %#v", mutations)
 	}

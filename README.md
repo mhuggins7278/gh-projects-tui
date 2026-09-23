@@ -116,7 +116,7 @@ reload from GitHub when you want to pick up external changes.
 | `esc` or `backspace` | Go back |
 | `v` | Pick a saved view |
 | `p` | Pick a project |
-| `r` | Refresh from GitHub |
+| `r` | Refresh from GitHub; retry readback when a save outcome is unknown |
 | `o` | Show the selected project's browser URL |
 | `?` | Toggle help |
 | `q` or `ctrl+c` | Quit |
@@ -138,6 +138,10 @@ values), and `esc` closes the panel.
   grouped by single-select or iteration. Clear local search before moving cards.
 - Manual reordering requires project-position sorting. Combined-axis boards and
   saved-filtered views are read-only.
+- Writes are serialized and re-resolved against the latest full project order.
+  If a timeout leaves a save's outcome unknown, dependent writes pause until
+  `r` confirms the state; `r` retries readback only and never resubmits the write.
+  Switching views does not cancel a submitted write.
 - Table support is an early preview; full parity with GitHub's table UI is not
   implemented.
 

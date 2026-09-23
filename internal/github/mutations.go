@@ -2,7 +2,10 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/cli/go-gh/v2/pkg/api"
 )
 
 const updateItemFieldValueMutation = `
@@ -56,6 +59,47 @@ type ItemPositionUpdate struct {
 	AfterID   *string
 }
 
+// MutationError records whether a failed mutation may have reached GitHub.
+// Ambiguous outcomes must be read back before another write can depend on them.
+type MutationError struct {
+	Err       error
+	Ambiguous bool
+}
+
+func (e *MutationError) Error() string { return e.Err.Error() }
+
+func (e *MutationError) Unwrap() error { return e.Err }
+
+// IsAmbiguousMutationError reports whether an error lacks a definitive server
+// rejection. Unknown errors are treated conservatively as ambiguous.
+func IsAmbiguousMutationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var mutationErr *MutationError
+	if errors.As(err, &mutationErr) {
+		return mutationErr.Ambiguous
+	}
+	return true
+}
+
+func classifyMutationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	ambiguous := true
+	var graphQLError *api.GraphQLError
+	if errors.As(err, &graphQLError) {
+		ambiguous = false
+	} else {
+		var httpError *api.HTTPError
+		if errors.As(err, &httpError) && httpError.StatusCode < 500 {
+			ambiguous = false
+		}
+	}
+	return &MutationError{Err: err, Ambiguous: ambiguous}
+}
+
 type updateItemFieldValueResponse struct {
 	Update *struct {
 		ProjectV2Item *struct {
@@ -98,10 +142,10 @@ func (c *Client) UpdateItemFieldValue(ctx context.Context, request ItemFieldValu
 		},
 	}
 	if err := c.graphql.DoWithContext(ctx, updateItemFieldValueMutation, variables, &response); err != nil {
-		return err
+		return classifyMutationError(err)
 	}
 	if response.Update == nil || response.Update.ProjectV2Item == nil {
-		return fmt.Errorf("update field value returned no project item")
+		return classifyMutationError(fmt.Errorf("update field value returned no project item"))
 	}
 	return nil
 }
@@ -122,10 +166,10 @@ func (c *Client) ClearItemFieldValue(ctx context.Context, request ItemFieldValue
 		},
 	}
 	if err := c.graphql.DoWithContext(ctx, clearItemFieldValueMutation, variables, &response); err != nil {
-		return err
+		return classifyMutationError(err)
 	}
 	if response.Clear == nil || response.Clear.ProjectV2Item == nil {
-		return fmt.Errorf("clear field value returned no project item")
+		return classifyMutationError(fmt.Errorf("clear field value returned no project item"))
 	}
 	return nil
 }
@@ -147,10 +191,10 @@ func (c *Client) UpdateItemPosition(ctx context.Context, request ItemPositionUpd
 
 	var response updateItemPositionResponse
 	if err := c.graphql.DoWithContext(ctx, updateItemPositionMutation, map[string]interface{}{"input": input}, &response); err != nil {
-		return err
+		return classifyMutationError(err)
 	}
 	if response.Update == nil {
-		return fmt.Errorf("update item position returned no payload")
+		return classifyMutationError(fmt.Errorf("update item position returned no payload"))
 	}
 	return nil
 }

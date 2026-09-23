@@ -112,10 +112,8 @@ type Model struct {
 	detailOffset         int
 	detailShowAll        bool
 	mutationLoading      bool
-	mutationItemID       string
-	optimisticRollback   *boardMutationRollback
-	mutationQueue        []queuedBoardMutation
-	pendingStatus        string
+	mutationSession      *boardMutationSession
+	nextMutationSession  uint64
 }
 
 func NewModel(source DiscoverySource) Model {
@@ -223,8 +221,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.view = msg.view
 		m.err = nil
-		m.status = m.pendingStatus
-		m.pendingStatus = ""
+		m.status = ""
 		m.screen = screenBoard
 		m.cursor = 0
 		return m, m.startItemsLoadWithSpinner()
@@ -252,39 +249,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.loadItemDetailCmd(msg.itemID, msg.requestID)
 	case boardMutationMsg:
-		if msg.generation != m.generation || m.screen != screenBoard || msg.itemID != m.mutationItemID {
-			return m, nil
-		}
-		m.mutationLoading = false
-		m.mutationItemID = ""
-		if msg.err != nil {
-			m.mutationQueue = nil
-			m.restoreOptimisticMutation()
-			if msg.partial {
-				m.status = fmt.Sprintf("%s partially saved: %v; refresh and verify", msg.description, msg.err)
-				cmd := m.startItemsLoadWithSpinner()
-				m.pendingStatus = m.status
-				m.boardFocusID = msg.itemID
-				return m, cmd
-			} else {
-				m.status = fmt.Sprintf("%s failed: %v", msg.description, msg.err)
-			}
-			return m, nil
-		}
-		m.optimisticRollback = nil
-		delete(m.detailCache, msg.itemID)
-		if len(m.mutationQueue) > 0 {
-			next := m.mutationQueue[0]
-			m.mutationQueue = m.mutationQueue[1:]
-			m.optimisticRollback = next.rollback
-			m.mutationLoading = true
-			m.mutationItemID = next.itemID
-			m.status = fmt.Sprintf("Saving moves (%d queued)...", len(m.mutationQueue))
-			return m, next.command
-		}
-		m.status = msg.description + " saved"
-		m.pendingStatus = ""
-		return m, nil
+		return m.updateBoardMutation(msg)
+	case mutationReadbackMsg:
+		return m.updateMutationReadback(msg)
 	}
 	return m, nil
 }
@@ -387,9 +354,6 @@ func (m *Model) rejectView(view github.View, compatibility viewCompatibility) {
 	m.detail = nil
 	m.detailCache = nil
 	m.detailErr = nil
-	m.mutationLoading = false
-	m.mutationItemID = ""
-	m.pendingStatus = ""
 	m.screen = screenViewPicker
 	m.cursor = 0
 	m.viewsErr = nil
@@ -422,9 +386,6 @@ func (m *Model) startViewsLoad() tea.Cmd {
 	m.detail = nil
 	m.detailCache = nil
 	m.detailErr = nil
-	m.mutationLoading = false
-	m.mutationItemID = ""
-	m.pendingStatus = ""
 	m.items = nil
 	m.itemsLoading = false
 	m.itemsHasNext = false
@@ -512,9 +473,6 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	m.detail = nil
 	m.detailCache = nil
 	m.detailErr = nil
-	m.mutationLoading = false
-	m.mutationItemID = ""
-	m.pendingStatus = ""
 	return m.itemsPageCmd("", true)
 }
 
@@ -588,7 +546,6 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	}
 	m.itemsLoading = false
 	m.clampBoardCursor()
-	m.finishItemsRefresh()
 	return m, nil
 }
 
@@ -643,16 +600,7 @@ func (m Model) updateLaneItems(msg laneItemsMsg) (tea.Model, tea.Cmd) {
 	m.itemsHasNext = false
 	m.itemsLoadingLanes = nil
 	m.clampBoardCursor()
-	m.finishItemsRefresh()
 	return m, nil
-}
-
-func (m *Model) finishItemsRefresh() {
-	if m.pendingStatus == "" {
-		return
-	}
-	m.status = m.pendingStatus
-	m.pendingStatus = ""
 }
 
 func (m *Model) cancelItemsLoad() {
@@ -736,84 +684,6 @@ func (m *Model) loadItemDetailCmd(itemID string, requestID uint64) tea.Cmd {
 	}
 }
 
-type boardMutationAction func(context.Context, ItemMutationSource) (error, bool)
-
-type queuedBoardMutation struct {
-	itemID   string
-	rollback *boardMutationRollback
-	command  tea.Cmd
-}
-
-func (m *Model) beginBoardMutation(itemID, description string, action boardMutationAction, optimistic func()) tea.Cmd {
-	loader, ok := m.source.(ItemMutationSource)
-	if !ok {
-		m.status = "Mutations are unavailable for this client"
-		return nil
-	}
-	var rollback *boardMutationRollback
-	if optimistic != nil {
-		rollback = &boardMutationRollback{
-			items:        cloneItems(m.items),
-			boardLane:    m.boardLane,
-			boardCard:    m.boardCard,
-			boardFocusID: m.boardFocusID,
-		}
-		optimistic()
-	}
-	generation := m.generation
-	ctx := m.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ctx = context.WithoutCancel(ctx)
-	command := func() tea.Msg {
-		err, partial := action(ctx, loader)
-		return boardMutationMsg{
-			itemID:      itemID,
-			description: description,
-			partial:     partial,
-			err:         err,
-			generation:  generation,
-		}
-	}
-	if m.mutationLoading {
-		m.mutationQueue = append(m.mutationQueue, queuedBoardMutation{itemID: itemID, rollback: rollback, command: command})
-		m.status = fmt.Sprintf("Saving moves (%d queued)...", len(m.mutationQueue))
-		return nil
-	}
-	m.optimisticRollback = rollback
-	m.mutationLoading = true
-	m.mutationItemID = itemID
-	m.status = description + "..."
-	return command
-}
-
-type boardMutationRollback struct {
-	items        []github.Item
-	boardLane    int
-	boardCard    int
-	boardFocusID string
-}
-
-func cloneItems(items []github.Item) []github.Item {
-	cloned := append([]github.Item(nil), items...)
-	for index := range cloned {
-		cloned[index].FieldValues = append([]github.FieldValue(nil), items[index].FieldValues...)
-	}
-	return cloned
-}
-
-func (m *Model) restoreOptimisticMutation() {
-	if m.optimisticRollback == nil {
-		return
-	}
-	m.items = m.optimisticRollback.items
-	m.boardLane = m.optimisticRollback.boardLane
-	m.boardCard = m.optimisticRollback.boardCard
-	m.boardFocusID = m.optimisticRollback.boardFocusID
-	m.optimisticRollback = nil
-}
-
 func (m *Model) clampBoardCursor() {
 	lanes := m.boardLanes()
 	if len(lanes) == 0 {
@@ -882,6 +752,9 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if key == "r" && m.mutationSession != nil && m.mutationSession.blocked {
+		return m, m.retryMutationReadback()
+	}
 
 	if m.filtering {
 		if m.screen == screenBoard {
@@ -928,13 +801,6 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.screen == screenBoard {
-		if m.mutationLoading {
-			switch key {
-			case "H", "L", "J", "K", "h", "l", "j", "k", "left", "right", "up", "down":
-			default:
-				return m, nil
-			}
-		}
 		if m.detailVisible {
 			switch key {
 			case "esc":
@@ -1089,7 +955,6 @@ func (m *Model) moveCursor(delta int) {
 func (m *Model) goBack() tea.Cmd {
 	m.filter = ""
 	m.filtering = false
-	m.pendingStatus = ""
 	m.cursor = 0
 	m.status = ""
 	switch m.screen {
@@ -1521,14 +1386,6 @@ type itemDetailDebounceMsg struct {
 	itemID     string
 	requestID  uint64
 	generation uint64
-}
-
-type boardMutationMsg struct {
-	itemID      string
-	description string
-	partial     bool
-	err         error
-	generation  uint64
 }
 
 func itemsLoadingTick(generation uint64) tea.Cmd {

@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/cli/go-gh/v2/pkg/api"
 )
 
 func TestUpdateItemFieldValueBuildsSingleSelectInput(t *testing.T) {
@@ -151,17 +153,23 @@ func TestMutationRejectsMissingPayload(t *testing.T) {
 	option := "progress"
 	if err := client.UpdateItemFieldValue(context.Background(), ItemFieldValueUpdate{ProjectID: "p", ItemID: "i", FieldID: "f", Value: FieldValueInput{SingleSelectOptionID: &option}}); err == nil {
 		t.Fatal("missing field-value payload was accepted")
+	} else if !IsAmbiguousMutationError(err) {
+		t.Fatalf("missing field-value payload was not ambiguous: %v", err)
 	}
 	if err := client.ClearItemFieldValue(context.Background(), ItemFieldValueClear{ProjectID: "p", ItemID: "i", FieldID: "f"}); err == nil {
 		t.Fatal("missing clear payload was accepted")
+	} else if !IsAmbiguousMutationError(err) {
+		t.Fatalf("missing clear payload was not ambiguous: %v", err)
 	}
 	if err := client.UpdateItemPosition(context.Background(), ItemPositionUpdate{ProjectID: "p", ItemID: "i"}); err == nil {
 		t.Fatal("missing position payload was accepted")
+	} else if !IsAmbiguousMutationError(err) {
+		t.Fatalf("missing position payload was not ambiguous: %v", err)
 	}
 }
 
 func TestMutationPropagatesGraphQLError(t *testing.T) {
-	failure := errors.New("permission denied")
+	failure := &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Message: "permission denied"}}}
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(_ string, _ map[string]interface{}, _ interface{}) error { return failure },
 	}}
@@ -169,6 +177,30 @@ func TestMutationPropagatesGraphQLError(t *testing.T) {
 	err := newClient(graphql, &fakeREST{}).UpdateItemFieldValue(context.Background(), ItemFieldValueUpdate{ProjectID: "p", ItemID: "i", FieldID: "f", Value: FieldValueInput{SingleSelectOptionID: &option}})
 	if !errors.Is(err, failure) {
 		t.Fatalf("error = %v, want %v", err, failure)
+	}
+	if IsAmbiguousMutationError(err) {
+		t.Fatalf("GraphQL rejection was treated as ambiguous: %v", err)
+	}
+}
+
+func TestMutationErrorClassifiesTransportAndServerOutcomes(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       error
+		ambiguous bool
+	}{
+		{name: "graphql rejection", err: &api.GraphQLError{Errors: []api.GraphQLErrorItem{{Message: "permission denied"}}}},
+		{name: "client http rejection", err: &api.HTTPError{StatusCode: 422}},
+		{name: "server http error", err: &api.HTTPError{StatusCode: 502}, ambiguous: true},
+		{name: "transport timeout", err: context.DeadlineExceeded, ambiguous: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := classifyMutationError(tc.err)
+			if got := IsAmbiguousMutationError(err); got != tc.ambiguous {
+				t.Fatalf("ambiguous = %v, want %v (err %v)", got, tc.ambiguous, err)
+			}
+		})
 	}
 }
 
