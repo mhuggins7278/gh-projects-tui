@@ -43,6 +43,35 @@ query OrganizationProjectItemDetail($login: String!, $project: Int!, $itemID: ID
   node(id: $itemID) { ...ItemDetailFields }
 }` + itemDetailFields + fieldValueFragment + itemDetailFieldValueFragments + fieldConfigurationFragment
 
+const itemNestedFieldValueQuery = `
+query ItemNestedFieldValue($itemID: ID!, $fieldName: String!, $labelsAfter: String, $usersAfter: String, $reviewersAfter: String, $pullRequestsAfter: String) {
+  node(id: $itemID) {
+    ... on ProjectV2Item {
+      fieldValueByName(name: $fieldName) {
+        __typename
+        ... on ProjectV2ItemFieldLabelValue {
+          labels(first: 100, after: $labelsAfter) { nodes { name } pageInfo { hasNextPage endCursor } }
+        }
+        ... on ProjectV2ItemFieldUserValue {
+          users(first: 100, after: $usersAfter) { nodes { login } pageInfo { hasNextPage endCursor } }
+        }
+        ... on ProjectV2ItemFieldReviewerValue {
+          reviewers(first: 100, after: $reviewersAfter) {
+            nodes { __typename ... on User { login } ... on Team { name } }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+        ... on ProjectV2ItemFieldPullRequestValue {
+          pullRequests(first: 100, after: $pullRequestsAfter) {
+            nodes { number title url repository { nameWithOwner } }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }
+  }
+}`
+
 type ItemDetail struct {
 	ID      string
 	Content *Content
@@ -58,6 +87,12 @@ type itemDetailResponse struct {
 	User         *detailOwner   `json:"user"`
 	Organization *detailOwner   `json:"organization"`
 	Node         *rawDetailItem `json:"node"`
+}
+
+type nestedFieldValueResponse struct {
+	Node *struct {
+		Value *rawFieldValue `json:"fieldValueByName"`
+	} `json:"node"`
 }
 
 type detailOwner struct {
@@ -90,6 +125,7 @@ func (c *Client) LoadItemDetail(ctx context.Context, owner Owner, projectNumber 
 	if page.Item == nil {
 		return ItemDetail{}, fmt.Errorf("project item %q was not found or is inaccessible", itemID)
 	}
+	detail := ItemDetail{ID: page.Item.ID, Content: projectContent(page.Item.Content)}
 
 	fields := append([]*rawField(nil), page.ProjectFields.Nodes...)
 	values := append([]*rawFieldValue(nil), page.Item.FieldValues.Nodes...)
@@ -125,6 +161,24 @@ func (c *Client) LoadItemDetail(ctx context.Context, owner Owner, projectNumber 
 		page.Item.FieldValues = nextPage.Item.FieldValues
 		valuesAfter = next
 	}
+	for _, value := range values {
+		if value == nil || value.Field.Name == "" {
+			continue
+		}
+		for nestedHasNext(value) {
+			after, err := nestedEndCursor(value)
+			if err != nil {
+				return ItemDetail{}, fmt.Errorf("field %q nested values: %w", value.Field.Name, err)
+			}
+			next, fetchErr := c.fetchNestedFieldValuePage(ctx, itemID, value.Field.Name, value.Kind, after)
+			if fetchErr != nil {
+				return ItemDetail{}, fetchErr
+			}
+			if err := appendNestedFieldValuePage(value, next, after); err != nil {
+				return ItemDetail{}, fmt.Errorf("field %q nested values: %w", value.Field.Name, err)
+			}
+		}
+	}
 
 	valueByField := make(map[string]FieldValue, len(values))
 	for _, rawValue := range values {
@@ -132,7 +186,6 @@ func (c *Client) LoadItemDetail(ctx context.Context, owner Owner, projectNumber 
 			valueByField[rawValue.Field.ID] = rawValue.project()
 		}
 	}
-	detail := ItemDetail{ID: page.Item.ID, Content: projectContent(page.Item.Content)}
 	seen := make(map[string]bool, len(fields))
 	for _, rawField := range fields {
 		if rawField == nil {
@@ -161,6 +214,107 @@ func (c *Client) LoadItemDetail(ctx context.Context, owner Owner, projectNumber 
 		})
 	}
 	return detail, nil
+}
+
+func (c *Client) fetchNestedFieldValuePage(ctx context.Context, itemID, fieldName, kind, after string) (*rawFieldValue, error) {
+	variables := map[string]interface{}{
+		"itemID": itemID, "fieldName": fieldName,
+		"labelsAfter": nil, "usersAfter": nil, "reviewersAfter": nil, "pullRequestsAfter": nil,
+	}
+	switch kind {
+	case "ProjectV2ItemFieldLabelValue":
+		variables["labelsAfter"] = nullableCursor(after)
+	case "ProjectV2ItemFieldUserValue":
+		variables["usersAfter"] = nullableCursor(after)
+	case "ProjectV2ItemFieldReviewerValue":
+		variables["reviewersAfter"] = nullableCursor(after)
+	case "ProjectV2ItemFieldPullRequestValue":
+		variables["pullRequestsAfter"] = nullableCursor(after)
+	default:
+		return nil, fmt.Errorf("field value type %q has no paginated nested values", kind)
+	}
+	var response nestedFieldValueResponse
+	if err := c.graphql.DoWithContext(ctx, itemNestedFieldValueQuery, variables, &response); err != nil {
+		return nil, err
+	}
+	if response.Node == nil || response.Node.Value == nil {
+		return nil, fmt.Errorf("nested value for item %q field %q is unavailable", itemID, fieldName)
+	}
+	return response.Node.Value, nil
+}
+
+func nestedHasNext(value *rawFieldValue) bool {
+	switch value.Kind {
+	case "ProjectV2ItemFieldLabelValue":
+		return value.Labels != nil && value.Labels.PageInfo.HasNextPage
+	case "ProjectV2ItemFieldUserValue":
+		return value.Users != nil && value.Users.PageInfo.HasNextPage
+	case "ProjectV2ItemFieldReviewerValue":
+		return value.Reviewers != nil && value.Reviewers.PageInfo.HasNextPage
+	case "ProjectV2ItemFieldPullRequestValue":
+		return value.PullRequests != nil && value.PullRequests.PageInfo.HasNextPage
+	default:
+		return false
+	}
+}
+
+func nestedEndCursor(value *rawFieldValue) (string, error) {
+	var info pageInfo
+	switch value.Kind {
+	case "ProjectV2ItemFieldLabelValue":
+		info = value.Labels.PageInfo
+	case "ProjectV2ItemFieldUserValue":
+		info = value.Users.PageInfo
+	case "ProjectV2ItemFieldReviewerValue":
+		info = value.Reviewers.PageInfo
+	case "ProjectV2ItemFieldPullRequestValue":
+		info = value.PullRequests.PageInfo
+	}
+	return nextCursor(info, "")
+}
+
+func appendNestedFieldValuePage(value, next *rawFieldValue, previous string) error {
+	if value.Kind != next.Kind {
+		return fmt.Errorf("nested value type changed from %q to %q", value.Kind, next.Kind)
+	}
+	var info pageInfo
+	switch value.Kind {
+	case "ProjectV2ItemFieldLabelValue":
+		if next.Labels == nil {
+			return fmt.Errorf("label connection was not returned")
+		}
+		value.Labels.Nodes = append(value.Labels.Nodes, next.Labels.Nodes...)
+		value.Labels.PageInfo = next.Labels.PageInfo
+		info = next.Labels.PageInfo
+	case "ProjectV2ItemFieldUserValue":
+		if next.Users == nil {
+			return fmt.Errorf("user connection was not returned")
+		}
+		value.Users.Nodes = append(value.Users.Nodes, next.Users.Nodes...)
+		value.Users.PageInfo = next.Users.PageInfo
+		info = next.Users.PageInfo
+	case "ProjectV2ItemFieldReviewerValue":
+		if next.Reviewers == nil {
+			return fmt.Errorf("reviewer connection was not returned")
+		}
+		value.Reviewers.Nodes = append(value.Reviewers.Nodes, next.Reviewers.Nodes...)
+		value.Reviewers.PageInfo = next.Reviewers.PageInfo
+		info = next.Reviewers.PageInfo
+	case "ProjectV2ItemFieldPullRequestValue":
+		if next.PullRequests == nil {
+			return fmt.Errorf("pull request connection was not returned")
+		}
+		value.PullRequests.Nodes = append(value.PullRequests.Nodes, next.PullRequests.Nodes...)
+		value.PullRequests.PageInfo = next.PullRequests.PageInfo
+		info = next.PullRequests.PageInfo
+	default:
+		return fmt.Errorf("field value type %q has no paginated nested values", value.Kind)
+	}
+	if info.HasNextPage {
+		_, err := nextCursor(info, previous)
+		return err
+	}
+	return nil
 }
 
 func (c *Client) fetchItemDetailPage(ctx context.Context, owner Owner, projectNumber int, itemID, fieldsAfter, valuesAfter string) (itemDetailPage, error) {

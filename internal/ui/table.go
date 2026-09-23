@@ -15,6 +15,7 @@ func (m Model) renderTableContent(b *strings.Builder) {
 	}
 
 	fmt.Fprintf(b, "%s  %s  %s\n", titleStyle.Render(m.view.Name), mutedStyle.Render(fmt.Sprintf("#%d", m.view.Number)), layoutBadge(string(m.view.Layout)))
+	b.WriteString(mutedStyle.Render("Display note: rendering saved visible fields in API order.") + "\n")
 	if m.view.Filter != "" {
 		fmt.Fprintf(b, "%s %s\n", mutedStyle.Render("Filter:"), m.view.Filter)
 	}

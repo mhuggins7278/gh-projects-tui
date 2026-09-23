@@ -102,6 +102,7 @@ type Model struct {
 	detailVisible      bool
 	detailLoading      bool
 	detailItemID       string
+	detailRequestID    uint64
 	detail             *github.ItemDetail
 	detailCache        map[string]github.ItemDetail
 	detailErr          error
@@ -229,7 +230,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case laneItemsMsg:
 		return m.updateLaneItems(msg)
 	case itemDetailMsg:
-		if msg.generation != m.generation || m.screen != screenBoard || msg.itemID != m.detailItemID {
+		if msg.generation != m.generation || m.screen != screenBoard || !m.detailVisible || msg.itemID != m.detailItemID || msg.requestID != m.detailRequestID {
 			return m, nil
 		}
 		m.detailLoading = false
@@ -242,6 +243,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.detailCache[msg.itemID] = *msg.detail
 		}
 		return m, nil
+	case itemDetailDebounceMsg:
+		if msg.generation != m.generation || m.screen != screenBoard || !m.detailVisible || msg.itemID != m.detailItemID || msg.requestID != m.detailRequestID {
+			return m, nil
+		}
+		return m, m.loadItemDetailCmd(msg.itemID, msg.requestID)
 	case boardMutationMsg:
 		if msg.generation != m.generation || m.screen != screenBoard || msg.itemID != m.mutationItemID {
 			return m, nil
@@ -724,6 +730,7 @@ func (m *Model) openItemDetailCmd() tea.Cmd {
 	}
 	m.detailVisible = true
 	m.detailItemID = item.ID
+	m.detailRequestID++
 	m.boardFocusID = item.ID
 	m.detail = nil
 	m.detailErr = nil
@@ -735,6 +742,14 @@ func (m *Model) openItemDetailCmd() tea.Cmd {
 		return nil
 	}
 	m.detailLoading = true
+	requestID := m.detailRequestID
+	generation := m.generation
+	return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+		return itemDetailDebounceMsg{itemID: item.ID, requestID: requestID, generation: generation}
+	})
+}
+
+func (m *Model) loadItemDetailCmd(itemID string, requestID uint64) tea.Cmd {
 	owner := *m.selectedOwner
 	project := m.selectedProject.Number
 	generation := m.generation
@@ -743,13 +758,13 @@ func (m *Model) openItemDetailCmd() tea.Cmd {
 	return func() tea.Msg {
 		loader, ok := source.(ItemDetailSource)
 		if !ok {
-			return itemDetailMsg{itemID: item.ID, err: fmt.Errorf("item detail is not supported by this client"), generation: generation}
+			return itemDetailMsg{itemID: itemID, requestID: requestID, err: fmt.Errorf("item detail is not supported by this client"), generation: generation}
 		}
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		detail, err := loader.LoadItemDetail(ctx, owner, project, item.ID)
-		return itemDetailMsg{itemID: item.ID, detail: &detail, err: err, generation: generation}
+		detail, err := loader.LoadItemDetail(ctx, owner, project, itemID)
+		return itemDetailMsg{itemID: itemID, requestID: requestID, detail: &detail, err: err, generation: generation}
 	}
 }
 
@@ -957,6 +972,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.detailVisible = false
 				m.detailLoading = false
+				m.detailRequestID++
 				m.detail = nil
 				m.detailErr = nil
 				return m, nil
@@ -1540,8 +1556,15 @@ type laneItemsMsg struct {
 
 type itemDetailMsg struct {
 	itemID     string
+	requestID  uint64
 	detail     *github.ItemDetail
 	err        error
+	generation uint64
+}
+
+type itemDetailDebounceMsg struct {
+	itemID     string
+	requestID  uint64
 	generation uint64
 }
 

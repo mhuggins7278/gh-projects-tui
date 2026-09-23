@@ -72,7 +72,12 @@ fragment FieldValue on ProjectV2ItemFieldValue {
 
 const itemFieldValueFragments = `
 fragment FieldValuesPage on ProjectV2ItemFieldValueConnection {
-  nodes { ...FieldValue }
+  nodes {
+    ...FieldValue
+    ... on ProjectV2ItemFieldUserValue {
+      users(first: 10) { nodes { login } pageInfo { hasNextPage endCursor } }
+    }
+  }
   pageInfo { hasNextPage endCursor }
 }
 ` + fieldValueFragment

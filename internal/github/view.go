@@ -26,7 +26,7 @@ fragment FieldConfiguration on ProjectV2FieldConfiguration {
 const viewFieldsFragment = `
 fragment ViewFields on ProjectV2View {
   id number name layout filter
-  fields(first: 100, after: $fieldsAfter) { nodes { ...FieldConfiguration } pageInfo { hasNextPage endCursor } }
+  configuration { visibleFields(first: 100, after: $fieldsAfter) { nodes { ...FieldConfiguration } pageInfo { hasNextPage endCursor } } }
   groupByFields(first: 100, after: $groupsAfter) { nodes { ...FieldConfiguration } pageInfo { hasNextPage endCursor } }
   verticalGroupByFields(first: 100, after: $verticalGroupsAfter) { nodes { ...FieldConfiguration } pageInfo { hasNextPage endCursor } }
   sortByFields(first: 100, after: $sortsAfter) { nodes { direction field { ...FieldConfiguration } } pageInfo { hasNextPage endCursor } }
@@ -135,15 +135,19 @@ type viewProject struct {
 }
 
 type rawView struct {
-	ID              string          `json:"id"`
-	Number          int             `json:"number"`
-	Name            string          `json:"name"`
-	Layout          ViewLayout      `json:"layout"`
-	Filter          string          `json:"filter"`
-	Fields          fieldConnection `json:"fields"`
-	GroupByFields   fieldConnection `json:"groupByFields"`
-	VerticalGroupBy fieldConnection `json:"verticalGroupByFields"`
-	SortByFields    sortConnection  `json:"sortByFields"`
+	ID              string            `json:"id"`
+	Number          int               `json:"number"`
+	Name            string            `json:"name"`
+	Layout          ViewLayout        `json:"layout"`
+	Filter          string            `json:"filter"`
+	Configuration   viewConfiguration `json:"configuration"`
+	GroupByFields   fieldConnection   `json:"groupByFields"`
+	VerticalGroupBy fieldConnection   `json:"verticalGroupByFields"`
+	SortByFields    sortConnection    `json:"sortByFields"`
+}
+
+type viewConfiguration struct {
+	VisibleFields fieldConnection `json:"visibleFields"`
 }
 
 type fieldConnection struct {
@@ -195,8 +199,8 @@ func (c *Client) OpenView(ctx context.Context, owner Owner, projectNumber, viewN
 	raw := project.View
 
 	after := ""
-	for raw.Fields.PageInfo.HasNextPage {
-		nextAfter, cursorErr := nextCursor(raw.Fields.PageInfo, after)
+	for raw.Configuration.VisibleFields.PageInfo.HasNextPage {
+		nextAfter, cursorErr := nextCursor(raw.Configuration.VisibleFields.PageInfo, after)
 		if cursorErr != nil {
 			return View{}, cursorErr
 		}
@@ -204,8 +208,8 @@ func (c *Client) OpenView(ctx context.Context, owner Owner, projectNumber, viewN
 		if fetchErr != nil {
 			return View{}, fetchErr
 		}
-		raw.Fields.Nodes = append(raw.Fields.Nodes, next.View.Fields.Nodes...)
-		raw.Fields.PageInfo = next.View.Fields.PageInfo
+		raw.Configuration.VisibleFields.Nodes = append(raw.Configuration.VisibleFields.Nodes, next.View.Configuration.VisibleFields.Nodes...)
+		raw.Configuration.VisibleFields.PageInfo = next.View.Configuration.VisibleFields.PageInfo
 		after = nextAfter
 	}
 	after = ""
@@ -259,7 +263,7 @@ func (c *Client) OpenView(ctx context.Context, owner Owner, projectNumber, viewN
 		Layout:          raw.Layout,
 		Filter:          raw.Filter,
 		ViewerCanUpdate: project.ViewerCanUpdate,
-		Fields:          raw.Fields.project(),
+		Fields:          raw.Configuration.VisibleFields.project(),
 		GroupByFields:   raw.GroupByFields.project(),
 		VerticalGroupBy: raw.VerticalGroupBy.project(),
 		SortByFields:    raw.SortByFields.sorts(),

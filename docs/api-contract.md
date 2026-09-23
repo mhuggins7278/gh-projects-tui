@@ -1,6 +1,6 @@
 # API Contract Gate
 
-Status: partial. This record covers the GitHub.com schema and read probes observed on 2026-09-17, plus mutation schema introspection observed on 2026-09-21.
+Status: partial. This record covers the GitHub.com schema and read probes observed on 2026-09-17, mutation schema introspection observed on 2026-09-21, and saved-view schema introspection observed on 2026-09-22.
 
 ## Environment
 
@@ -20,6 +20,7 @@ The live GraphQL schema reports the following fields:
 - `ProjectV2.layout` values: `BOARD_LAYOUT`, `TABLE_LAYOUT`, `ROADMAP_LAYOUT`
 - `ProjectV2FieldConfiguration` union members: `ProjectV2Field`, `ProjectV2IterationField`, `ProjectV2MultiSelectField`, and `ProjectV2SingleSelectField`
 - `ProjectV2ItemFieldValue` includes text, number, date, iteration, single-select, multi-select, issue, pull request, and other field-value unions
+- `ProjectV2Item.fieldValueByName(name:)` exposes a specific field value; nested labels, users, reviewers, and linked pull requests each expose cursor-paginated connections
 - Mutations: `updateProjectV2ItemFieldValue`, `clearProjectV2ItemFieldValue`, and `updateProjectV2ItemPosition`
 - `ProjectV2.viewerCanUpdate`
 
@@ -49,7 +50,8 @@ Results below are intentionally aggregate and contain no project names, item tit
 - The board metadata probe returned visible-field metadata for all five views. Grouping and sorting metadata were present on the board views, including a board with vertical grouping and position sorting.
 - Representative board probes preserve saved metadata order: the vertical `Status` options were returned as `Todo`, `In Progress`, `Done`, `Staged`; the two-axis board exposed `Priority` columns (`P0`, `P1`, `P2`) and `Status` vertical groups; the single-axis board reported an ascending `Priority` sort.
 - The first board's field configuration decoded as title, assignees, three single-select fields, a number field, and an iteration field. Single-select options and iteration configuration are returned as inline lists, not cursor connections.
-- Item reads use owner-specific GraphQL branches, position ordering, and the saved filter. Scalar project and issue-backed field values plus issue/pull-request repository, state, and aggregate sub-issue progress metadata are loaded during board reads. Detail reads additionally request the first 100 labels, users, reviewers, linked pull requests, repositories, and milestones for project field values; unavailable nested objects remain explicitly marked unavailable.
+- `ProjectV2View` introspection exposes `groupByFields`, `verticalGroupByFields`, `sortByFields`, `filter`, `layout`, and `configuration.visibleFields`. The sampled project's `fields` and `configuration.visibleFields` connections contained the same nodes in the same order; the client now reads the explicit `configuration.visibleFields` connection and paginates it. `ProjectV2ViewConfiguration` exposes only `visibleFields`; collapsed-group state is not exposed. The client preserves returned visible-field, grouping-field, option, active-iteration, completed-iteration, and sort metadata order. This confirms the available metadata path, not parity for a user's custom display settings.
+- Item reads use owner-specific GraphQL branches, position ordering, and the saved filter. Scalar project and issue-backed field values plus issue/pull-request repository, state, and aggregate sub-issue progress metadata are loaded during board reads. Board reads request up to 10 assignees per value with an explicit truncation marker to stay within GitHub's GraphQL node limit. Detail reads additionally request 100 labels, users, reviewers, and linked pull requests per nested connection page, followed by further pages when present, plus repositories and milestones; unavailable nested objects remain explicitly marked unavailable.
 
 These results establish that the intended discovery, view metadata, position ordering, and server-side filter read shapes work on the target host. They do not establish that every GitHub filter expression or saved-view display rule has matching semantics.
 
@@ -146,9 +148,9 @@ The following results are intentionally aggregate and contain no project names, 
 The following items remain unverified:
 
 - Iteration state and unset values beyond the sampled single-select boards
-- Sort null placement and tie behavior
-- Grouping-axis mapping and display settings beyond the sampled board views
-- Nested multi-valued field loading beyond the first 100 values and explicit unavailable markers
+- Sort null placement and tie behavior against representative GitHub-rendered views (the current client places unset values last and uses stable project-position order for ties)
+- Grouping-axis mapping and display settings beyond the sampled board views; collapsed-group state is not exposed by the introspected view schema
+- Live readback of nested multi-valued pagination beyond the first 100 values (fixture coverage is present)
 - Mutation failure, partial-completion, timeout reconciliation, and stale-anchor handling
 
 ## Gate To Continue

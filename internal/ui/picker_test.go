@@ -779,6 +779,32 @@ func TestBoardAppliesSavedFieldSortAndPreservesPositionTies(t *testing.T) {
 	}
 }
 
+func TestBoardSavedSortKeepsUnsetValuesLastInBothDirectionsAndPreservesTies(t *testing.T) {
+	field := github.Field{ID: "priority", Name: "Priority", DataType: "NUMBER"}
+	items := []github.Item{
+		{ID: "first-tie", FieldValues: []github.FieldValue{{FieldID: "priority", Value: "2", Available: true}}},
+		{ID: "unset-a"},
+		{ID: "second-tie", FieldValues: []github.FieldValue{{FieldID: "priority", Value: "2", Available: true}}},
+		{ID: "lower", FieldValues: []github.FieldValue{{FieldID: "priority", Value: "1", Available: true}}},
+		{ID: "unset-b"},
+	}
+	view := github.View{SortByFields: []github.SortField{{Direction: "ASC", Field: field}}}
+	assertOrder := func(want ...string) {
+		t.Helper()
+		got := sortedItemsForView(&view, items)
+		ids := make([]string, len(got))
+		for index := range got {
+			ids[index] = got[index].ID
+		}
+		if !reflect.DeepEqual(ids, want) {
+			t.Fatalf("sorted IDs = %#v, want %#v", ids, want)
+		}
+	}
+	assertOrder("lower", "first-tie", "second-tie", "unset-a", "unset-b")
+	view.SortByFields[0].Direction = "DESC"
+	assertOrder("first-tie", "second-tie", "lower", "unset-a", "unset-b")
+}
+
 func TestBoardSearchFiltersLoadedCards(t *testing.T) {
 	model := newPickerModel(fakePickerSource{})
 	model.screen = screenBoard
@@ -922,6 +948,29 @@ func TestBoardCardsShowSavedVisibleFields(t *testing.T) {
 	}
 }
 
+func TestBoardCardsOmitGroupingFieldsFromInlineSummary(t *testing.T) {
+	status := github.Field{ID: "status", Name: "Status", DataType: "SINGLE_SELECT"}
+	assignees := github.Field{ID: "assignees", Name: "Assignees", DataType: "ASSIGNEES"}
+	view := &github.View{
+		Fields:          []github.Field{{Name: "Title", DataType: "TITLE"}, status, assignees},
+		VerticalGroupBy: []github.Field{status},
+	}
+	item := github.Item{
+		Content: &github.Content{Kind: "Issue", Title: "Grouped card"},
+		FieldValues: []github.FieldValue{
+			{FieldID: "status", FieldName: "Status", Value: "In Progress", Available: true},
+			{FieldID: "assignees", FieldName: "Assignees", Value: "octocat", Available: true},
+		},
+	}
+	card := ansi.Strip((&Model{view: view}).renderLaneCard(item, false, 60))
+	if strings.Contains(card, "Status: In Progress") || !strings.Contains(card, "Assignees: octocat") {
+		t.Fatalf("grouping summary = %q", card)
+	}
+	if fields := cardFieldSummary(item, &github.View{Fields: view.Fields}); !strings.Contains(fields, "Status: In Progress") {
+		t.Fatalf("ungrouped field summary omitted status: %q", fields)
+	}
+}
+
 func TestBoardUsesVerticalGroupingWhenColumnsAreUnset(t *testing.T) {
 	status := github.Field{
 		ID:       "status",
@@ -1056,7 +1105,12 @@ func TestEnterLoadsAndShowsItemDetail(t *testing.T) {
 	if cmd == nil || !model.detailVisible || !model.detailLoading {
 		t.Fatalf("detail loading state = %#v, cmd nil = %v", model, cmd == nil)
 	}
-	updated, _ = model.Update(cmd())
+	updated, detailCmd := model.Update(cmd())
+	model = updated.(Model)
+	if detailCmd == nil {
+		t.Fatal("debounced detail load did not start")
+	}
+	updated, _ = model.Update(detailCmd())
 	model = updated.(Model)
 	if model.detailLoading || model.detail == nil || model.detailErr != nil {
 		t.Fatalf("detail result = %#v", model)
@@ -1091,6 +1145,33 @@ func TestEnterLoadsAndShowsItemDetail(t *testing.T) {
 	}
 	updated, _ = model.Update(keyPress("esc"))
 	model = updated.(Model)
+}
+
+func TestClosingDetailInvalidatesPendingDebounceAndResponse(t *testing.T) {
+	model := newPickerModel(fakePickerSource{})
+	model.screen = screenBoard
+	model.view = &github.View{Name: "Board", Layout: github.BoardLayout}
+	model.items = []github.Item{{ID: "item-1", Content: &github.Content{Kind: "Issue", Title: "One"}}, {ID: "item-2", Content: &github.Content{Kind: "Issue", Title: "Two"}}}
+	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+	model.selectedProject = &github.Project{Number: 1}
+	updated, pending := model.Update(keyPress("enter"))
+	model = updated.(Model)
+	debounceMsg := pending().(itemDetailDebounceMsg)
+	updated, _ = model.Update(keyPress("esc"))
+	model = updated.(Model)
+	updated, detailCmd := model.Update(debounceMsg)
+	model = updated.(Model)
+	if detailCmd != nil || model.detailLoading || model.detailVisible {
+		t.Fatal("closing detail did not invalidate pending debounce")
+	}
+	model.moveBoardCard(1)
+	updated, _ = model.Update(keyPress("enter"))
+	model = updated.(Model)
+	updated, _ = model.Update(itemDetailMsg{itemID: "item-1", requestID: debounceMsg.requestID, detail: &github.ItemDetail{ID: "item-1"}, generation: model.generation})
+	result := updated.(Model)
+	if result.detail != nil || !result.detailLoading || result.detailItemID != "item-2" {
+		t.Fatalf("stale item detail was applied: id=%q loading=%v detail=%#v", result.detailItemID, result.detailLoading, result.detail)
+	}
 }
 
 func TestDetailCacheClearsWhenBoardReloads(t *testing.T) {

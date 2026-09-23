@@ -819,6 +819,7 @@ func (m Model) renderBoardContent(b *strings.Builder) {
 	}
 
 	fmt.Fprintf(b, "%s  %s  %s\n", titleStyle.Render(m.view.Name), mutedStyle.Render(fmt.Sprintf("#%d", m.view.Number)), layoutBadge(string(m.view.Layout)))
+	b.WriteString(mutedStyle.Render("Display note: collapsed-group state is not exposed by this API; groups follow saved field and option order.") + "\n")
 	if m.view.Filter != "" {
 		fmt.Fprintf(b, "%s %s\n", mutedStyle.Render("Filter:"), m.view.Filter)
 	}
@@ -1204,6 +1205,9 @@ func cardFieldSummary(item github.Item, view *github.View) string {
 		if strings.EqualFold(field.Name, "Title") || strings.EqualFold(field.DataType, "TITLE") {
 			continue
 		}
+		if fieldIsBoardGrouping(view, field) {
+			continue
+		}
 		value, ok := itemFieldValue(field, item)
 		if !ok || !value.Available || strings.TrimSpace(value.Value) == "" {
 			continue
@@ -1218,6 +1222,30 @@ func cardFieldSummary(item github.Item, view *github.View) string {
 		parts = append(parts, name+": "+value.Value)
 	}
 	return strings.Join(parts, " · ")
+}
+
+func fieldIsBoardGrouping(view *github.View, field github.Field) bool {
+	if view == nil {
+		return false
+	}
+	for _, grouping := range view.GroupByFields {
+		if fieldsMatch(field, grouping) {
+			return true
+		}
+	}
+	for _, grouping := range view.VerticalGroupBy {
+		if fieldsMatch(field, grouping) {
+			return true
+		}
+	}
+	return false
+}
+
+func fieldsMatch(left, right github.Field) bool {
+	if left.ID != "" && right.ID != "" {
+		return left.ID == right.ID
+	}
+	return strings.EqualFold(left.Name, right.Name)
 }
 
 func positionOnly(view *github.View) bool {

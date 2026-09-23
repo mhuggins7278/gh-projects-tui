@@ -56,6 +56,31 @@ func TestViewCompatibilityAcceptsCombinedGrouping(t *testing.T) {
 	}
 }
 
+func TestIterationLanesPreserveSavedActiveAndCompletedOrder(t *testing.T) {
+	iteration := github.Field{
+		ID: "iteration", Name: "Iteration", Kind: "ProjectV2IterationField", DataType: "ITERATION",
+		Iterations: []github.Iteration{
+			{ID: "current", Title: "Current"},
+			{ID: "next", Title: "Next"},
+			{ID: "done-a", Title: "Completed A", Completed: true},
+			{ID: "done-b", Title: "Completed B", Completed: true},
+		},
+	}
+	lanes, supported := laneDefinitions(iteration)
+	if !supported {
+		t.Fatal("iteration grouping was not supported")
+	}
+	want := []string{"no-value", "iteration:current", "iteration:next", "iteration:done-a", "iteration:done-b"}
+	if len(lanes) != len(want) {
+		t.Fatalf("iteration lanes = %#v", lanes)
+	}
+	for index, key := range want {
+		if lanes[index].key != key {
+			t.Fatalf("lane %d = %q, want %q", index, lanes[index].key, key)
+		}
+	}
+}
+
 func TestViewCompatibilityAcceptsTable(t *testing.T) {
 	view := github.View{Layout: github.TableLayout, Fields: []github.Field{{Name: "Title", DataType: "TITLE"}}}
 	if compatibility := evaluateViewCompatibility(view); !compatibility.supported() {

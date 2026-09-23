@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -223,7 +224,7 @@ func TestResolveOwnerFallsBackFromOrganizationToUser(t *testing.T) {
 func TestOpenViewProjectsFieldConfigurations(t *testing.T) {
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(query string, variables map[string]interface{}, response interface{}) error {
-			if variables["project"] != 7 || variables["view"] != 3 || !strings.Contains(query, "projectV2(number: $project) { id viewerCanUpdate") || !strings.Contains(query, "completedIterations") || !strings.Contains(query, "IssueFieldSingleSelect") {
+			if variables["project"] != 7 || variables["view"] != 3 || !strings.Contains(query, "projectV2(number: $project) { id viewerCanUpdate") || !strings.Contains(query, "visibleFields(first: 100, after: $fieldsAfter)") || !strings.Contains(query, "completedIterations") || !strings.Contains(query, "IssueFieldSingleSelect") {
 				t.Fatalf("view query or variables invalid: %q %#v", query, variables)
 			}
 			result := response.(*viewResponse)
@@ -232,10 +233,10 @@ func TestOpenViewProjectsFieldConfigurations(t *testing.T) {
 				ViewerCanUpdate: true,
 				View: &rawView{
 					ID: "view-id", Number: 3, Name: "Current", Layout: BoardLayout, Filter: "iteration:@current",
-					Fields: fieldConnection{Nodes: []*rawField{
+					Configuration: viewConfiguration{VisibleFields: fieldConnection{Nodes: []*rawField{
 						{Kind: "ProjectV2SingleSelectField", ID: "status", Name: "Status", DataType: "SINGLE_SELECT", Options: []FieldOption{{ID: "todo", Name: "Todo"}}},
 						{Kind: "ProjectV2SingleSelectField", ID: "priority", Name: "Priority", DataType: "SINGLE_SELECT", IssueField: &rawIssueField{Options: []FieldOption{{ID: "medium", Name: "Medium"}, {ID: "low", Name: "Low"}}}},
-					}},
+					}}},
 					VerticalGroupBy: fieldConnection{Nodes: []*rawField{{Kind: "ProjectV2IterationField", ID: "iteration", Name: "Iteration", DataType: "ITERATION", Configuration: &iterationConfiguration{Iterations: []Iteration{{ID: "current", Title: "Current"}}, CompletedIterations: []Iteration{{ID: "old", Title: "Old"}}}}}},
 					SortByFields:    sortConnection{Nodes: []*rawSortField{{Direction: "ASC", Field: &rawField{Kind: "ProjectV2Field", ID: "position", Name: "Position", DataType: "POSITION"}}}},
 				},
@@ -284,7 +285,7 @@ func TestOpenViewPaginatesFieldMetadata(t *testing.T) {
 			}
 			result := response.(*viewResponse)
 			result.Organization = &viewOwner{Project: &viewProject{View: &rawView{
-				Fields: fieldConnection{Nodes: []*rawField{{ID: "one"}}, PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("field-cursor")}},
+				Configuration: viewConfiguration{VisibleFields: fieldConnection{Nodes: []*rawField{{ID: "one"}}, PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("field-cursor")}}},
 			}}}
 			return nil
 		},
@@ -294,7 +295,7 @@ func TestOpenViewPaginatesFieldMetadata(t *testing.T) {
 			}
 			result := response.(*viewResponse)
 			result.Organization = &viewOwner{Project: &viewProject{View: &rawView{
-				Fields: fieldConnection{Nodes: []*rawField{{ID: "two"}}},
+				Configuration: viewConfiguration{VisibleFields: fieldConnection{Nodes: []*rawField{{ID: "two"}}}},
 			}}}
 			return nil
 		},
@@ -346,7 +347,7 @@ func TestListViewsPaginates(t *testing.T) {
 func TestPageItemsProjectsContentAndValues(t *testing.T) {
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(query string, variables map[string]interface{}, response interface{}) error {
-			if variables["filter"] != "assignee:@me" || variables["after"] != "cursor" || !strings.Contains(query, "ProjectV2ItemFieldDateValue") || !strings.Contains(query, "IssueFieldSingleSelectValue") || !strings.Contains(query, "repository { name }") || !strings.Contains(query, "subIssuesSummary { total completed }") || !strings.Contains(query, "isDraft merged") {
+			if variables["filter"] != "assignee:@me" || variables["after"] != "cursor" || !strings.Contains(query, "ProjectV2ItemFieldDateValue") || !strings.Contains(query, "IssueFieldSingleSelectValue") || !strings.Contains(query, "users(first: 10) { nodes { login }") || !strings.Contains(query, "repository { name }") || !strings.Contains(query, "subIssuesSummary { total completed }") || !strings.Contains(query, "isDraft merged") {
 				t.Fatalf("item query or variables invalid: %q %#v", query, variables)
 			}
 			result := response.(*itemsResponse)
@@ -359,6 +360,7 @@ func TestPageItemsProjectsContentAndValues(t *testing.T) {
 						{Kind: "ProjectV2ItemFieldSingleSelectValue", Field: rawFieldRef{ID: "status", Name: "Status"}, OptionID: "todo", Name: "Todo"},
 						{Kind: "ProjectV2ItemFieldNumberValue", Field: rawFieldRef{ID: "estimate", Name: "Estimate"}, Number: floatPtr(2.5)},
 						{Kind: "ProjectV2ItemIssueFieldValue", Field: rawFieldRef{ID: "priority", Name: "Priority"}, IssueFieldValue: &rawIssueFieldValue{Kind: "IssueFieldSingleSelectValue", OptionID: "medium", Name: "Medium"}},
+						{Kind: "ProjectV2ItemFieldUserValue", Field: rawFieldRef{ID: "assignees", Name: "Assignees"}, Users: &rawUserConnection{Nodes: []rawUser{{Login: "octocat"}, {Login: "hubot"}}}},
 					}, PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("next")}},
 				}},
 				PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("next")},
@@ -383,11 +385,14 @@ func TestPageItemsProjectsContentAndValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PageItems() error = %v", err)
 	}
-	if !page.HasNext || page.EndCursor != "next" || len(page.Items) != 1 || len(page.Items[0].FieldValues) != 4 {
+	if !page.HasNext || page.EndCursor != "next" || len(page.Items) != 1 || len(page.Items[0].FieldValues) != 5 {
 		t.Fatalf("page = %#v", page)
 	}
 	if page.Items[0].Content == nil || page.Items[0].Content.Title != "Fix it" || page.Items[0].Content.Repository != "example" || page.Items[0].Content.State != "OPEN" || page.Items[0].Content.SubIssueTotal != 8 || page.Items[0].Content.SubIssueDone != 3 || page.Items[0].FieldValues[1].Value != "2.5" || page.Items[0].FieldValues[2].FieldName != "Priority" || page.Items[0].FieldValues[2].OptionID != "medium" || page.Items[0].FieldValues[2].Value != "Medium" || !page.Items[0].FieldValues[2].Available {
 		t.Fatalf("item = %#v", page.Items[0])
+	}
+	if got := page.Items[0].FieldValues[3]; got.FieldName != "Assignees" || got.Value != "octocat, hubot" || !got.Available {
+		t.Fatalf("assignees = %#v", got)
 	}
 }
 
@@ -537,11 +542,107 @@ func TestLoadItemDetailPaginatesFieldsAndValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadItemDetail() error = %v", err)
 	}
-	if detail.ID != "item-1" || detail.Content == nil || !detail.Content.BodyAvailable || detail.Content.Body != body {
+	if detail.ID != "item-1" || detail.Content == nil || detail.Content.Number != 42 || !detail.Content.BodyAvailable || detail.Content.Body != body {
 		t.Fatalf("detail content = %#v", detail)
 	}
 	if len(detail.Fields) != 3 || detail.Fields[0].Value == nil || detail.Fields[0].Value.Value != "Todo" || detail.Fields[1].Value != nil || detail.Fields[2].Value == nil || detail.Fields[2].Value.Value != "hello" {
 		t.Fatalf("detail fields = %#v", detail.Fields)
+	}
+}
+
+func TestLoadItemDetailPaginatesNestedMultiValueConnections(t *testing.T) {
+	labels := make([]rawLabel, 100)
+	users := make([]rawUser, 100)
+	reviewers := make([]rawRequestedReviewer, 100)
+	pullRequests := make([]rawPullRequest, 100)
+	for index := range labels {
+		labels[index] = rawLabel{Name: fmt.Sprintf("label-%03d", index)}
+		users[index] = rawUser{Login: fmt.Sprintf("user-%03d", index)}
+		reviewers[index] = rawRequestedReviewer{Login: fmt.Sprintf("reviewer-%03d", index)}
+		pullRequests[index] = rawPullRequest{Number: index + 1}
+	}
+	type nestedCase struct {
+		name   string
+		kind   string
+		cursor string
+		first  *rawFieldValue
+		second *rawFieldValue
+		want   string
+	}
+	cases := []nestedCase{
+		{
+			name: "Labels", kind: "ProjectV2ItemFieldLabelValue", cursor: "labels-next",
+			first:  &rawFieldValue{Kind: "ProjectV2ItemFieldLabelValue", Labels: &rawLabelConnection{Nodes: labels, PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("labels-next")}}},
+			second: &rawFieldValue{Kind: "ProjectV2ItemFieldLabelValue", Labels: &rawLabelConnection{Nodes: []rawLabel{{Name: "label-last"}}}}, want: "label-last",
+		},
+		{
+			name: "Assignees", kind: "ProjectV2ItemFieldUserValue", cursor: "users-next",
+			first:  &rawFieldValue{Kind: "ProjectV2ItemFieldUserValue", Users: &rawUserConnection{Nodes: users, PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("users-next")}}},
+			second: &rawFieldValue{Kind: "ProjectV2ItemFieldUserValue", Users: &rawUserConnection{Nodes: []rawUser{{Login: "user-last"}}}}, want: "user-last",
+		},
+		{
+			name: "Reviewers", kind: "ProjectV2ItemFieldReviewerValue", cursor: "reviewers-next",
+			first:  &rawFieldValue{Kind: "ProjectV2ItemFieldReviewerValue", Reviewers: &rawRequestedReviewerConnection{Nodes: reviewers, PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("reviewers-next")}}},
+			second: &rawFieldValue{Kind: "ProjectV2ItemFieldReviewerValue", Reviewers: &rawRequestedReviewerConnection{Nodes: []rawRequestedReviewer{{Name: "reviewer-last"}}}}, want: "reviewer-last",
+		},
+		{
+			name: "Linked pull requests", kind: "ProjectV2ItemFieldPullRequestValue", cursor: "pulls-next",
+			first:  &rawFieldValue{Kind: "ProjectV2ItemFieldPullRequestValue", PullRequests: &rawPullRequestConnection{Nodes: pullRequests, PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("pulls-next")}}},
+			second: &rawFieldValue{Kind: "ProjectV2ItemFieldPullRequestValue", PullRequests: &rawPullRequestConnection{Nodes: []rawPullRequest{{Number: 101}}}}, want: "#101",
+		},
+	}
+	responses := []func(string, map[string]interface{}, interface{}) error{
+		func(_ string, _ map[string]interface{}, response interface{}) error {
+			result := response.(*itemDetailResponse)
+			values := make([]*rawFieldValue, 0, len(cases))
+			for _, tc := range cases {
+				value := *tc.first
+				value.Field = rawFieldRef{ID: tc.name, Name: tc.name}
+				values = append(values, &value)
+			}
+			result.Organization = &detailOwner{Project: &detailProject{}}
+			result.Node = &rawDetailItem{ID: "item", FieldValues: rawFieldValuePage{Nodes: values}}
+			return nil
+		},
+	}
+	for _, tc := range cases {
+		current := tc
+		responses = append(responses, func(query string, variables map[string]interface{}, response interface{}) error {
+			if !strings.Contains(query, "fieldValueByName(name: $fieldName)") || variables["fieldName"] != current.name {
+				t.Fatalf("nested query for %q: query=%s vars=%#v", current.name, query, variables)
+			}
+			var afterKey string
+			switch current.kind {
+			case "ProjectV2ItemFieldLabelValue":
+				afterKey = "labelsAfter"
+			case "ProjectV2ItemFieldUserValue":
+				afterKey = "usersAfter"
+			case "ProjectV2ItemFieldReviewerValue":
+				afterKey = "reviewersAfter"
+			case "ProjectV2ItemFieldPullRequestValue":
+				afterKey = "pullRequestsAfter"
+			}
+			if variables[afterKey] != current.cursor {
+				t.Fatalf("nested cursor for %q = %#v", current.name, variables[afterKey])
+			}
+			result := response.(*nestedFieldValueResponse)
+			result.Node = &struct {
+				Value *rawFieldValue `json:"fieldValueByName"`
+			}{Value: current.second}
+			return nil
+		})
+	}
+	detail, err := newClient(&fakeGraphQL{responses: responses}, &fakeREST{}).LoadItemDetail(context.Background(), Owner{Login: "org", Kind: OrganizationOwner}, 1, "item")
+	if err != nil {
+		t.Fatalf("LoadItemDetail() error = %v", err)
+	}
+	if len(detail.Fields) != len(cases) {
+		t.Fatalf("detail fields = %#v", detail.Fields)
+	}
+	for index, tc := range cases {
+		if detail.Fields[index].Value == nil || !strings.HasSuffix(detail.Fields[index].Value.Value, tc.want) || strings.Count(detail.Fields[index].Value.Value, ",") != 100 {
+			t.Fatalf("%s = %#v, want %q", tc.name, detail.Fields[index].Value, tc.want)
+		}
 	}
 }
 
