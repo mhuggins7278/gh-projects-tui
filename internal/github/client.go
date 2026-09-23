@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 )
@@ -86,8 +87,11 @@ type Discovery struct {
 // Client is the Projects v2 adapter. Its methods intentionally expose no
 // GraphQL types so the board and UI layers remain host-independent.
 type Client struct {
-	graphql graphQLClient
-	rest    restClient
+	graphql     graphQLClient
+	rest        restClient
+	scheduler   *requestScheduler
+	reads       *readCache
+	definitions sync.Map
 }
 
 func newClient(graphql graphQLClient, rest restClient) *Client {
@@ -95,15 +99,26 @@ func newClient(graphql graphQLClient, rest restClient) *Client {
 }
 
 func NewClient() (*Client, error) {
-	graphql, err := api.DefaultGraphQLClient()
+	// Resolve gh authentication and Unix-socket routing before wrapping transport.
+	httpClient, err := api.NewHTTPClient(api.ClientOptions{})
 	if err != nil {
 		return nil, err
 	}
-	rest, err := api.DefaultRESTClient()
+	scheduler := newRequestScheduler(httpClient.Transport)
+	options := api.ClientOptions{Transport: scheduler}
+	graphql, err := api.NewGraphQLClient(options)
 	if err != nil {
 		return nil, err
 	}
-	return newClient(graphql, rest), nil
+	rest, err := api.NewRESTClient(options)
+	if err != nil {
+		return nil, err
+	}
+	client := newClient(graphql, rest)
+	client.reads = newReadCache(graphql)
+	client.graphql = client.reads
+	client.scheduler = scheduler
+	return client, nil
 }
 
 type projectsResponse struct {
@@ -133,9 +148,10 @@ type organization struct {
 	Login string `json:"login"`
 }
 
-// Discover loads the viewer, membership-derived organization owners, and each
-// owner's open project list. Owners whose projects are inaccessible are omitted
-// from the picker; unexpected owner failures are kept alongside successful results.
+// Discover loads the viewer, the viewer's open projects, and the
+// membership-derived organization owner list. Organization projects are loaded
+// lazily via OwnerProjects when an owner is selected, so startup costs one
+// viewer query plus membership pagination instead of one query per org.
 func (c *Client) Discover(ctx context.Context) (Discovery, error) {
 	var response projectsResponse
 	if err := c.graphql.DoWithContext(ctx, viewerProjectsQuery, map[string]interface{}{"after": nil}, &response); err != nil {
@@ -175,17 +191,19 @@ func (c *Client) Discover(ctx context.Context) (Discovery, error) {
 	}
 	for _, organization := range organizations {
 		owner := Owner{Login: organization.Login, Kind: OrganizationOwner}
-		projects, err := c.projects(ctx, owner)
-		if err != nil {
-			if !isSAMLProtectedError(err) {
-				discovery.OwnerErrors = append(discovery.OwnerErrors, OwnerFailure{Owner: owner, Err: err})
-			}
-			continue
-		}
 		discovery.Owners = append(discovery.Owners, owner)
-		discovery.Projects[owner.Login] = projects
+		if _, ok := discovery.Projects[owner.Login]; !ok {
+			discovery.Projects[owner.Login] = nil
+		}
 	}
 	return discovery, nil
+}
+
+// OwnerProjects loads one owner's open projects on demand for the project
+// picker. SAML-protected owners surface a typed error so the picker can show
+// an actionable message while keeping other owners usable.
+func (c *Client) OwnerProjects(ctx context.Context, owner Owner) ([]Project, error) {
+	return c.projects(ctx, owner)
 }
 
 func isSAMLProtectedError(err error) bool {

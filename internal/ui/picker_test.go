@@ -31,9 +31,23 @@ type fakePickerSource struct {
 	positionMutationErr error
 	applyMutationErrors bool
 	viewCalls           *int
+	listViewsCalls      *int
 	itemCalls           *int
 	mutationWait        <-chan struct{}
 	mutationContextErr  *error
+	ownerProjects       map[string][]github.Project
+	ownerProjectsErr    map[string]error
+	ownerProjectCalls   *int
+}
+
+func (f fakePickerSource) OwnerProjects(_ context.Context, owner github.Owner) ([]github.Project, error) {
+	if f.ownerProjectCalls != nil {
+		*f.ownerProjectCalls++
+	}
+	if err, ok := f.ownerProjectsErr[owner.Login]; ok {
+		return nil, err
+	}
+	return f.ownerProjects[owner.Login], nil
 }
 
 func (f fakePickerSource) Discover(context.Context) (github.Discovery, error) {
@@ -50,6 +64,9 @@ func (f fakePickerSource) ResolveOwner(_ context.Context, login string) (github.
 }
 
 func (f fakePickerSource) ListViews(context.Context, github.Owner, int) ([]github.ViewSummary, error) {
+	if f.listViewsCalls != nil {
+		*f.listViewsCalls++
+	}
 	return f.views, nil
 }
 
@@ -303,6 +320,35 @@ func TestOwnerPickerSelectAdvancesToProjects(t *testing.T) {
 	}
 }
 
+func TestOwnerPickerLazyLoadsProjectsOnDemand(t *testing.T) {
+	discovery := github.Discovery{
+		Owners: []github.Owner{
+			{Login: "acme", Kind: github.OrganizationOwner},
+		},
+		Projects: map[string][]github.Project{},
+	}
+	calls := 0
+	source := fakePickerSource{
+		discovery: discovery,
+		ownerProjects: map[string][]github.Project{
+			"acme": {{Number: 7, Title: "Website"}},
+		},
+		ownerProjectCalls: &calls,
+	}
+	model := feedDiscovery(t, newPickerModel(source), source)
+	updated, cmd := model.Update(keyPress("enter"))
+	result := updated.(Model)
+	if result.screen != screenProjectPicker || !result.projectsLoading || cmd == nil {
+		t.Fatalf("lazy load did not start: %#v cmd nil=%v", result, cmd == nil)
+	}
+	msg := cmd()
+	updated, _ = result.Update(msg)
+	result = updated.(Model)
+	if result.projectsLoading || calls != 1 || len(result.filteredProjects()) != 1 {
+		t.Fatalf("lazy projects state = loading:%v calls:%d projects:%#v err:%v", result.projectsLoading, calls, result.filteredProjects(), result.projectsErr)
+	}
+}
+
 func TestPickerFilterNarrowsOwners(t *testing.T) {
 	source := fakePickerSource{discovery: testDiscovery()}
 	model := feedDiscovery(t, newPickerModel(source), source)
@@ -340,6 +386,36 @@ func TestProjectSelectLoadsViews(t *testing.T) {
 	model = updated.(Model)
 	if model.screen != screenViewPicker || len(model.views) != 1 {
 		t.Fatalf("views state = %#v", model)
+	}
+}
+
+func TestProjectSelectReusesCachedViews(t *testing.T) {
+	calls := 0
+	source := fakePickerSource{
+		discovery:      testDiscovery(),
+		views:          []github.ViewSummary{{Number: 3, Name: "Board", Layout: github.BoardLayout}},
+		listViewsCalls: &calls,
+	}
+	model := feedDiscovery(t, newPickerModel(source), source)
+	updated, _ := model.Update(keyPress("enter"))
+	model = updated.(Model)
+	updated, cmd := model.Update(keyPress("enter"))
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected ListViews command")
+	}
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+	if calls != 1 {
+		t.Fatalf("first views load calls = %d", calls)
+	}
+	// Back to projects, then re-select the same project: cache serves it.
+	updated, _ = model.Update(keyPress("esc"))
+	model = updated.(Model)
+	updated, cmd = model.Update(keyPress("enter"))
+	model = updated.(Model)
+	if cmd != nil || calls != 1 || model.screen != screenViewPicker || len(model.views) != 1 {
+		t.Fatalf("cached views should avoid API: calls=%d screen=%v views=%#v cmd nil=%v", calls, model.screen, model.views, cmd == nil)
 	}
 }
 
@@ -486,7 +562,7 @@ func TestBoardLoadsPagesAndGroupsItems(t *testing.T) {
 	}
 }
 
-func TestBoardLoadsStatusLanesInParallel(t *testing.T) {
+func TestBoardLoadsSinglePaginatedStream(t *testing.T) {
 	status := github.Field{
 		ID:       "status",
 		Name:     "Status",
@@ -502,20 +578,11 @@ func TestBoardLoadsStatusLanesInParallel(t *testing.T) {
 	progressOne := github.Item{ID: "progress-1", Content: &github.Content{Kind: "Issue", Title: "Progress one"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "progress", Value: "In progress", Available: true}}}
 	progressTwo := github.Item{ID: "progress-2", Content: &github.Content{Kind: "Issue", Title: "Progress two"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "progress", Value: "In progress", Available: true}}}
 	other := github.Item{ID: "other", Content: &github.Content{Kind: "Issue", Title: "Archived status"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "archived", Value: "Archived", Available: true}}}
-	source := fakePickerSource{itemPagesByFilter: map[string]map[string]github.ItemsPage{
-		`status:"Todo"`: {
-			"": {Items: []github.Item{todo}},
-		},
-		`status:"In progress"`: {
-			"":              {Items: []github.Item{progressOne}, HasNext: true, EndCursor: "progress-next"},
-			"progress-next": {Items: []github.Item{progressTwo}},
-		},
-		"no:status": {
-			"": {},
-		},
-		`-status:"Todo" -status:"In progress" -no:status`: {
-			"": {Items: []github.Item{other}},
-		},
+	// Single progressively paginated stream replaces per-lane fan-out to
+	// reduce GraphQL request count.
+	source := fakePickerSource{itemPages: map[string]github.ItemsPage{
+		"":     {Items: []github.Item{todo, progressOne}, HasNext: true, EndCursor: "next"},
+		"next": {Items: []github.Item{progressTwo, other}},
 	}}
 	model := newPickerModel(source)
 	model.screen = screenBoard
@@ -527,29 +594,28 @@ func TestBoardLoadsStatusLanesInParallel(t *testing.T) {
 	cmd := model.startItemsLoadWithSpinner()
 	message := cmd()
 	batch, ok := message.(tea.BatchMsg)
-	if !ok || len(batch) != 5 {
-		t.Fatalf("parallel load command = %T, commands = %d", message, len(batch))
+	if !ok || len(batch) != 2 {
+		t.Fatalf("single-stream load command = %T, commands = %d", message, len(batch))
 	}
-	updated, _ := model.Update(batch[1]())
+	updated, next := model.Update(batch[1]())
 	model = updated.(Model)
+	if next == nil || !model.itemsLoading || len(model.items) != 2 {
+		t.Fatalf("first page state = items:%d loading:%v next:%v", len(model.items), model.itemsLoading, next != nil)
+	}
 	loading := ansi.Strip(model.View().Content)
-	if !strings.Contains(loading, "Todo item") || !strings.Contains(loading, "Loading cards...") || !model.itemsLoading {
-		t.Fatalf("completed lane was not revealed independently: %q", loading)
+	if !strings.Contains(loading, "Todo item") {
+		t.Fatalf("first page was not revealed progressively: %q", loading)
 	}
 
-	updated, _ = model.Update(batch[2]())
-	model = updated.(Model)
-	updated, _ = model.Update(batch[3]())
-	model = updated.(Model)
-	updated, _ = model.Update(batch[4]())
+	updated, _ = model.Update(next())
 	model = updated.(Model)
 	if model.itemsLoading || len(model.items) != 4 {
-		t.Fatalf("parallel load final state = %#v", model)
+		t.Fatalf("single-stream final state = items:%d loading:%v", len(model.items), model.itemsLoading)
 	}
 	content := ansi.Strip(model.View().Content)
 	for _, title := range []string{"Todo item", "Progress one", "Progress two"} {
 		if !strings.Contains(content, title) {
-			t.Fatalf("parallel board missing %q: %s", title, content)
+			t.Fatalf("single-stream board missing %q: %s", title, content)
 		}
 	}
 	lanes := model.boardLanes()
@@ -589,18 +655,16 @@ func TestSavedFilteredStatusBoardPagesUnchangedQuery(t *testing.T) {
 	}
 }
 
-func TestParallelLaneFailureRemainsVisibleAsIncomplete(t *testing.T) {
+func TestSingleStreamFailureKeepsPartialItemsVisible(t *testing.T) {
 	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "todo", Name: "Todo"}}}
 	view := github.View{Name: "Board", Layout: github.BoardLayout, GroupByFields: []github.Field{status}}
 	partial := github.Item{ID: "partial", Content: &github.Content{Kind: "Issue", Title: "Partial item"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "todo", Value: "Todo", Available: true}}}
 	source := fakePickerSource{
-		itemPagesByFilter: map[string]map[string]github.ItemsPage{
-			`status:"Todo"`:             {"": {Items: []github.Item{partial}, HasNext: true, EndCursor: "next"}},
-			"no:status":                 {"": {}},
-			`-status:"Todo" -no:status`: {"": {}},
+		itemPages: map[string]github.ItemsPage{
+			"": {Items: []github.Item{partial}, HasNext: true, EndCursor: "next"},
 		},
 		itemErrorsByFilter: map[string]map[string]error{
-			`status:"Todo"`: {"next": errors.New("page failed")},
+			"": {"next": errors.New("page failed")},
 		},
 	}
 	model := newPickerModel(source)
@@ -610,13 +674,16 @@ func TestParallelLaneFailureRemainsVisibleAsIncomplete(t *testing.T) {
 	model.selectedProject = &github.Project{Number: 1}
 
 	batch := model.startItemsLoadWithSpinner()().(tea.BatchMsg)
-	for _, command := range batch[1:] {
-		updated, _ := model.Update(command())
-		model = updated.(Model)
+	if len(batch) != 2 {
+		t.Fatalf("single-stream commands = %d", len(batch))
 	}
+	updated, next := model.Update(batch[1]())
+	model = updated.(Model)
+	updated, _ = model.Update(next())
+	model = updated.(Model)
 	content := ansi.Strip(model.View().Content)
-	if model.itemsLoading || !strings.Contains(content, "Partial item") || !strings.Contains(content, "incomplete; press r") || !strings.Contains(content, "Lane loading failed: Todo: page failed") {
-		t.Fatalf("failed lane state = %#v\n%s", model, content)
+	if model.itemsLoading || !strings.Contains(content, "Partial item") || !strings.Contains(content, "page failed") {
+		t.Fatalf("failed single-stream state = %#v\n%s", model, content)
 	}
 }
 
@@ -701,8 +768,8 @@ func TestWritableBoardMoveUpdatesFieldAndAppendsDestination(t *testing.T) {
 
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
-	if cmd == nil || !model.mutationLoading {
-		t.Fatalf("move state = %#v, cmd nil = %v", model, cmd == nil)
+	if cmd == nil {
+		t.Fatalf("move did not start settling: %#v", model)
 	}
 	if len(mutations) != 0 || model.boardLane != 2 || model.boardCard != 1 {
 		t.Fatalf("optimistic move state = lane %d card %d mutations %#v", model.boardLane, model.boardCard, mutations)
@@ -743,8 +810,8 @@ func TestWritableVerticalBoardMoveUpdatesFieldAndAppendsDestination(t *testing.T
 
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
-	if cmd == nil || !model.mutationLoading {
-		t.Fatalf("vertical move state = %#v, cmd nil = %v", model, cmd == nil)
+	if cmd == nil {
+		t.Fatalf("vertical move did not start settling: %#v", model)
 	}
 	model = runMutationCommands(t, model, cmd)
 	if !reflect.DeepEqual(mutations, []string{"field:two", "position:b"}) {
@@ -785,7 +852,8 @@ func TestSuccessfulMutationReconcilesCanonicalState(t *testing.T) {
 	if viewCalls != 0 || model.view != &view {
 		t.Fatalf("mutation reloaded view: calls=%d view=%p want=%p", viewCalls, model.view, &view)
 	}
-	if itemCalls != 2 || model.status != "Move card saved" || model.mutationLoading || model.mutationSession != nil {
+	// Single successful move: pre-read + write, post-read skipped.
+	if itemCalls != 1 || model.status != "Move card saved" || model.mutationLoading || model.mutationSession != nil {
 		t.Fatalf("successful mutation state = items %d status %q loading=%v session=%#v", itemCalls, model.status, model.mutationLoading, model.mutationSession)
 	}
 }
@@ -825,19 +893,45 @@ func TestDefinitiveMutationFailureUsesCanonicalReadback(t *testing.T) {
 	}
 }
 
-func TestCombinedSwimlaneBoardDoesNotOfferMutations(t *testing.T) {
+func TestCombinedSwimlaneMoveChangesColumnAndPreservesSwimlane(t *testing.T) {
 	priority := github.Field{ID: "priority", Name: "Priority", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "p0", Name: "P0"}, {ID: "p1", Name: "P1"}}}
 	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "todo", Name: "Todo"}, {ID: "done", Name: "Done"}}}
-	view := github.View{ProjectID: "project", ViewerCanUpdate: true, GroupByFields: []github.Field{priority}, VerticalGroupBy: []github.Field{status}}
-	model := newPickerModel(fakePickerSource{})
-	model.screen = screenBoard
-	model.view = &view
-	model.items = []github.Item{{ID: "item", Content: &github.Content{Kind: "Issue", Title: "Item"}}}
+	view := github.View{Number: 1, ProjectID: "project", ViewerCanUpdate: true, GroupByFields: []github.Field{priority}, VerticalGroupBy: []github.Field{status}}
+	canonical := []github.Item{
+		{ID: "a", FieldValues: []github.FieldValue{{FieldID: "priority", OptionID: "p0", Available: true}, {FieldID: "status", OptionID: "todo", Available: true}}},
+		{ID: "b", FieldValues: []github.FieldValue{{FieldID: "priority", OptionID: "p1", Available: true}, {FieldID: "status", OptionID: "todo", Available: true}}},
+		{ID: "c", FieldValues: []github.FieldValue{{FieldID: "priority", OptionID: "p0", Available: true}, {FieldID: "status", OptionID: "done", Available: true}}},
+	}
+	mutations := []string{}
+	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
+	model.boardLane = 4 // Todo swimlane, P0 column.
 
 	updated, cmd := model.Update(keyPress("L"))
-	result := updated.(Model)
-	if cmd != nil || result.mutationLoading || !strings.Contains(result.status, "swimlane") {
-		t.Fatalf("combined mutation state = %#v, cmd nil = %v", result, cmd == nil)
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatalf("combined lane move did not start settling: %#v", model)
+	}
+	model = runMutationCommands(t, model, cmd)
+	var moved github.Item
+	for _, item := range canonical {
+		if item.ID == "a" {
+			moved = item
+			break
+		}
+	}
+	priorityValue, _ := itemFieldValue(priority, moved)
+	statusValue, _ := itemFieldValue(status, moved)
+	if priorityValue.OptionID != "p1" || statusValue.OptionID != "todo" {
+		t.Fatalf("combined move changed wrong fields: priority=%#v status=%#v", priorityValue, statusValue)
+	}
+	if !reflect.DeepEqual(mutations, []string{"field:p1", "position:b"}) {
+		t.Fatalf("combined move mutations = %#v", mutations)
+	}
+
+	updated, cmd = model.Update(keyPress("J"))
+	model = updated.(Model)
+	if cmd != nil || !strings.Contains(model.status, "combined swimlane") {
+		t.Fatalf("combined view offered manual reorder: status=%q cmd nil=%v", model.status, cmd == nil)
 	}
 }
 

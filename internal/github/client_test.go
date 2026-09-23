@@ -64,11 +64,9 @@ func cursor(value string) *string {
 	return &value
 }
 
-func TestDiscoverKeepsSuccessfulOwnersWhenOneFails(t *testing.T) {
+func TestDiscoverListsOwnersWithoutPreloadingProjects(t *testing.T) {
 	viewer := project(1)
 	viewerNext := project(2)
-	organizationProject := project(3)
-	failure := errors.New("SSO authorization required")
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(_ string, variables map[string]interface{}, response interface{}) error {
 			if variables["after"] != nil {
@@ -88,6 +86,29 @@ func TestDiscoverKeepsSuccessfulOwnersWhenOneFails(t *testing.T) {
 			result.Viewer.Projects = projectPage{Nodes: []*Project{viewerNext}}
 			return nil
 		},
+	}}
+	rest := &fakeREST{organizations: [][]organization{{{Login: "org-ok"}, {Login: "org-fails"}}}}
+
+	client := newClient(graphql, rest)
+	discovery, err := client.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if discovery.Viewer != "me" || len(discovery.Owners) != 3 {
+		t.Fatalf("discovery identity = %#v", discovery)
+	}
+	if !reflect.DeepEqual(discovery.Projects["me"], []Project{*viewer, *viewerNext}) {
+		t.Fatalf("viewer projects = %#v", discovery.Projects["me"])
+	}
+	if len(graphql.queries) != 2 {
+		t.Fatalf("discover should not preload org projects, queries = %#v", graphql.queries)
+	}
+}
+
+func TestOwnerProjectsLoadsOnDemand(t *testing.T) {
+	organizationProject := project(3)
+	failure := errors.New("SSO authorization required")
+	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(_ string, variables map[string]interface{}, response interface{}) error {
 			if variables["login"] != "org-ok" || variables["after"] != nil {
 				t.Fatalf("organization variables = %#v", variables)
@@ -103,53 +124,40 @@ func TestDiscoverKeepsSuccessfulOwnersWhenOneFails(t *testing.T) {
 			return failure
 		},
 	}}
-	rest := &fakeREST{organizations: [][]organization{{{Login: "org-ok"}, {Login: "org-fails"}}}}
+	client := newClient(graphql, &fakeREST{})
 
-	discovery, err := newClient(graphql, rest).Discover(context.Background())
+	projects, err := client.OwnerProjects(context.Background(), Owner{Login: "org-ok", Kind: OrganizationOwner})
 	if err != nil {
-		t.Fatalf("Discover() error = %v", err)
+		t.Fatalf("OwnerProjects() error = %v", err)
 	}
-	if discovery.Viewer != "me" || len(discovery.Owners) != 2 {
-		t.Fatalf("discovery identity = %#v", discovery)
+	if !reflect.DeepEqual(projects, []Project{*organizationProject}) {
+		t.Fatalf("organization projects = %#v", projects)
 	}
-	if !reflect.DeepEqual(discovery.Projects["me"], []Project{*viewer, *viewerNext}) {
-		t.Fatalf("viewer projects = %#v", discovery.Projects["me"])
-	}
-	if !reflect.DeepEqual(discovery.Projects["org-ok"], []Project{*organizationProject}) {
-		t.Fatalf("organization projects = %#v", discovery.Projects["org-ok"])
-	}
-	if len(discovery.OwnerErrors) != 1 || discovery.OwnerErrors[0].Owner.Login != "org-fails" || !errors.Is(discovery.OwnerErrors[0].Err, failure) {
-		t.Fatalf("owner errors = %#v", discovery.OwnerErrors)
-	}
-	if len(rest.paths) != 1 || rest.paths[0] != "user/orgs?per_page=100&page=1" || rest.methods[0] != "GET" {
-		t.Fatalf("membership requests = %#v %#v", rest.methods, rest.paths)
+	if _, err := client.OwnerProjects(context.Background(), Owner{Login: "org-fails", Kind: OrganizationOwner}); !errors.Is(err, failure) {
+		t.Fatalf("expected SSO error, got %v", err)
 	}
 }
 
-func TestDiscoverSkipsSAMLProtectedOrganization(t *testing.T) {
-	failure := errors.New("GraphQL: Resource protected by organization SAML enforcement. You must grant your OAuth token access to this organization. (organization.projectsV2.nodes.0)")
+func TestDiscoverListsSAMLProtectedOrganizationForLazyLoad(t *testing.T) {
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(_ string, _ map[string]interface{}, response interface{}) error {
 			result := response.(*projectsResponse)
 			result.Viewer.Login = "me"
 			return nil
 		},
-		func(_ string, variables map[string]interface{}, _ interface{}) error {
-			if variables["login"] != "glg" {
-				t.Fatalf("organization login = %#v", variables["login"])
-			}
-			return failure
-		},
 	}}
 	discovery, err := newClient(graphql, &fakeREST{organizations: [][]organization{{{Login: "glg"}}}}).Discover(context.Background())
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
-	if len(discovery.Owners) != 1 || discovery.Owners[0].Login != "me" {
+	if len(discovery.Owners) != 2 || discovery.Owners[1].Login != "glg" {
 		t.Fatalf("owners = %#v", discovery.Owners)
 	}
 	if len(discovery.OwnerErrors) != 0 {
-		t.Fatalf("SAML owner errors = %#v", discovery.OwnerErrors)
+		t.Fatalf("discover should defer owner errors to lazy load, got %#v", discovery.OwnerErrors)
+	}
+	if len(graphql.queries) != 1 {
+		t.Fatalf("discover should not preload org projects, queries = %#v", graphql.queries)
 	}
 }
 
@@ -279,9 +287,9 @@ func TestOpenViewRejectsMissingView(t *testing.T) {
 
 func TestOpenViewPaginatesFieldMetadata(t *testing.T) {
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
-		func(_ string, variables map[string]interface{}, response interface{}) error {
-			if variables["fieldsAfter"] != nil {
-				t.Fatalf("initial fields cursor = %#v", variables["fieldsAfter"])
+		func(query string, variables map[string]interface{}, response interface{}) error {
+			if !strings.Contains(query, "visibleFields") {
+				t.Fatalf("initial view query should request visible fields: %q", query)
 			}
 			result := response.(*viewResponse)
 			result.Organization = &viewOwner{Project: &viewProject{View: &rawView{
@@ -290,12 +298,12 @@ func TestOpenViewPaginatesFieldMetadata(t *testing.T) {
 			return nil
 		},
 		func(_ string, variables map[string]interface{}, response interface{}) error {
-			if variables["fieldsAfter"] != "field-cursor" {
-				t.Fatalf("next fields cursor = %#v", variables["fieldsAfter"])
+			if variables["after"] != "field-cursor" {
+				t.Fatalf("next fields cursor = %#v", variables["after"])
 			}
-			result := response.(*viewResponse)
-			result.Organization = &viewOwner{Project: &viewProject{View: &rawView{
-				Configuration: viewConfiguration{VisibleFields: fieldConnection{Nodes: []*rawField{{ID: "two"}}}},
+			result := response.(*viewFieldsPageResponse)
+			result.Organization = &viewFieldsPageOwner{Project: &viewFieldsPageProject{View: &viewFieldsPageView{
+				Configuration: &viewFieldsPageConfig{VisibleFields: &fieldConnection{Nodes: []*rawField{{ID: "two"}}}},
 			}}}
 			return nil
 		},

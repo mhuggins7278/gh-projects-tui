@@ -134,14 +134,21 @@ values), and `esc` closes the panel.
   unsupported grouping/sorting semantics stay in the picker with an explanation.
 - If a project has no compatible saved board, unsupported views stay in the
   picker with an explanation; the TUI never substitutes an unfiltered board.
-- Card mutations require a writable, fully loaded, unfiltered single-axis board
-  grouped by single-select or iteration. Clear local search before moving cards.
-- Manual reordering requires project-position sorting. Combined-axis boards and
-  saved-filtered views are read-only.
-- Writes are serialized and re-resolved against the latest full project order.
+- Card mutations require a writable, fully loaded, unfiltered board with
+  single-select or iteration grouping. Combined boards require supported fields
+  on both axes; `H/L` moves only between columns in the current swimlane.
+  Clear local search before moving cards.
+- Manual reordering requires project-position sorting and is disabled for
+  combined-axis boards. Moving cards between swimlanes and saved-filtered views
+  remain read-only.
+- Writes are serialized and re-resolved against the latest project order.
+  Rapid unsent moves of the same card collapse to the final placement.
   If a timeout leaves a save's outcome unknown, dependent writes pause until
   `r` confirms the state; `r` retries readback only and never resubmits the write.
   Switching views does not cancel a submitted write.
+- Board loads use one paginated stream with only grouping, sort, and card
+  fields; recent views/metadata are cached briefly and `r` forces a refresh.
+  API cooldowns pace writes and pause with a visible countdown.
 - Table support is an early preview; full parity with GitHub's table UI is not
   implemented.
 

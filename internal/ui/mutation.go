@@ -12,6 +12,10 @@ import (
 
 const mutationRequestTimeout = 45 * time.Second
 
+type MutationItemsSource interface {
+	PageMutationItems(context.Context, github.Owner, int, string, []github.Field) (github.ItemsPage, error)
+}
+
 type boardMutationKind uint8
 
 const (
@@ -24,6 +28,9 @@ type boardMutationIntent struct {
 	itemID      string
 	direction   int
 	description string
+	// Final column requested by a burst of unsent lane moves. Row identity is
+	// still resolved from current canonical state at dispatch.
+	destination string
 }
 
 type boardMutationPlan struct {
@@ -102,18 +109,75 @@ func (m *Model) enqueueBoardMutation(intent boardMutationIntent) tea.Cmd {
 	}
 
 	session := m.mutationSession
+	// Only contiguous unsent edits of the same card can be collapsed.
+	// Interleaved cards and already submitted steps are dependency barriers.
+	if last := len(session.intents) - 1; last >= 0 && (last > 0 || session.plan == nil) && session.intents[last].kind == intent.kind && session.intents[last].itemID == intent.itemID {
+		if intent.kind == boardMutationMoveLane {
+			if plan, err := resolveBoardMutationPlan(session.view, m.items, intent); err == nil {
+				intent.destination = "no-value"
+				if plan.fieldValue.SingleSelectOptionID != nil {
+					intent.destination = "option:" + *plan.fieldValue.SingleSelectOptionID
+				}
+				if plan.fieldValue.IterationID != nil {
+					intent.destination = "iteration:" + *plan.fieldValue.IterationID
+				}
+				session.intents[last] = intent
+				m.boardFocusID = intent.itemID
+				m.projectPendingMutations()
+				return nil
+			}
+		}
+		if intent.kind == boardMutationReorder {
+			combined := session.intents[last].direction + intent.direction
+			if combined == 0 {
+				// Net no-op: e.g. J then K returns the card home. Drop the
+				// pending move entirely so it costs no API writes.
+				session.intents = append(session.intents[:last], session.intents[last+1:]...)
+				m.boardFocusID = intent.itemID
+				if len(session.intents) == 0 {
+					// projectPendingMutations early-returns on empty queue,
+					// so reset the optimistic view explicitly.
+					m.items = cloneItems(session.canonicalItems)
+					m.clampBoardCursor()
+					m.status = "Move cancelled (back to start)"
+				} else {
+					m.projectPendingMutations()
+					m.status = fmt.Sprintf("Saving moves (%d queued)...", len(session.intents)-1)
+				}
+				return nil
+			}
+			intent.direction = combined
+			session.intents[last] = intent
+			m.boardFocusID = intent.itemID
+			m.projectPendingMutations()
+			return nil
+		}
+	}
 	session.intents = append(session.intents, intent)
 	m.boardFocusID = intent.itemID
 	m.projectPendingMutations()
 	if len(session.intents) > 1 {
 		m.status = fmt.Sprintf("Saving moves (%d queued)...", len(session.intents)-1)
 	} else {
-		m.status = intent.description + ": checking current project order..."
+		m.status = intent.description + ": settling..."
 	}
 	if len(session.intents) == 1 && session.plan == nil && session.attempt == nil && session.readID == 0 {
-		return m.startMutationReadback()
+		return m.settleMutationCmd(session.id)
 	}
 	return nil
+}
+
+func (m *Model) settleMutationCmd(sessionID uint64) tea.Cmd {
+	// Production waits briefly so rapid wiggles collapse before any API
+	// request. Fake sources used in tests dispatch immediately.
+	if _, production := m.source.(MutationItemsSource); production {
+		return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg {
+			return mutationSettleMsg{sessionID: sessionID}
+		})
+	}
+	return func() tea.Msg {
+		return mutationSettleMsg{sessionID: sessionID}
+	}
 }
 
 func (m *Model) retryMutationReadback() tea.Cmd {
@@ -136,17 +200,90 @@ func (m *Model) startMutationReadback() tea.Cmd {
 	owner := session.owner
 	projectNumber := session.projectNumber
 	source := m.source
-	ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
+	ctx := context.Background()
+	baseline := cloneItems(session.canonicalItems)
+	fields := append(append([]github.Field(nil), session.view.GroupByFields...), session.view.VerticalGroupBy...)
+	var verifyField *github.Field
+	var verifyItem string
+	if session.attempt != nil && session.plan != nil && session.plan.hasField && !session.plan.hasPosition {
+		field := session.plan.field
+		verifyField, verifyItem = &field, session.plan.intent.itemID
+	}
 	m.mutationLoading = true
 	return func() tea.Msg {
-		defer cancel()
 		loader, ok := source.(ItemsSource)
 		if !ok {
 			return mutationReadbackMsg{sessionID: sessionID, readID: readID, err: fmt.Errorf("project item readback is unavailable")}
 		}
-		items, err := readCanonicalProjectItems(ctx, loader, owner, projectNumber)
+		var items []github.Item
+		var err error
+		if reader, ok := source.(interface {
+			ReadMutationItem(context.Context, string, github.Field) (github.Item, error)
+		}); ok && verifyField != nil {
+			item, readErr := reader.ReadMutationItem(ctx, verifyItem, *verifyField)
+			if readErr != nil {
+				return mutationReadbackMsg{sessionID: sessionID, readID: readID, err: readErr}
+			}
+			items = cloneItems(baseline)
+			for index := range items {
+				if items[index].ID == item.ID {
+					items[index] = mergeMutationItems([]github.Item{items[index]}, []github.Item{item}, []github.Field{*verifyField})[0]
+					break
+				}
+			}
+			return mutationReadbackMsg{sessionID: sessionID, readID: readID, items: items}
+		}
+		if lean, ok := source.(MutationItemsSource); ok {
+			items, err = readMutationItems(ctx, lean, owner, projectNumber, fields)
+			if err == nil {
+				items = mergeMutationItems(baseline, items, fields)
+			}
+		} else {
+			items, err = readCanonicalProjectItems(ctx, loader, owner, projectNumber)
+		}
 		return mutationReadbackMsg{sessionID: sessionID, readID: readID, items: items, err: err}
 	}
+}
+
+func readMutationItems(ctx context.Context, source MutationItemsSource, owner github.Owner, project int, fields []github.Field) ([]github.Item, error) {
+	var items []github.Item
+	after := ""
+	seen := map[string]bool{}
+	for {
+		page, err := source.PageMutationItems(ctx, owner, project, after, fields)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, page.Items...)
+		if !page.HasNext {
+			return items, nil
+		}
+		if page.EndCursor == "" || seen[page.EndCursor] {
+			return nil, fmt.Errorf("invalid mutation readback cursor")
+		}
+		seen[page.EndCursor] = true
+		after = page.EndCursor
+	}
+}
+
+func mergeMutationItems(baseline, updates []github.Item, fields []github.Field) []github.Item {
+	byID := map[string]github.Item{}
+	for _, item := range cloneItems(baseline) {
+		byID[item.ID] = item
+	}
+	result := make([]github.Item, 0, len(updates))
+	for _, update := range updates {
+		item, ok := byID[update.ID]
+		if !ok {
+			item = github.Item{ID: update.ID}
+		}
+		for _, field := range fields {
+			item.FieldValues = removeFieldValue(item.FieldValues, field)
+		}
+		item.FieldValues = append(item.FieldValues, update.FieldValues...)
+		result = append(result, item)
+	}
+	return result
 }
 
 func readCanonicalProjectItems(ctx context.Context, source ItemsSource, owner github.Owner, projectNumber int) ([]github.Item, error) {
@@ -168,12 +305,49 @@ func readCanonicalProjectItems(ctx context.Context, source ItemsSource, owner gi
 	}
 }
 
+func (m *Model) updateMutationSettle(msg mutationSettleMsg) (tea.Model, tea.Cmd) {
+	session := m.mutationSession
+	if session == nil || session.id != msg.sessionID || session.plan != nil || session.attempt != nil {
+		return *m, nil
+	}
+	if len(session.intents) == 0 {
+		m.mutationSession = nil
+		m.mutationLoading = false
+		return *m, nil
+	}
+	// Settle window allows rapid wiggles to collapse before any API call.
+	// Pre-read guards against stale anchors (external moves).
+	return *m, m.startMutationReadback()
+}
+
 func (m *Model) updateBoardMutation(msg boardMutationMsg) (tea.Model, tea.Cmd) {
 	session := m.mutationSession
 	if session == nil || session.id != msg.sessionID || session.writeID != msg.writeID || session.plan == nil || session.attempt != nil {
 		return *m, nil
 	}
 	result := msg.result
+	// Terminal success with no queued dependents: trust the definitive write
+	// and skip the post-read. Optimistic state becomes canonical.
+	if result.err == nil && len(session.intents) == 1 {
+		intent := session.plan.intent
+		session.lastSuccess = intent.description + " saved"
+		delete(m.detailCache, intent.itemID)
+		session.canonicalItems = cloneItems(m.items)
+		session.intents = session.intents[1:]
+		session.plan = nil
+		session.attempt = nil
+		refresh := m.showReconciledItems(session)
+		status := session.notice
+		if status == "" {
+			status = session.lastSuccess
+		}
+		m.mutationSession = nil
+		m.mutationLoading = false
+		if status != "" && sameMutationProjectByModel(session, m) {
+			m.status = status
+		}
+		return *m, refresh
+	}
 	session.attempt = &result
 	return *m, m.startMutationReadback()
 }
@@ -218,22 +392,6 @@ func (m *Model) updateMutationReadback(msg mutationReadbackMsg) (tea.Model, tea.
 			} else {
 				session.readbackState = observation
 				session.readbackCount = 1
-			}
-			if session.readbackCount >= 2 {
-				if session.notice == "" {
-					if verification.stablePartial {
-						session.notice = fmt.Sprintf("%s partially saved: repeated GitHub readbacks confirm the partial state", intent.description)
-					} else {
-						session.notice = fmt.Sprintf("%s failed: repeated GitHub readbacks confirm no change", intent.description)
-					}
-				}
-				delete(m.detailCache, intent.itemID)
-				session.intents = session.intents[1:]
-				session.plan = nil
-				session.attempt = nil
-				session.readbackState = ""
-				session.readbackCount = 0
-				return *m, m.dispatchNextMutation()
 			}
 			session.blocked = true
 			m.setMutationStatus(session, fmt.Sprintf("Readback has not yet confirmed the outcome of %s; press r to check again before queued writes continue", intent.description))
@@ -312,9 +470,8 @@ func (m *Model) dispatchNextMutation() tea.Cmd {
 
 func (m *Model) applyMutationPlanCmd(sessionID, writeID uint64, plan boardMutationPlan) tea.Cmd {
 	source := m.source
-	ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
+	ctx := context.Background()
 	return func() tea.Msg {
-		defer cancel()
 		mutator, ok := source.(ItemMutationSource)
 		if !ok {
 			return boardMutationMsg{sessionID: sessionID, writeID: writeID, result: mutationAttemptResult{err: fmt.Errorf("mutations are unavailable for this client")}}
@@ -438,29 +595,48 @@ func resolveBoardMutationPlan(view github.View, items []github.Item, intent boar
 		if currentLane < 0 {
 			return boardMutationPlan{}, fmt.Errorf("card %q is no longer in a board lane", intent.itemID)
 		}
-		targetLane := currentLane + intent.direction
-		if targetLane < 0 || targetLane >= len(lanes) {
+		targetLane, ok := adjacentBoardLaneIndex(lanes, currentLane, intent.direction, &view)
+		_, _, combined := boardCombinedFields(&view)
+		if intent.destination != "" {
+			ok = false
+			for index, lane := range lanes {
+				if lane.RowKey == lanes[currentLane].RowKey && laneColumnKey(lane, combined) == intent.destination {
+					targetLane, ok = index, true
+					break
+				}
+			}
+		}
+		if !ok {
 			return boardMutationPlan{}, fmt.Errorf("card %q can no longer move in that direction", intent.itemID)
 		}
 		destination := &lanes[targetLane]
 		currentKey, _ := itemGroupKey(field, items[itemIndex])
-		if currentKey == destination.Key {
-			plan.noOp = true
-			return plan, nil
-		}
-		value, clear, err := fieldValueInputForLane(field, *destination)
+		destinationColumnKey := laneColumnKey(*destination, combined)
+		destinationValueLane := *destination
+		destinationValueLane.Key = destinationColumnKey
+		value, clear, err := fieldValueInputForLane(field, destinationValueLane)
 		if err != nil {
 			return boardMutationPlan{}, err
 		}
 		plan.field = field
 		plan.fieldValue = value
-		plan.hasField = true
+		plan.hasField = currentKey != destinationColumnKey
 		plan.clearField = clear
-		if positionOnly(&view) && len(destination.Items) > 0 {
-			after := destination.Items[len(destination.Items)-1].ID
-			plan.hasPosition = true
-			plan.positionAfter = &after
+		if positionOnly(&view) {
+			for index := len(destination.Items) - 1; index >= 0; index-- {
+				if destination.Items[index].ID == intent.itemID {
+					continue
+				}
+				after := destination.Items[index].ID
+				predecessor, _ := projectPredecessorID(items, intent.itemID)
+				if predecessor != after {
+					plan.hasPosition = true
+					plan.positionAfter = &after
+				}
+				break
+			}
 		}
+		plan.noOp = !plan.hasField && !plan.hasPosition
 		return plan, nil
 	case boardMutationReorder:
 		if !positionOnly(&view) || strings.TrimSpace(view.Filter) != "" {
@@ -725,6 +901,10 @@ type boardMutationMsg struct {
 	sessionID uint64
 	writeID   uint64
 	result    mutationAttemptResult
+}
+
+type mutationSettleMsg struct {
+	sessionID uint64
 }
 
 type mutationReadbackMsg struct {

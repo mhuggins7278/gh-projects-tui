@@ -46,6 +46,26 @@ query OrganizationProjectView($login: String!, $project: Int!, $view: Int!, $fie
   }
 }` + viewFieldsFragment
 
+const viewFieldsPageFragment = `
+fragment ViewFieldsPage on ProjectV2View {
+  configuration { visibleFields(first: 100, after: $after) { nodes { ...FieldConfiguration } pageInfo { hasNextPage endCursor } } }
+}` + fieldConfigurationFragment
+
+const viewGroupsPageFragment = `
+fragment ViewGroupsPage on ProjectV2View {
+  groupByFields(first: 100, after: $after) { nodes { ...FieldConfiguration } pageInfo { hasNextPage endCursor } }
+}` + fieldConfigurationFragment
+
+const viewVerticalGroupsPageFragment = `
+fragment ViewVerticalGroupsPage on ProjectV2View {
+  verticalGroupByFields(first: 100, after: $after) { nodes { ...FieldConfiguration } pageInfo { hasNextPage endCursor } }
+}` + fieldConfigurationFragment
+
+const viewSortsPageFragment = `
+fragment ViewSortsPage on ProjectV2View {
+  sortByFields(first: 100, after: $after) { nodes { direction field { ...FieldConfiguration } } pageInfo { hasNextPage endCursor } }
+}` + fieldConfigurationFragment
+
 const userViewsQuery = `
 query UserProjectViews($login: String!, $project: Int!, $after: String) {
   user(login: $login) {
@@ -204,12 +224,12 @@ func (c *Client) OpenView(ctx context.Context, owner Owner, projectNumber, viewN
 		if cursorErr != nil {
 			return View{}, cursorErr
 		}
-		next, fetchErr := c.fetchView(ctx, owner, projectNumber, viewNumber, viewCursors{Fields: nextAfter})
+		page, fetchErr := c.fetchViewFieldsPage(ctx, owner, projectNumber, viewNumber, nextAfter)
 		if fetchErr != nil {
 			return View{}, fetchErr
 		}
-		raw.Configuration.VisibleFields.Nodes = append(raw.Configuration.VisibleFields.Nodes, next.View.Configuration.VisibleFields.Nodes...)
-		raw.Configuration.VisibleFields.PageInfo = next.View.Configuration.VisibleFields.PageInfo
+		raw.Configuration.VisibleFields.Nodes = append(raw.Configuration.VisibleFields.Nodes, page.Nodes...)
+		raw.Configuration.VisibleFields.PageInfo = page.PageInfo
 		after = nextAfter
 	}
 	after = ""
@@ -218,12 +238,12 @@ func (c *Client) OpenView(ctx context.Context, owner Owner, projectNumber, viewN
 		if cursorErr != nil {
 			return View{}, cursorErr
 		}
-		next, fetchErr := c.fetchView(ctx, owner, projectNumber, viewNumber, viewCursors{Groups: nextAfter})
+		page, fetchErr := c.fetchViewGroupsPage(ctx, owner, projectNumber, viewNumber, nextAfter)
 		if fetchErr != nil {
 			return View{}, fetchErr
 		}
-		raw.GroupByFields.Nodes = append(raw.GroupByFields.Nodes, next.View.GroupByFields.Nodes...)
-		raw.GroupByFields.PageInfo = next.View.GroupByFields.PageInfo
+		raw.GroupByFields.Nodes = append(raw.GroupByFields.Nodes, page.Nodes...)
+		raw.GroupByFields.PageInfo = page.PageInfo
 		after = nextAfter
 	}
 	after = ""
@@ -232,12 +252,12 @@ func (c *Client) OpenView(ctx context.Context, owner Owner, projectNumber, viewN
 		if cursorErr != nil {
 			return View{}, cursorErr
 		}
-		next, fetchErr := c.fetchView(ctx, owner, projectNumber, viewNumber, viewCursors{VerticalGroups: nextAfter})
+		page, fetchErr := c.fetchViewVerticalGroupsPage(ctx, owner, projectNumber, viewNumber, nextAfter)
 		if fetchErr != nil {
 			return View{}, fetchErr
 		}
-		raw.VerticalGroupBy.Nodes = append(raw.VerticalGroupBy.Nodes, next.View.VerticalGroupBy.Nodes...)
-		raw.VerticalGroupBy.PageInfo = next.View.VerticalGroupBy.PageInfo
+		raw.VerticalGroupBy.Nodes = append(raw.VerticalGroupBy.Nodes, page.Nodes...)
+		raw.VerticalGroupBy.PageInfo = page.PageInfo
 		after = nextAfter
 	}
 	after = ""
@@ -246,12 +266,12 @@ func (c *Client) OpenView(ctx context.Context, owner Owner, projectNumber, viewN
 		if cursorErr != nil {
 			return View{}, cursorErr
 		}
-		next, fetchErr := c.fetchView(ctx, owner, projectNumber, viewNumber, viewCursors{Sorts: nextAfter})
+		page, fetchErr := c.fetchViewSortsPage(ctx, owner, projectNumber, viewNumber, nextAfter)
 		if fetchErr != nil {
 			return View{}, fetchErr
 		}
-		raw.SortByFields.Nodes = append(raw.SortByFields.Nodes, next.View.SortByFields.Nodes...)
-		raw.SortByFields.PageInfo = next.View.SortByFields.PageInfo
+		raw.SortByFields.Nodes = append(raw.SortByFields.Nodes, page.Nodes...)
+		raw.SortByFields.PageInfo = page.PageInfo
 		after = nextAfter
 	}
 
@@ -309,6 +329,102 @@ func (c *Client) fetchView(ctx context.Context, owner Owner, projectNumber, view
 		return nil, fmt.Errorf("view %d in project %d for %s %q was not found", viewNumber, projectNumber, owner.Kind, owner.Login)
 	}
 	return project, nil
+}
+
+type viewFieldsPageResponse struct {
+	User         *viewFieldsPageOwner `json:"user"`
+	Organization *viewFieldsPageOwner `json:"organization"`
+}
+
+type viewFieldsPageOwner struct {
+	Project *viewFieldsPageProject `json:"projectV2"`
+}
+
+type viewFieldsPageProject struct {
+	View *viewFieldsPageView `json:"view"`
+}
+
+type viewFieldsPageView struct {
+	Configuration         *viewFieldsPageConfig `json:"configuration"`
+	GroupByFields         *fieldConnection      `json:"groupByFields"`
+	VerticalGroupByFields *fieldConnection      `json:"verticalGroupByFields"`
+	SortByFields          *sortConnection       `json:"sortByFields"`
+}
+
+type viewFieldsPageConfig struct {
+	VisibleFields *fieldConnection `json:"visibleFields"`
+}
+
+func (c *Client) fetchViewPage(ctx context.Context, owner Owner, projectNumber, viewNumber int, selection, after string) (viewFieldsPageView, error) {
+	branch := "organization"
+	if owner.Kind == UserOwner {
+		branch = "user"
+	} else if owner.Kind != OrganizationOwner {
+		return viewFieldsPageView{}, fmt.Errorf("unsupported owner kind %q", owner.Kind)
+	}
+	query := `query ViewConnectionPage($login: String!, $project: Int!, $view: Int!, $after: String) { ` + branch + `(login: $login) { projectV2(number: $project) { view(number: $view) { ` + selection + ` } } } }` + fieldConfigurationFragment
+	var response viewFieldsPageResponse
+	variables := map[string]interface{}{
+		"login":   owner.Login,
+		"project": projectNumber,
+		"view":    viewNumber,
+		"after":   nullableCursor(after),
+	}
+	if err := c.graphql.DoWithContext(ctx, query, variables, &response); err != nil {
+		return viewFieldsPageView{}, err
+	}
+	ownerResp := response.Organization
+	if owner.Kind == UserOwner {
+		ownerResp = response.User
+	}
+	if ownerResp == nil || ownerResp.Project == nil || ownerResp.Project.View == nil {
+		return viewFieldsPageView{}, fmt.Errorf("view %d in project %d for %s %q was not found", viewNumber, projectNumber, owner.Kind, owner.Login)
+	}
+	return *ownerResp.Project.View, nil
+}
+
+func (c *Client) fetchViewFieldsPage(ctx context.Context, owner Owner, projectNumber, viewNumber int, after string) (fieldConnection, error) {
+	view, err := c.fetchViewPage(ctx, owner, projectNumber, viewNumber, `configuration { visibleFields(first: 100, after: $after) { nodes { ...FieldConfiguration } pageInfo { hasNextPage endCursor } } }`, after)
+	if err != nil {
+		return fieldConnection{}, err
+	}
+	if view.Configuration == nil || view.Configuration.VisibleFields == nil {
+		return fieldConnection{}, fmt.Errorf("visible fields were not returned")
+	}
+	return *view.Configuration.VisibleFields, nil
+}
+
+func (c *Client) fetchViewGroupsPage(ctx context.Context, owner Owner, projectNumber, viewNumber int, after string) (fieldConnection, error) {
+	view, err := c.fetchViewPage(ctx, owner, projectNumber, viewNumber, `groupByFields(first: 100, after: $after) { nodes { ...FieldConfiguration } pageInfo { hasNextPage endCursor } }`, after)
+	if err != nil {
+		return fieldConnection{}, err
+	}
+	if view.GroupByFields == nil {
+		return fieldConnection{}, fmt.Errorf("group-by fields were not returned")
+	}
+	return *view.GroupByFields, nil
+}
+
+func (c *Client) fetchViewVerticalGroupsPage(ctx context.Context, owner Owner, projectNumber, viewNumber int, after string) (fieldConnection, error) {
+	view, err := c.fetchViewPage(ctx, owner, projectNumber, viewNumber, `verticalGroupByFields(first: 100, after: $after) { nodes { ...FieldConfiguration } pageInfo { hasNextPage endCursor } }`, after)
+	if err != nil {
+		return fieldConnection{}, err
+	}
+	if view.VerticalGroupByFields == nil {
+		return fieldConnection{}, fmt.Errorf("vertical group-by fields were not returned")
+	}
+	return *view.VerticalGroupByFields, nil
+}
+
+func (c *Client) fetchViewSortsPage(ctx context.Context, owner Owner, projectNumber, viewNumber int, after string) (sortConnection, error) {
+	view, err := c.fetchViewPage(ctx, owner, projectNumber, viewNumber, `sortByFields(first: 100, after: $after) { nodes { direction field { ...FieldConfiguration } } pageInfo { hasNextPage endCursor } }`, after)
+	if err != nil {
+		return sortConnection{}, err
+	}
+	if view.SortByFields == nil {
+		return sortConnection{}, fmt.Errorf("sort fields were not returned")
+	}
+	return *view.SortByFields, nil
 }
 
 func (c fieldConnection) project() []Field {

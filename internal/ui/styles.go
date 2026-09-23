@@ -3,8 +3,10 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
 
 var (
@@ -123,7 +125,20 @@ func (m Model) renderHeader() string {
 			modeStyle = statusPillStyle
 		}
 	}
+	if source, ok := m.source.(interface{ APIStatus() github.APIStatus }); ok {
+		status := source.APIStatus()
+		if remaining := time.Until(status.Cooldown); remaining > 0 {
+			mode = fmt.Sprintf("API COOLDOWN %ds", int(remaining.Seconds())+1)
+		} else if status.Remaining >= 0 {
+			mode += fmt.Sprintf(" · API %d left", status.Remaining)
+		}
+	}
 	modeBadge := modeStyle.Render(mode)
+	if source, ok := m.source.(interface{ CachedReadAt() time.Time }); ok {
+		if at := source.CachedReadAt(); !at.IsZero() && time.Since(at) < 30*time.Second {
+			modeBadge += mutedStyle.Render(fmt.Sprintf(" · cached %ds · r refresh", int(time.Since(at).Seconds())))
+		}
+	}
 	top := lipgloss.JoinHorizontal(
 		lipgloss.Center,
 		brandStyle.Render("gh projects-tui"),
@@ -165,6 +180,9 @@ func (m Model) renderScreen() string {
 	body := content.String()
 	if m.showHelp {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, helpStyle.Width(m.frameContentWidth()-2).Render(m.helpText()))
+	}
+	if m.showAPI {
+		body = lipgloss.JoinVertical(lipgloss.Left, body, helpStyle.Width(m.frameContentWidth()-2).Render(m.apiInspector()))
 	}
 	return bodyFrameStyle.Width(m.frameContentWidth()).Render(body)
 }

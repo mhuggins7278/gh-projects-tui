@@ -3,6 +3,8 @@ package ui
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +22,10 @@ type DirectOwnerSource interface {
 	ResolveOwner(context.Context, string) (github.Owner, []github.Project, error)
 }
 
+type OwnerProjectsSource interface {
+	OwnerProjects(context.Context, github.Owner) ([]github.Project, error)
+}
+
 type ViewSource interface {
 	OpenView(context.Context, github.Owner, int, int) (github.View, error)
 }
@@ -30,6 +36,10 @@ type ViewsSource interface {
 
 type ItemsSource interface {
 	PageItems(context.Context, github.Owner, int, string, string) (github.ItemsPage, error)
+}
+
+type BoardItemsSource interface {
+	PageBoardItems(context.Context, github.Owner, int, string, string, []github.Field) (github.ItemsPage, error)
 }
 
 type ItemDetailSource interface {
@@ -78,11 +88,15 @@ type Model struct {
 	filter               string
 	filtering            bool
 	showHelp             bool
+	showAPI              bool
 	selectedOwner        *github.Owner
 	selectedProject      *github.Project
+	projectsLoading      bool
+	projectsErr          error
 	views                []github.ViewSummary
 	viewsErr             error
 	loadingViews         bool
+	viewsCache           map[string]viewsCacheEntry
 	boardViewReasons     map[int]string
 	pendingRejectedBoard *github.View
 	viewPickerNotice     string
@@ -144,6 +158,15 @@ func NewModelWithHost(source DiscoverySource, selection Selection, host string) 
 }
 
 func (m Model) Init() tea.Cmd {
+	if _, ok := m.source.(interface{ APIStatus() github.APIStatus }); ok {
+		var load tea.Cmd
+		if m.selection.OwnerLogin != "" {
+			load = resolveSelection(m.source, m.ctx, m.selection, m.generation)
+		} else {
+			load = discover(m.source, m.ctx, m.generation)
+		}
+		return tea.Batch(load, apiStatusTick())
+	}
 	if m.selection.OwnerLogin != "" {
 		return resolveSelection(m.source, m.ctx, m.selection, m.generation)
 	}
@@ -152,6 +175,8 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case apiStatusTickMsg:
+		return m, apiStatusTick()
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
 	case tea.WindowSizeMsg:
@@ -166,6 +191,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, itemsLoadingTick(m.generation)
 	case discoveryMsg:
 		return m.updateDiscovery(msg)
+	case ownerProjectsMsg:
+		if msg.generation != m.generation {
+			return m, nil
+		}
+		if m.selectedOwner == nil || m.selectedOwner.Login != msg.owner.Login {
+			return m, nil
+		}
+		m.projectsLoading = false
+		m.projectsErr = msg.err
+		if msg.err == nil {
+			if m.discovery.Projects == nil {
+				m.discovery.Projects = map[string][]github.Project{}
+			}
+			m.discovery.Projects[msg.owner.Login] = msg.projects
+			m.cursor = 0
+		}
+		return m, nil
 	case viewsMsg:
 		if msg.generation != m.generation {
 			return m, nil
@@ -177,6 +219,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 			m.status = fmt.Sprintf("View list failed: %v", msg.err)
 			return m, nil
+		}
+		if m.selectedOwner != nil && m.selectedProject != nil {
+			m.storeViews(*m.selectedOwner, m.selectedProject.Number, msg.views)
 		}
 		m.err = nil
 		m.status = ""
@@ -252,8 +297,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateBoardMutation(msg)
 	case mutationReadbackMsg:
 		return m.updateMutationReadback(msg)
+	case mutationSettleMsg:
+		return m.updateMutationSettle(msg)
 	}
 	return m, nil
+}
+
+type apiStatusTickMsg struct{}
+
+func apiStatusTick() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return apiStatusTickMsg{} })
 }
 
 func (m Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
@@ -299,7 +352,11 @@ func (m Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 		if m.selection.ProjectNumber == 0 {
 			m.screen = screenProjectPicker
 			m.cursor = 0
-			return m, nil
+			m.projectsErr = nil
+			if m.ownerProjectsLoaded(*owner) {
+				return m, nil
+			}
+			return m, m.startOwnerProjectsLoad()
 		}
 		if project := findProject(m.discovery, owner.Login, m.selection.ProjectNumber); project != nil {
 			m.selectedProject = project
@@ -307,7 +364,12 @@ func (m Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		m.screen = screenProjectPicker
-		return m, nil
+		m.cursor = 0
+		m.projectsErr = nil
+		if m.ownerProjectsLoaded(*owner) {
+			return m, nil
+		}
+		return m, m.startOwnerProjectsLoad()
 	}
 	m.screen = screenOwnerPicker
 	m.cursor = 0
@@ -367,6 +429,37 @@ func (m *Model) rejectView(view github.View, compatibility viewCompatibility) {
 		}
 	}
 	m.views = []github.ViewSummary{{Number: view.Number, Name: view.Name, Layout: view.Layout}}
+}
+
+func (m *Model) ownerProjectsLoaded(owner github.Owner) bool {
+	if _, ok := m.source.(OwnerProjectsSource); !ok {
+		return true
+	}
+	projects, ok := m.discovery.Projects[owner.Login]
+	return ok && projects != nil
+}
+
+func (m *Model) startOwnerProjectsLoad() tea.Cmd {
+	if m.selectedOwner == nil {
+		return nil
+	}
+	owner := *m.selectedOwner
+	generation := m.generation
+	ctx := m.ctx
+	source := m.source
+	m.projectsLoading = true
+	m.projectsErr = nil
+	return func() tea.Msg {
+		loader, ok := source.(OwnerProjectsSource)
+		if !ok {
+			return ownerProjectsMsg{owner: owner, generation: generation}
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		projects, err := loader.OwnerProjects(ctx, owner)
+		return ownerProjectsMsg{owner: owner, projects: projects, err: err, generation: generation}
+	}
 }
 
 func (m *Model) startViewsLoad() tea.Cmd {
@@ -481,19 +574,7 @@ func (m *Model) startItemsLoadWithSpinner() tea.Cmd {
 	if load == nil {
 		return nil
 	}
-	commands := []tea.Cmd{itemsLoadingTick(m.generation)}
-	if requests, ok := parallelLaneItemsRequests(m.view); ok {
-		m.itemsLanePending = len(requests)
-		m.itemsLoadingLanes = make(map[string]bool, len(requests))
-		m.itemsFailedLanes = make(map[string]bool)
-		for _, request := range requests {
-			m.itemsLoadingLanes[request.key] = true
-			commands = append(commands, m.laneItemsCmd(request))
-		}
-	} else {
-		commands = append(commands, load)
-	}
-	return tea.Batch(commands...)
+	return tea.Batch(itemsLoadingTick(m.generation), load)
 }
 
 func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
@@ -503,6 +584,7 @@ func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
 	owner := *m.selectedOwner
 	project := m.selectedProject.Number
 	filter := strings.TrimSpace(m.view.Filter)
+	fields := boardReadFields(*m.view)
 	generation := m.generation
 	ctx := m.ctx
 	source := m.source
@@ -514,9 +596,25 @@ func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		page, err := loader.PageItems(ctx, owner, project, filter, after)
+		var page github.ItemsPage
+		var err error
+		if selective, ok := source.(BoardItemsSource); ok {
+			page, err = selective.PageBoardItems(ctx, owner, project, filter, after, fields)
+		} else {
+			page, err = loader.PageItems(ctx, owner, project, filter, after)
+		}
 		return itemsPageMsg{page: page, after: after, reset: reset, err: err, generation: generation}
 	}
+}
+
+func boardReadFields(view github.View) []github.Field {
+	fields := append([]github.Field(nil), view.Fields...)
+	fields = append(fields, view.GroupByFields...)
+	fields = append(fields, view.VerticalGroupBy...)
+	for _, sort := range view.SortByFields {
+		fields = append(fields, sort.Field)
+	}
+	return fields
 }
 
 func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
@@ -552,6 +650,10 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 func (m *Model) laneItemsCmd(request laneItemsRequest) tea.Cmd {
 	owner := *m.selectedOwner
 	project := m.selectedProject.Number
+	fields := []github.Field{}
+	if m.view != nil {
+		fields = boardReadFields(*m.view)
+	}
 	generation := m.generation
 	ctx := m.ctx
 	source := m.source
@@ -563,10 +665,17 @@ func (m *Model) laneItemsCmd(request laneItemsRequest) tea.Cmd {
 		if ctx == nil {
 			ctx = context.Background()
 		}
+		selective, _ := source.(BoardItemsSource)
 		items := make([]github.Item, 0)
 		after := ""
 		for {
-			page, err := loader.PageItems(ctx, owner, project, request.filter, after)
+			var page github.ItemsPage
+			var err error
+			if selective != nil {
+				page, err = selective.PageBoardItems(ctx, owner, project, request.filter, after, fields)
+			} else {
+				page, err = loader.PageItems(ctx, owner, project, request.filter, after)
+			}
 			if err != nil {
 				return laneItemsMsg{request: request, items: items, err: err, generation: generation}
 			}
@@ -749,6 +858,11 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		if !m.filtering {
 			m.showHelp = !m.showHelp
+			return m, nil
+		}
+	case "A":
+		if !m.filtering {
+			m.showAPI = !m.showAPI
 			return m, nil
 		}
 	}
@@ -1000,14 +1114,37 @@ func (m *Model) selectCurrent() tea.Cmd {
 		m.screen = screenProjectPicker
 		m.cursor = 0
 		m.filter = ""
-		return nil
+		m.projectsErr = nil
+		if m.ownerProjectsLoaded(selected) {
+			return nil
+		}
+		return m.startOwnerProjectsLoad()
 	case screenProjectPicker:
+		if m.projectsLoading || m.selectedOwner == nil {
+			return nil
+		}
+		if m.projectsErr != nil {
+			return nil
+		}
 		projects := m.filteredProjects()
-		if len(projects) == 0 || m.selectedOwner == nil {
+		if len(projects) == 0 {
 			return nil
 		}
 		selected := projects[m.cursor]
 		m.selectedProject = &selected
+		if cached, ok := m.cachedViews(*m.selectedOwner, selected.Number); ok {
+			m.views = cached
+			m.viewsErr = nil
+			m.loadingViews = false
+			m.err = nil
+			m.status = ""
+			m.screen = screenViewPicker
+			m.cursor = 0
+			m.filter = ""
+			m.filtering = false
+			m.boardViewReasons = make(map[int]string)
+			return nil
+		}
 		return m.loadViewsCmdFunc()
 	case screenViewPicker:
 		views := m.filteredViews()
@@ -1033,6 +1170,13 @@ func (m *Model) selectCurrent() tea.Cmd {
 }
 
 func (m *Model) refresh() tea.Cmd {
+	// Repeated refresh keys join the current UI read rather than restarting it.
+	if m.itemsLoading || m.loadingDetail || m.loadingViews || m.projectsLoading {
+		return nil
+	}
+	if source, ok := m.source.(interface{ InvalidateReads() }); ok {
+		source.InvalidateReads()
+	}
 	if m.cancel != nil {
 		m.cancel()
 	}
@@ -1045,10 +1189,19 @@ func (m *Model) refresh() tea.Cmd {
 	m.loading = m.screen == screenLoading
 	m.err = nil
 	m.viewsErr = nil
+	m.projectsErr = nil
 	m.status = ""
 	switch m.screen {
+	case screenProjectPicker:
+		if m.selectedOwner != nil {
+			if _, ok := m.source.(OwnerProjectsSource); ok {
+				return m.startOwnerProjectsLoad()
+			}
+		}
+		return nil
 	case screenViewPicker:
 		if m.selectedOwner != nil && m.selectedProject != nil {
+			delete(m.viewsCache, viewsCacheKey(*m.selectedOwner, m.selectedProject.Number))
 			m.loadingViews = true
 			owner := *m.selectedOwner
 			project := m.selectedProject.Number
@@ -1072,9 +1225,7 @@ func (m *Model) refresh() tea.Cmd {
 		return discover(m.source, m.ctx, m.generation)
 	case screenBoard:
 		if m.view != nil && m.selectedOwner != nil && m.selectedProject != nil {
-			m.loadingDetail = true
-			owner := *m.selectedOwner
-			return m.openViewCmd(owner, m.selectedProject.Number, m.view.Number)
+			return m.startItemsLoadWithSpinner()
 		}
 		m.loading = true
 		m.screen = screenLoading
@@ -1125,6 +1276,9 @@ func (m Model) currentListLen() int {
 	case screenOwnerPicker:
 		return len(m.filteredOwners())
 	case screenProjectPicker:
+		if m.projectsLoading || m.projectsErr != nil {
+			return 0
+		}
 		return len(m.filteredProjects())
 	case screenViewPicker:
 		return len(m.filteredViews())
@@ -1217,7 +1371,11 @@ func (m Model) renderOwnerPicker(b *strings.Builder) {
 		b.WriteString(mutedStyle.Render("No matching owners.") + "\n")
 	} else {
 		for i, owner := range owners {
-			label := fmt.Sprintf("%-24s %d projects", owner.Login, len(m.discovery.Projects[owner.Login]))
+			count, ok := m.discovery.Projects[owner.Login]
+			label := fmt.Sprintf("%-24s %d projects", owner.Login, len(count))
+			if !ok || count == nil {
+				label = fmt.Sprintf("%-24s … projects", owner.Login)
+			}
 			b.WriteString(m.pickerRow(i == m.cursor, label) + "\n")
 		}
 	}
@@ -1234,6 +1392,15 @@ func (m Model) renderProjectPicker(b *strings.Builder) {
 	}
 	b.WriteString(m.pickerHeading("Projects", "for "+m.selectedOwner.Login))
 	b.WriteString("\n")
+	if m.projectsLoading {
+		b.WriteString(sectionStyle.Render(fmt.Sprintf("Loading projects for %s...", m.selectedOwner.Login)) + "\n")
+		return
+	}
+	if m.projectsErr != nil {
+		b.WriteString(errorStyle.Render("Project list failed: "+m.projectsErr.Error()) + "\n")
+		b.WriteString(mutedStyle.Render("Press r to retry, esc to go back.") + "\n")
+		return
+	}
 	b.WriteString(m.filterLine())
 	projects := m.filteredProjects()
 	if len(projects) == 0 {
@@ -1315,13 +1482,13 @@ func (m Model) footerHints() string {
 	}
 	switch m.screen {
 	case screenOwnerPicker:
-		return "j/k move · enter select · / filter · r refresh · ? help · q quit"
+		return "j/k move · enter select · / filter · r refresh · ? help · A api · q quit"
 	case screenProjectPicker:
-		return "j/k move · enter select · / filter · esc owners · r refresh · ? help · q quit"
+		return "j/k move · enter select · / filter · esc owners · r refresh · ? help · A api · q quit"
 	case screenViewPicker:
-		return "j/k move · enter open · / filter · esc projects · p projects · r refresh · ? help · q quit"
+		return "j/k move · enter open · / filter · esc projects · p projects · r refresh · ? help · A api · q quit"
 	case screenBoard:
-		return "h/l lanes · j/k cards · H/L move · J/K reorder · / search · v views · p projects · r refresh · o browser · ? help · q quit"
+		return "h/l lanes · j/k cards · H/L move · J/K reorder · / search · v views · p projects · r refresh · o browser · ? help · A api · q quit"
 	default:
 		return "Loading... q to quit"
 	}
@@ -1330,10 +1497,73 @@ func (m Model) footerHints() string {
 func (m Model) helpText() string {
 	return "Keys: j/k or up/down move · enter select · / filter/search (enter done, esc clear) ·\n" +
 		"esc/backspace back · p projects · v reload views · r refresh · o browser URL ·\n" +
-		"? toggle help · q quit.\n" +
+		"? toggle help · A api inspector · q quit.\n" +
 		"On the board, h/l changes lanes, j/k changes cards, / searches loaded cards, and enter opens detail.\n" +
 		"H/L moves cards and J/K reorders cards when the view is writable and fully loaded.\n" +
 		"In detail, j/k scrolls, f toggles all project fields, and esc returns to the board."
+}
+
+func (m Model) apiInspector() string {
+	source, ok := m.source.(interface{ APIStatus() github.APIStatus })
+	if !ok {
+		return "API inspector: request telemetry is unavailable for this client."
+	}
+	status := source.APIStatus()
+	var breakdown map[string]int
+	if ledger, ok := m.source.(interface{ Ledger() map[string]int }); ok {
+		breakdown = ledger.Ledger()
+	} else {
+		breakdown = status.Breakdown
+	}
+	lines := []string{fmt.Sprintf("API requests this run: %d", status.Requests)}
+	if status.Remaining >= 0 {
+		lines[0] += fmt.Sprintf(" · %d points left", status.Remaining)
+	}
+	if !status.Reset.IsZero() {
+		lines[0] += fmt.Sprintf(" · resets %s", status.Reset.Local().Format("15:04:05"))
+	}
+	if remaining := time.Until(status.Cooldown); remaining > 0 {
+		lines = append(lines, fmt.Sprintf("cooldown: retry in %ds", int(remaining.Seconds())+1))
+	}
+	if status.Operation != "" {
+		line := "last: " + status.Operation
+		if status.Duration > 0 {
+			line += fmt.Sprintf(" (%s)", status.Duration.Round(time.Millisecond))
+		}
+		if status.RequestID != "" {
+			line += " · req " + status.RequestID
+		}
+		lines = append(lines, line)
+	}
+	if len(breakdown) == 0 {
+		lines = append(lines, "no GraphQL/REST requests recorded yet")
+		return "API inspector (A closes, fingerprints only — no titles or bodies):\n" + strings.Join(lines, "\n")
+	}
+	names := make([]string, 0, len(breakdown))
+	for name := range breakdown {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if breakdown[names[i]] == breakdown[names[j]] {
+			return names[i] < names[j]
+		}
+		return breakdown[names[i]] > breakdown[names[j]]
+	})
+	lines = append(lines, "by operation:")
+	for _, name := range names {
+		lines = append(lines, fmt.Sprintf("  %4d  %s", breakdown[name], name))
+	}
+	if len(status.Recent) > 0 {
+		recent := append([]string(nil), status.Recent...)
+		for i, j := 0, len(recent)-1; i < j; i, j = i+1, j-1 {
+			recent[i], recent[j] = recent[j], recent[i]
+		}
+		if len(recent) > 10 {
+			recent = recent[:10]
+		}
+		lines = append(lines, "recent: "+strings.Join(recent, " → "))
+	}
+	return "API inspector (A closes, fingerprints only — no titles or bodies):\n" + strings.Join(lines, "\n")
 }
 
 type discoveryMsg struct {
@@ -1341,6 +1571,43 @@ type discoveryMsg struct {
 	view       *github.View
 	err        error
 	generation uint64
+}
+
+type ownerProjectsMsg struct {
+	owner      github.Owner
+	projects   []github.Project
+	err        error
+	generation uint64
+}
+
+type viewsCacheEntry struct {
+	views []github.ViewSummary
+	at    time.Time
+}
+
+func viewsCacheKey(owner github.Owner, projectNumber int) string {
+	return string(owner.Kind) + "/" + strings.ToLower(owner.Login) + "/" + strconv.Itoa(projectNumber)
+}
+
+func (m *Model) cachedViews(owner github.Owner, projectNumber int) ([]github.ViewSummary, bool) {
+	if m.viewsCache == nil {
+		return nil, false
+	}
+	entry, ok := m.viewsCache[viewsCacheKey(owner, projectNumber)]
+	if !ok || time.Since(entry.at) > 5*time.Minute {
+		return nil, false
+	}
+	return append([]github.ViewSummary(nil), entry.views...), true
+}
+
+func (m *Model) storeViews(owner github.Owner, projectNumber int, views []github.ViewSummary) {
+	if m.viewsCache == nil {
+		m.viewsCache = map[string]viewsCacheEntry{}
+	}
+	if len(m.viewsCache) >= 32 {
+		m.viewsCache = map[string]viewsCacheEntry{}
+	}
+	m.viewsCache[viewsCacheKey(owner, projectNumber)] = viewsCacheEntry{views: append([]github.ViewSummary(nil), views...), at: time.Now()}
 }
 
 type viewsMsg struct {

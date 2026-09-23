@@ -3,25 +3,26 @@ package github
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 const itemDetailFields = `
 fragment ItemDetailFields on ProjectV2Item {
   id
-  content {
+  content @include(if: $includeBody) {
     __typename
     ... on Issue { id number title url body }
     ... on PullRequest { id number title url body }
     ... on DraftIssue { id title body }
   }
-  fieldValues(first: 100, after: $valuesAfter) { ...DetailFieldValuesPage }
+  fieldValues(first: 100, after: $valuesAfter) @include(if: $includeValues) { ...DetailFieldValuesPage }
 }`
 
 const userItemDetailQuery = `
-query UserProjectItemDetail($login: String!, $project: Int!, $itemID: ID!, $fieldsAfter: String, $valuesAfter: String) {
+query UserProjectItemDetail($login: String!, $project: Int!, $itemID: ID!, $fieldsAfter: String, $valuesAfter: String, $includeFields: Boolean!, $includeBody: Boolean!, $includeValues: Boolean!) {
   user(login: $login) {
     projectV2(number: $project) {
-      fields(first: 100, after: $fieldsAfter) {
+      fields(first: 100, after: $fieldsAfter) @include(if: $includeFields) {
         nodes { ...FieldConfiguration }
         pageInfo { hasNextPage endCursor }
       }
@@ -31,10 +32,10 @@ query UserProjectItemDetail($login: String!, $project: Int!, $itemID: ID!, $fiel
 }` + itemDetailFields + fieldValueFragment + itemDetailFieldValueFragments + fieldConfigurationFragment
 
 const organizationItemDetailQuery = `
-query OrganizationProjectItemDetail($login: String!, $project: Int!, $itemID: ID!, $fieldsAfter: String, $valuesAfter: String) {
+query OrganizationProjectItemDetail($login: String!, $project: Int!, $itemID: ID!, $fieldsAfter: String, $valuesAfter: String, $includeFields: Boolean!, $includeBody: Boolean!, $includeValues: Boolean!) {
   organization(login: $login) {
     projectV2(number: $project) {
-      fields(first: 100, after: $fieldsAfter) {
+      fields(first: 100, after: $fieldsAfter) @include(if: $includeFields) {
         nodes { ...FieldConfiguration }
         pageInfo { hasNextPage endCursor }
       }
@@ -118,7 +119,15 @@ type itemDetailPage struct {
 // field values, and accessible issue/PR/draft body. Definitions and values
 // are paginated independently because either connection may exceed one page.
 func (c *Client) LoadItemDetail(ctx context.Context, owner Owner, projectNumber int, itemID string) (ItemDetail, error) {
-	page, err := c.fetchItemDetailPage(ctx, owner, projectNumber, itemID, "", "")
+	key := fmt.Sprintf("%s/%s/%d", owner.Kind, owner.Login, projectNumber)
+	var cached *definitionCacheEntry
+	if value, ok := c.definitions.Load(key); ok {
+		entry := value.(definitionCacheEntry)
+		if time.Since(entry.at) < 30*time.Second {
+			cached = &entry
+		}
+	}
+	page, err := c.fetchItemDetailPage(ctx, owner, projectNumber, itemID, "", "", cached == nil)
 	if err != nil {
 		return ItemDetail{}, err
 	}
@@ -126,6 +135,9 @@ func (c *Client) LoadItemDetail(ctx context.Context, owner Owner, projectNumber 
 		return ItemDetail{}, fmt.Errorf("project item %q was not found or is inaccessible", itemID)
 	}
 	detail := ItemDetail{ID: page.Item.ID, Content: projectContent(page.Item.Content)}
+	if cached != nil {
+		page.ProjectFields = fieldConnection{Nodes: cached.fields}
+	}
 
 	fields := append([]*rawField(nil), page.ProjectFields.Nodes...)
 	values := append([]*rawFieldValue(nil), page.Item.FieldValues.Nodes...)
@@ -135,13 +147,22 @@ func (c *Client) LoadItemDetail(ctx context.Context, owner Owner, projectNumber 
 		if cursorErr != nil {
 			return ItemDetail{}, cursorErr
 		}
-		nextPage, fetchErr := c.fetchItemDetailPage(ctx, owner, projectNumber, itemID, next, "")
+		nextPage, fetchErr := c.fetchItemDetailPage(ctx, owner, projectNumber, itemID, next, "", true)
 		if fetchErr != nil {
 			return ItemDetail{}, fetchErr
 		}
 		fields = append(fields, nextPage.ProjectFields.Nodes...)
 		page.ProjectFields = nextPage.ProjectFields
 		fieldsAfter = next
+	}
+	if cached == nil {
+		// Bounded metadata cache, scoped to this authenticated client instance.
+		count := 0
+		c.definitions.Range(func(_, _ interface{}) bool { count++; return count < 64 })
+		if count >= 64 {
+			c.definitions.Clear()
+		}
+		c.definitions.Store(key, definitionCacheEntry{fields: fields, at: time.Now()})
 	}
 
 	valuesAfter := ""
@@ -150,7 +171,7 @@ func (c *Client) LoadItemDetail(ctx context.Context, owner Owner, projectNumber 
 		if cursorErr != nil {
 			return ItemDetail{}, cursorErr
 		}
-		nextPage, fetchErr := c.fetchItemDetailPage(ctx, owner, projectNumber, itemID, "", next)
+		nextPage, fetchErr := c.fetchItemDetailPage(ctx, owner, projectNumber, itemID, "", next, false)
 		if fetchErr != nil {
 			return ItemDetail{}, fetchErr
 		}
@@ -317,14 +338,22 @@ func appendNestedFieldValuePage(value, next *rawFieldValue, previous string) err
 	return nil
 }
 
-func (c *Client) fetchItemDetailPage(ctx context.Context, owner Owner, projectNumber int, itemID, fieldsAfter, valuesAfter string) (itemDetailPage, error) {
+type definitionCacheEntry struct {
+	fields []*rawField
+	at     time.Time
+}
+
+func (c *Client) fetchItemDetailPage(ctx context.Context, owner Owner, projectNumber int, itemID, fieldsAfter, valuesAfter string, includeFields bool) (itemDetailPage, error) {
 	var response itemDetailResponse
 	variables := map[string]interface{}{
-		"login":       owner.Login,
-		"project":     projectNumber,
-		"itemID":      itemID,
-		"fieldsAfter": nullableCursor(fieldsAfter),
-		"valuesAfter": nullableCursor(valuesAfter),
+		"login":         owner.Login,
+		"project":       projectNumber,
+		"itemID":        itemID,
+		"fieldsAfter":   nullableCursor(fieldsAfter),
+		"valuesAfter":   nullableCursor(valuesAfter),
+		"includeFields": includeFields,
+		"includeValues": fieldsAfter == "",
+		"includeBody":   fieldsAfter == "" && valuesAfter == "",
 	}
 	query := organizationItemDetailQuery
 	if owner.Kind == UserOwner {

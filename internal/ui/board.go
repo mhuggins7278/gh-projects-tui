@@ -465,20 +465,30 @@ func (m Model) boardMutationUnavailable() string {
 	if len(m.view.GroupByFields) > 1 || len(m.view.VerticalGroupBy) > 1 {
 		return "Mutations require one grouping field"
 	}
-	if len(m.view.GroupByFields) > 0 && len(m.view.VerticalGroupBy) > 0 {
-		return "Combined swimlane views are read-only"
-	}
-	field, grouped := mutationGroupingField(m.view)
-	if !grouped {
-		return "Mutations require one grouping field"
-	}
-	if !isSingleSelectField(field) && !isIterationField(field) {
-		return "This grouping field cannot be mutated yet"
+	if columnField, verticalField, combined := boardCombinedFields(m.view); combined {
+		if !writableMutationGroupingField(columnField) || !writableMutationGroupingField(verticalField) {
+			return "Combined swimlane moves require single-select or iteration fields on both axes"
+		}
+	} else {
+		field, grouped := mutationGroupingField(m.view)
+		if !grouped {
+			return "Mutations require one grouping field"
+		}
+		if !writableMutationGroupingField(field) {
+			return "This grouping field cannot be mutated yet"
+		}
 	}
 	if _, ok := m.source.(ItemMutationSource); !ok {
 		return "Mutations are unavailable for this client"
 	}
+	if _, ok := m.source.(ItemsSource); !ok {
+		return "Mutations require project readback, which is unavailable for this client"
+	}
 	return ""
+}
+
+func writableMutationGroupingField(field github.Field) bool {
+	return isSingleSelectField(field) || isIterationField(field)
 }
 
 func mutationGroupingField(view *github.View) (github.Field, bool) {
@@ -486,6 +496,9 @@ func mutationGroupingField(view *github.View) (github.Field, bool) {
 		return github.Field{}, false
 	}
 	if len(view.GroupByFields) == 1 && len(view.VerticalGroupBy) == 0 {
+		return view.GroupByFields[0], true
+	}
+	if len(view.GroupByFields) == 1 && len(view.VerticalGroupBy) == 1 {
 		return view.GroupByFields[0], true
 	}
 	if len(view.GroupByFields) == 0 && len(view.VerticalGroupBy) == 1 {
@@ -515,6 +528,44 @@ func fieldValueInputForLane(field github.Field, lane boardLane) (github.FieldVal
 	return github.FieldValueInput{}, false, fmt.Errorf("destination lane is not a writable value")
 }
 
+func adjacentBoardLaneIndex(lanes []boardLane, current, delta int, view *github.View) (int, bool) {
+	if current < 0 || current >= len(lanes) {
+		return 0, false
+	}
+	if _, _, combined := boardCombinedFields(view); !combined {
+		target := current + delta
+		return target, target >= 0 && target < len(lanes)
+	}
+	rowKey := lanes[current].RowKey
+	rowLanes := make([]int, 0)
+	currentColumn := -1
+	for laneIndex, lane := range lanes {
+		if lane.RowKey != rowKey {
+			continue
+		}
+		if laneIndex == current {
+			currentColumn = len(rowLanes)
+		}
+		rowLanes = append(rowLanes, laneIndex)
+	}
+	targetColumn := currentColumn + delta
+	if currentColumn < 0 || targetColumn < 0 || targetColumn >= len(rowLanes) {
+		return 0, false
+	}
+	return rowLanes[targetColumn], true
+}
+
+func laneColumnKey(lane boardLane, combined bool) string {
+	if !combined {
+		return lane.Key
+	}
+	_, columnKey, ok := strings.Cut(lane.Key, "\x00")
+	if !ok {
+		return lane.Key
+	}
+	return columnKey
+}
+
 func (m *Model) moveBoardLaneMutation(delta int) tea.Cmd {
 	if reason := m.boardMutationUnavailable(); reason != "" {
 		m.status = reason
@@ -525,8 +576,8 @@ func (m *Model) moveBoardLaneMutation(delta int) tea.Cmd {
 		m.status = "No card lane is selected"
 		return nil
 	}
-	targetLane := m.boardLane + delta
-	if targetLane < 0 || targetLane >= len(lanes) {
+	_, ok := adjacentBoardLaneIndex(lanes, m.boardLane, delta, m.view)
+	if !ok {
 		m.status = "No destination lane in that direction"
 		return nil
 	}
@@ -546,6 +597,10 @@ func (m *Model) moveBoardLaneMutation(delta int) tea.Cmd {
 func (m *Model) reorderBoardItem(delta int) tea.Cmd {
 	if reason := m.boardMutationUnavailable(); reason != "" {
 		m.status = reason
+		return nil
+	}
+	if _, _, combined := boardCombinedFields(m.view); combined {
+		m.status = "Manual reorder is disabled for combined swimlane views"
 		return nil
 	}
 	if !positionOnly(m.view) {
