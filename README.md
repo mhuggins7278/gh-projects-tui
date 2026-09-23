@@ -86,6 +86,8 @@ are the current way to run the unpublished app. After pulling updates, rerun
 - Progressive board loading, with parallel Status-lane loading where supported.
 - Single-select and iteration grouping, including combined columns/swimlanes.
 - Saved visible fields, supported field sorting, and local card search.
+- An explicit unfiltered Status fallback when a project has no compatible saved
+  board view; fallback card moves use the same permission and loading guards.
 - Read-only table rendering using saved fields.
 - Issue, pull request, and draft details, including Markdown bodies and project
   fields. Details are cached in memory until refresh or view changes.
@@ -127,9 +129,14 @@ values), and `esc` closes the panel.
 ## Pre-alpha limitations
 
 - Roadmap views are not supported.
-- Supported saved filters are currently no filter and `iteration:@current`.
-  Other saved filters and unsupported grouping/sorting semantics stay in the
-  picker with an explanation.
+- Supported saved filters are currently no filter, `iteration:@current`,
+  `status:"value"`, `no:status`, `-status:"value"`, `assignee:@me`, and
+  verified two-term conjunctions of Status with `assignee:@me`, negated Status
+  with `assignee:@me`, or `iteration:@current` with Status. Other expressions and unsupported
+  grouping/sorting semantics stay in the picker with an explanation.
+- If no compatible saved board exists, the picker offers an explicitly labeled,
+  unfiltered Status fallback. It is distinct from saved views and is remembered
+  as a fallback selection, not a saved view number.
 - Card mutations require a writable, fully loaded, unfiltered single-axis board
   grouped by single-select or iteration. Clear local search before moving cards.
 - Manual reordering requires project-position sorting. Combined-axis boards and

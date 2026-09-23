@@ -85,3 +85,24 @@ func TestConfigFilePermissions(t *testing.T) {
 		t.Fatalf("perm = %o", info.Mode().Perm())
 	}
 }
+
+func TestRememberedFallbackSelection(t *testing.T) {
+	withTempConfig(t)
+	want := Selection{Owner: "org", Project: 7, Fallback: true}
+	if err := Save("github.com", want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load("github.com")
+	if err != nil || got != want {
+		t.Fatalf("fallback selection = %#v, err = %v", got, err)
+	}
+	if got := Resolve(Selection{}, want); got != want {
+		t.Fatalf("remembered fallback = %#v", got)
+	}
+	if got := Resolve(Selection{Project: 8}, want); got != (Selection{Owner: "org", Project: 8}) {
+		t.Fatalf("project change retained fallback = %#v", got)
+	}
+	if got := Resolve(Selection{View: 3}, want); got != (Selection{Owner: "org", Project: 7, View: 3}) {
+		t.Fatalf("saved view selection retained fallback = %#v", got)
+	}
+}

@@ -30,8 +30,8 @@ func evaluateViewCompatibility(view github.View) viewCompatibility {
 		reasons = append(reasons, fmt.Sprintf("layout %q is not supported", view.Layout))
 	}
 
-	if filter := strings.TrimSpace(view.Filter); filter != "" && filter != "iteration:@current" {
-		reasons = append(reasons, fmt.Sprintf("saved filter %q has not been verified", filter))
+	if err := validateSavedFilter(view.Filter); err != nil {
+		reasons = append(reasons, fmt.Sprintf("saved filter %q is unsupported: %v", view.Filter, err))
 	}
 
 	if len(view.GroupByFields) > 1 {

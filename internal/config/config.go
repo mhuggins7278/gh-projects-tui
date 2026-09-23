@@ -10,9 +10,10 @@ import (
 // Selection holds non-sensitive identifiers only. Titles, bodies, field
 // values, and tokens must never be persisted here.
 type Selection struct {
-	Owner   string `json:"owner,omitempty"`
-	Project int    `json:"project,omitempty"`
-	View    int    `json:"view,omitempty"`
+	Owner    string `json:"owner,omitempty"`
+	Project  int    `json:"project,omitempty"`
+	View     int    `json:"view,omitempty"`
+	Fallback bool   `json:"fallback,omitempty"`
 }
 
 type fileShape struct {
@@ -110,11 +111,16 @@ func Save(host string, sel Selection) error {
 	if sel.Owner == "" {
 		sel.Project = 0
 		sel.View = 0
+		sel.Fallback = false
 	}
 	if sel.Project == 0 {
 		sel.View = 0
+		sel.Fallback = false
 	}
-	if sel.Owner == "" && sel.Project == 0 && sel.View == 0 {
+	if sel.View != 0 {
+		sel.Fallback = false
+	}
+	if sel.Owner == "" && sel.Project == 0 && sel.View == 0 && !sel.Fallback {
 		delete(shape.Hosts, host)
 	} else {
 		shape.Hosts[host] = sel
@@ -141,10 +147,12 @@ func Resolve(explicit, remembered Selection) Selection {
 
 	project := 0
 	view := 0
+	fallback := false
 	if ownerChanged {
 		// Ancestor changed: only explicit descendants survive.
 		project = explicit.Project
 		view = 0
+		fallback = false
 		if project != 0 {
 			view = explicit.View
 		}
@@ -156,20 +164,25 @@ func Resolve(explicit, remembered Selection) Selection {
 		projectChanged := explicit.Project != 0 && explicit.Project != remembered.Project
 		if projectChanged {
 			view = explicit.View
+			fallback = false
 		} else {
 			view = remembered.View
+			fallback = remembered.Fallback
 			if explicit.View != 0 {
 				view = explicit.View
+				fallback = false
 			}
 		}
 		// View requires a project; owner requires presence.
 		if project == 0 {
 			view = 0
+			fallback = false
 		}
 	}
 	if owner == "" {
 		project = 0
 		view = 0
+		fallback = false
 	}
-	return Selection{Owner: owner, Project: project, View: view}
+	return Selection{Owner: owner, Project: project, View: view, Fallback: fallback}
 }

@@ -222,6 +222,11 @@ func boardCombinedFields(view *github.View) (github.Field, github.Field, bool) {
 }
 
 func parallelLaneItemsRequests(view *github.View) ([]laneItemsRequest, bool) {
+	// Combining a saved filter with lane filters can produce query expressions
+	// outside the verified filter subset. Page the saved query unchanged instead.
+	if view == nil || strings.TrimSpace(view.Filter) != "" {
+		return nil, false
+	}
 	field, _, grouped := boardGroupField(view)
 	if !grouped || !strings.EqualFold(field.Name, "Status") || (field.Kind != "ProjectV2SingleSelectField" && field.DataType != "SINGLE_SELECT") {
 		return nil, false
@@ -231,13 +236,6 @@ func parallelLaneItemsRequests(view *github.View) ([]laneItemsRequest, bool) {
 	if len(field.Options) == 0 || len(field.Options)+2 > 8 {
 		return nil, false
 	}
-	base := strings.TrimSpace(view.Filter)
-	combine := func(filter string) string {
-		if base == "" {
-			return filter
-		}
-		return base + " " + filter
-	}
 	requests := make([]laneItemsRequest, 0, len(field.Options)+2)
 	otherFilters := make([]string, 0, len(field.Options)+1)
 	for _, option := range field.Options {
@@ -245,13 +243,13 @@ func parallelLaneItemsRequests(view *github.View) ([]laneItemsRequest, bool) {
 		requests = append(requests, laneItemsRequest{
 			key:    "option:" + option.ID,
 			name:   option.Name,
-			filter: combine(statusFilter),
+			filter: statusFilter,
 		})
 		otherFilters = append(otherFilters, "-"+statusFilter)
 	}
-	requests = append(requests, laneItemsRequest{key: "no-value", name: "No value", filter: combine("no:status")})
+	requests = append(requests, laneItemsRequest{key: "no-value", name: "No value", filter: "no:status"})
 	otherFilters = append(otherFilters, "-no:status")
-	requests = append(requests, laneItemsRequest{key: "other", name: "Other", filter: combine(strings.Join(otherFilters, " "))})
+	requests = append(requests, laneItemsRequest{key: "other", name: "Other", filter: strings.Join(otherFilters, " ")})
 	return requests, true
 }
 
@@ -433,6 +431,12 @@ func itemFieldValue(field github.Field, item github.Item) (github.FieldValue, bo
 func (m Model) boardMutationUnavailable() string {
 	if m.view == nil {
 		return "Mutations require a loaded board view"
+	}
+	if m.loadingDetail {
+		return "Wait for the view metadata to finish refreshing"
+	}
+	if m.view.Fallback && m.err != nil {
+		return "Status fallback metadata could not be refreshed; retry before moving cards"
 	}
 	if !m.view.ViewerCanUpdate {
 		return "This project is read-only"
@@ -818,7 +822,12 @@ func (m Model) renderBoardContent(b *strings.Builder) {
 		return
 	}
 
-	fmt.Fprintf(b, "%s  %s  %s\n", titleStyle.Render(m.view.Name), mutedStyle.Render(fmt.Sprintf("#%d", m.view.Number)), layoutBadge(string(m.view.Layout)))
+	if m.view.Fallback {
+		fmt.Fprintf(b, "%s  %s  %s\n", titleStyle.Render(m.view.Name), statusStyle.Render("FALLBACK · UNFILTERED"), layoutBadge(string(m.view.Layout)))
+		b.WriteString(statusStyle.Render("Unfiltered Status fallback; not a saved GitHub view.") + "\n")
+	} else {
+		fmt.Fprintf(b, "%s  %s  %s\n", titleStyle.Render(m.view.Name), mutedStyle.Render(fmt.Sprintf("#%d", m.view.Number)), layoutBadge(string(m.view.Layout)))
+	}
 	b.WriteString(mutedStyle.Render("Display note: collapsed-group state is not exposed by this API; groups follow saved field and option order.") + "\n")
 	if m.view.Filter != "" {
 		fmt.Fprintf(b, "%s %s\n", mutedStyle.Render("Filter:"), m.view.Filter)

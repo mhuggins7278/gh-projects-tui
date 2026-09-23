@@ -28,6 +28,10 @@ type ViewsSource interface {
 	ListViews(context.Context, github.Owner, int) ([]github.ViewSummary, error)
 }
 
+type StatusFallbackSource interface {
+	OpenStatusFallback(context.Context, github.Owner, int) (github.View, error)
+}
+
 type ItemsSource interface {
 	PageItems(context.Context, github.Owner, int, string, string) (github.ItemsPage, error)
 }
@@ -46,6 +50,7 @@ type Selection struct {
 	OwnerLogin    string
 	ProjectNumber int
 	ViewNumber    int
+	Fallback      bool
 }
 
 type screen int
@@ -83,6 +88,13 @@ type Model struct {
 	views              []github.ViewSummary
 	viewsErr           error
 	loadingViews       bool
+	checkingBoardViews bool
+	boardProbeErr      error
+	boardViewReasons   map[int]string
+	statusFallback     *github.View
+	restoreFallback    bool
+	viewPickerTouched  bool
+	viewPickerNotice   string
 	loadingDetail      bool
 	status             string
 	items              []github.Item
@@ -188,6 +200,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		m.filter = ""
 		m.filtering = false
+		m.checkingBoardViews = true
+		m.boardProbeErr = nil
+		m.boardViewReasons = nil
+		m.statusFallback = nil
 		// Preselect remembered view if present.
 		if remembered, err := m.remembered(); err == nil && remembered.View != 0 {
 			for i, v := range m.views {
@@ -197,7 +213,67 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		return m, m.probeBoardViewsCmd()
+	case boardCompatibilityMsg:
+		if msg.generation != m.generation || m.screen != screenViewPicker {
+			return m, nil
+		}
+		m.checkingBoardViews = false
+		m.boardProbeErr = msg.err
+		m.boardViewReasons = msg.reasons
+		m.statusFallback = msg.fallback
+		if msg.err != nil {
+			m.status = "Could not verify board compatibility; refresh to retry."
+		} else if msg.fallbackErr != nil {
+			m.status = fmt.Sprintf("Status fallback unavailable: %v", msg.fallbackErr)
+		}
+		if m.restoreFallback && !m.viewPickerTouched {
+			m.restoreFallback = false
+			if msg.err == nil && msg.fallback != nil {
+				fallback := *msg.fallback
+				m.view = &fallback
+				m.enterBoardFromFallback()
+				return m, m.startItemsLoadWithSpinner()
+			}
+			if msg.err == nil && msg.fallbackErr == nil {
+				m.selection.Fallback = false
+				m.persistSelection()
+				m.viewPickerNotice = "A compatible saved board is now available; select a saved view."
+			}
+		}
+		if remembered, err := m.remembered(); err == nil && remembered.Fallback && m.statusFallback != nil && !m.viewPickerTouched && m.selectedOwner != nil && m.selectedProject != nil && strings.EqualFold(remembered.Owner, m.selectedOwner.Login) && remembered.Project == m.selectedProject.Number {
+			m.cursor = m.fallbackCursor()
+		}
 		return m, nil
+	case statusFallbackMsg:
+		if msg.generation != m.generation || (m.screen != screenLoading && m.screen != screenBoard) {
+			return m, nil
+		}
+		wasBoard := m.screen == screenBoard
+		m.loading = false
+		m.loadingDetail = false
+		if msg.err != nil {
+			m.err = msg.err
+			m.status = fmt.Sprintf("Status fallback failed: %v", msg.err)
+			if !wasBoard {
+				m.screen = screenViewPicker
+			}
+			return m, nil
+		}
+		if msg.view == nil {
+			m.err = fmt.Errorf("Status fallback returned no board")
+			m.status = "Status fallback returned no board"
+			if !wasBoard {
+				m.screen = screenViewPicker
+			}
+			return m, nil
+		}
+		m.view = msg.view
+		m.statusFallback = msg.view
+		m.err = nil
+		m.status = ""
+		m.enterBoardFromFallback()
+		return m, m.startItemsLoadWithSpinner()
 	case viewDetailMsg:
 		if msg.generation != m.generation {
 			return m, nil
@@ -304,8 +380,11 @@ func (m Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 		if m.view != nil {
 			if compatibility := evaluateViewCompatibility(*m.view); !compatibility.supported() {
 				m.setDiscoverySelection()
-				m.rejectView(*m.view, compatibility)
-				return m, nil
+				rejected := *m.view
+				m.rejectView(rejected, compatibility)
+				m.viewPickerNotice = m.status
+				m.views = nil
+				return m, m.startViewsLoad()
 			}
 			m.enterBoardFromDiscovery()
 			return m, m.startItemsLoadWithSpinner()
@@ -327,6 +406,9 @@ func (m Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 		}
 		if project := findProject(m.discovery, owner.Login, m.selection.ProjectNumber); project != nil {
 			m.selectedProject = project
+			if m.selection.Fallback {
+				m.restoreFallback = true
+			}
 			cmd := (&m).startViewsLoad()
 			return m, cmd
 		}
@@ -340,6 +422,11 @@ func (m Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 			if remembered.Project != 0 {
 				if project := findProject(m.discovery, owner.Login, remembered.Project); project != nil {
 					m.selectedProject = project
+					if remembered.Fallback {
+						m.selection = Selection{OwnerLogin: owner.Login, ProjectNumber: project.Number, Fallback: true}
+						m.restoreFallback = true
+						return m, m.startViewsLoad()
+					}
 					if remembered.View != 0 {
 						m.selection = Selection{OwnerLogin: owner.Login, ProjectNumber: project.Number, ViewNumber: remembered.View}
 						m.loadingDetail = true
@@ -418,6 +505,7 @@ func (m *Model) rejectView(view github.View, compatibility viewCompatibility) {
 	m.viewsErr = nil
 	m.loadingViews = false
 	m.status = unsupportedViewStatus(view, compatibility)
+	m.viewPickerNotice = m.status
 
 	for _, summary := range m.views {
 		if summary.Number == view.Number {
@@ -443,13 +531,25 @@ func (m Model) persistSelection() {
 		sel.Project = m.selectedProject.Number
 	}
 	if m.view != nil {
-		sel.View = m.view.Number
+		if m.view.Fallback {
+			sel.Fallback = true
+		} else {
+			sel.View = m.view.Number
+		}
 	}
 	_ = m.savePrefs(m.host, sel)
 }
 
 func (m *Model) startViewsLoad() tea.Cmd {
-	m.cancelItemsLoad()
+	if m.itemsLoading {
+		m.cancelItemsLoad()
+	} else {
+		if m.cancel != nil {
+			m.cancel()
+		}
+		m.ctx, m.cancel = context.WithCancel(context.Background())
+		m.generation++
+	}
 	m.screen = screenViewPicker
 	m.view = nil
 	m.detailVisible = false
@@ -471,6 +571,11 @@ func (m *Model) startViewsLoad() tea.Cmd {
 	m.loadingViews = true
 	m.views = nil
 	m.viewsErr = nil
+	m.checkingBoardViews = false
+	m.boardProbeErr = nil
+	m.boardViewReasons = nil
+	m.statusFallback = nil
+	m.viewPickerTouched = false
 	m.cursor = 0
 	m.filter = ""
 	m.filtering = false
@@ -490,6 +595,90 @@ func (m *Model) startViewsLoad() tea.Cmd {
 		views, err := lister.ListViews(ctx, owner, project)
 		return viewsMsg{views: views, err: err, generation: generation}
 	}
+}
+
+func (m *Model) probeBoardViewsCmd() tea.Cmd {
+	if m.selectedOwner == nil || m.selectedProject == nil {
+		return nil
+	}
+	owner := *m.selectedOwner
+	project := m.selectedProject.Number
+	views := append([]github.ViewSummary(nil), m.views...)
+	generation := m.generation
+	ctx := m.ctx
+	source := m.source
+	return func() tea.Msg {
+		loader, canLoadViews := source.(ViewSource)
+		compatibleBoard := false
+		reasons := make(map[int]string)
+		for _, summary := range views {
+			if summary.Layout != github.BoardLayout {
+				continue
+			}
+			if !canLoadViews {
+				return boardCompatibilityMsg{err: fmt.Errorf("view metadata loading is unavailable"), generation: generation}
+			}
+			view, err := loader.OpenView(ctx, owner, project, summary.Number)
+			if err != nil {
+				return boardCompatibilityMsg{err: fmt.Errorf("checking view %q: %w", summary.Name, err), generation: generation}
+			}
+			if compatibility := evaluateViewCompatibility(view); compatibility.supported() {
+				compatibleBoard = true
+			} else {
+				reasons[summary.Number] = compatibility.summary()
+			}
+		}
+		if compatibleBoard {
+			return boardCompatibilityMsg{reasons: reasons, generation: generation}
+		}
+		fallbackLoader, ok := source.(StatusFallbackSource)
+		if !ok {
+			return boardCompatibilityMsg{reasons: reasons, fallbackErr: fmt.Errorf("Status fallback is unavailable for this client"), generation: generation}
+		}
+		fallback, err := fallbackLoader.OpenStatusFallback(ctx, owner, project)
+		if err != nil {
+			return boardCompatibilityMsg{reasons: reasons, fallbackErr: err, generation: generation}
+		}
+		return boardCompatibilityMsg{reasons: reasons, fallback: &fallback, generation: generation}
+	}
+}
+
+func (m *Model) openStatusFallbackCmd(owner github.Owner, project int) tea.Cmd {
+	generation := m.generation
+	ctx := m.ctx
+	source := m.source
+	return func() tea.Msg {
+		loader, ok := source.(StatusFallbackSource)
+		if !ok {
+			return statusFallbackMsg{err: fmt.Errorf("Status fallback is unavailable for this client"), generation: generation}
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		view, err := loader.OpenStatusFallback(ctx, owner, project)
+		return statusFallbackMsg{view: &view, err: err, generation: generation}
+	}
+}
+
+func (m *Model) enterBoardFromFallback() {
+	m.screen = screenBoard
+	m.cursor = 0
+	if m.selectedOwner != nil {
+		m.selection = Selection{OwnerLogin: m.selectedOwner.Login, Fallback: true}
+		if m.selectedProject != nil {
+			m.selection.ProjectNumber = m.selectedProject.Number
+		}
+	}
+	m.persistSelection()
+}
+
+func (m Model) fallbackCursor() int {
+	for index, view := range m.filteredViews() {
+		if view.Fallback {
+			return index
+		}
+	}
+	return 0
 }
 
 func (m *Model) loadViewsCmd() (tea.Model, tea.Cmd) {
@@ -576,7 +765,7 @@ func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
 	}
 	owner := *m.selectedOwner
 	project := m.selectedProject.Number
-	filter := m.view.Filter
+	filter := strings.TrimSpace(m.view.Filter)
 	generation := m.generation
 	ctx := m.ctx
 	source := m.source
@@ -901,6 +1090,10 @@ func (m *Model) rememberBoardFocus() {
 
 func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+	if m.screen == screenViewPicker && (m.loadingViews || m.checkingBoardViews) && key != "r" {
+		m.viewPickerTouched = true
+		m.restoreFallback = false
+	}
 	// Global keys.
 	switch key {
 	case "q", "ctrl+c":
@@ -1188,6 +1381,17 @@ func (m *Model) selectCurrent() tea.Cmd {
 			return nil
 		}
 		selected := views[m.cursor]
+		if selected.Fallback {
+			if m.statusFallback == nil {
+				m.status = "Status fallback metadata is unavailable; refresh to retry"
+				return nil
+			}
+			fallback := *m.statusFallback
+			m.view = &fallback
+			m.viewPickerNotice = ""
+			m.enterBoardFromFallback()
+			return m.startItemsLoadWithSpinner()
+		}
 		summaryView := github.View{Number: selected.Number, Name: selected.Name, Layout: selected.Layout}
 		if compatibility := evaluateViewCompatibility(summaryView); !compatibility.supported() {
 			m.status = unsupportedViewStatus(summaryView, compatibility)
@@ -1245,6 +1449,11 @@ func (m *Model) refresh() tea.Cmd {
 		return discover(m.source, m.ctx, m.generation)
 	case screenBoard:
 		if m.view != nil && m.selectedOwner != nil && m.selectedProject != nil {
+			if m.view.Fallback {
+				m.loading = true
+				m.loadingDetail = true
+				return m.openStatusFallbackCmd(*m.selectedOwner, m.selectedProject.Number)
+			}
 			m.loadingDetail = true
 			owner := *m.selectedOwner
 			return m.openViewCmd(owner, m.selectedProject.Number, m.view.Number)
@@ -1360,6 +1569,12 @@ func (m Model) filteredViews() []github.ViewSummary {
 			out = append(out, view)
 		}
 	}
+	if m.statusFallback != nil {
+		fallback := github.ViewSummary{Number: 0, Name: m.statusFallback.Name, Layout: github.BoardLayout, Fallback: true}
+		if matchesFilter(fallback.Name, m.filter) || matchesFilter("fallback", m.filter) || matchesFilter(string(fallback.Layout), m.filter) {
+			out = append(out, fallback)
+		}
+	}
 	return out
 }
 
@@ -1379,7 +1594,11 @@ func (m Model) breadcrumb() string {
 		parts = append(parts, fmt.Sprintf("#%d %s", m.selectedProject.Number, m.selectedProject.Title))
 	}
 	if m.view != nil {
-		parts = append(parts, fmt.Sprintf("view #%d %s", m.view.Number, m.view.Name))
+		if m.view.Fallback {
+			parts = append(parts, m.view.Name)
+		} else {
+			parts = append(parts, fmt.Sprintf("view #%d %s", m.view.Number, m.view.Name))
+		}
 	} else if m.screen == screenViewPicker && m.selectedProject != nil {
 		parts = append(parts, "views")
 	}
@@ -1452,14 +1671,35 @@ func (m Model) renderViewPicker(b *strings.Builder) {
 	}
 	b.WriteString(m.pickerHeading("Saved views", fmt.Sprintf("#%d %s", m.selectedProject.Number, m.selectedProject.Title)))
 	b.WriteString("\n")
+	if m.checkingBoardViews {
+		b.WriteString(statusStyle.Render("Checking saved board filters...") + "\n")
+	}
+	if m.viewPickerNotice != "" {
+		b.WriteString(statusStyle.Render(m.viewPickerNotice) + "\n")
+	}
+	if m.boardProbeErr != nil {
+		b.WriteString(errorStyle.Render("Board compatibility check failed: "+m.boardProbeErr.Error()) + "\n")
+	}
 	b.WriteString(m.filterLine())
 	views := m.filteredViews()
 	if len(views) == 0 {
-		b.WriteString(mutedStyle.Render("No matching views.") + "\n")
+		if m.checkingBoardViews {
+			b.WriteString(mutedStyle.Render("Checking available views...") + "\n")
+		} else {
+			b.WriteString(mutedStyle.Render("No matching views or fallback.") + "\n")
+		}
 		return
 	}
 	for i, view := range views {
+		if view.Fallback {
+			label := view.Name + "  (explicit, unfiltered fallback)"
+			b.WriteString(m.pickerRow(i == m.cursor, label+" "+layoutBadge(string(view.Layout))) + "\n")
+			continue
+		}
 		label := fmt.Sprintf("#%-4d %-24s", view.Number, view.Name)
+		if reason := m.boardViewReasons[view.Number]; reason != "" {
+			label += "  (unsupported: " + reason + ")"
+		}
 		b.WriteString(m.pickerRow(i == m.cursor, label+" "+layoutBadge(string(view.Layout))) + "\n")
 	}
 }
@@ -1525,6 +1765,20 @@ type discoveryMsg struct {
 
 type viewsMsg struct {
 	views      []github.ViewSummary
+	err        error
+	generation uint64
+}
+
+type boardCompatibilityMsg struct {
+	reasons     map[int]string
+	fallback    *github.View
+	err         error
+	fallbackErr error
+	generation  uint64
+}
+
+type statusFallbackMsg struct {
+	view       *github.View
 	err        error
 	generation uint64
 }

@@ -44,7 +44,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	model := ui.NewModelWithHost(client, ui.Selection{OwnerLogin: selection.Owner, ProjectNumber: selection.Project, ViewNumber: selection.View}, host)
+	model := ui.NewModelWithHost(client, ui.Selection{OwnerLogin: selection.Owner, ProjectNumber: selection.Project, ViewNumber: selection.View, Fallback: selection.Fallback}, host)
 	if _, err := tea.NewProgram(model).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

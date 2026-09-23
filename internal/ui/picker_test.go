@@ -18,6 +18,7 @@ type fakePickerSource struct {
 	discovery          github.Discovery
 	views              []github.ViewSummary
 	view               github.View
+	viewErr            error
 	itemPages          map[string]github.ItemsPage
 	itemPagesByFilter  map[string]map[string]github.ItemsPage
 	itemErrorsByFilter map[string]map[string]error
@@ -26,6 +27,20 @@ type fakePickerSource struct {
 	mutationErr        error
 	viewCalls          *int
 	itemCalls          *int
+}
+
+type fakeStatusFallbackSource struct {
+	fakePickerSource
+	fallback      github.View
+	fallbackErr   error
+	fallbackCalls *int
+}
+
+func (f fakeStatusFallbackSource) OpenStatusFallback(context.Context, github.Owner, int) (github.View, error) {
+	if f.fallbackCalls != nil {
+		*f.fallbackCalls++
+	}
+	return f.fallback, f.fallbackErr
 }
 
 func (f fakePickerSource) Discover(context.Context) (github.Discovery, error) {
@@ -49,7 +64,7 @@ func (f fakePickerSource) OpenView(context.Context, github.Owner, int, int) (git
 	if f.viewCalls != nil {
 		*f.viewCalls++
 	}
-	return f.view, nil
+	return f.view, f.viewErr
 }
 
 func (f fakePickerSource) PageItems(_ context.Context, _ github.Owner, _ int, filter, after string) (github.ItemsPage, error) {
@@ -358,23 +373,23 @@ func TestBoardLoadsStatusLanesInParallel(t *testing.T) {
 			{ID: "progress", Name: "In progress"},
 		},
 	}
-	view := github.View{Name: "Board", Layout: github.BoardLayout, Filter: "team:platform", GroupByFields: []github.Field{status}}
+	view := github.View{Name: "Board", Layout: github.BoardLayout, GroupByFields: []github.Field{status}}
 	todo := github.Item{ID: "todo-item", Content: &github.Content{Kind: "Issue", Title: "Todo item"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "todo", Value: "Todo", Available: true}}}
 	progressOne := github.Item{ID: "progress-1", Content: &github.Content{Kind: "Issue", Title: "Progress one"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "progress", Value: "In progress", Available: true}}}
 	progressTwo := github.Item{ID: "progress-2", Content: &github.Content{Kind: "Issue", Title: "Progress two"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "progress", Value: "In progress", Available: true}}}
 	other := github.Item{ID: "other", Content: &github.Content{Kind: "Issue", Title: "Archived status"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "archived", Value: "Archived", Available: true}}}
 	source := fakePickerSource{itemPagesByFilter: map[string]map[string]github.ItemsPage{
-		`team:platform status:"Todo"`: {
+		`status:"Todo"`: {
 			"": {Items: []github.Item{todo}},
 		},
-		`team:platform status:"In progress"`: {
+		`status:"In progress"`: {
 			"":              {Items: []github.Item{progressOne}, HasNext: true, EndCursor: "progress-next"},
 			"progress-next": {Items: []github.Item{progressTwo}},
 		},
-		"team:platform no:status": {
+		"no:status": {
 			"": {},
 		},
-		`team:platform -status:"Todo" -status:"In progress" -no:status`: {
+		`-status:"Todo" -status:"In progress" -no:status`: {
 			"": {Items: []github.Item{other}},
 		},
 	}}
@@ -416,6 +431,37 @@ func TestBoardLoadsStatusLanesInParallel(t *testing.T) {
 	lanes := model.boardLanes()
 	if lanes[len(lanes)-1].Name != "Other" || len(lanes[len(lanes)-1].Items) != 1 || lanes[len(lanes)-1].Items[0].ID != "other" {
 		t.Fatalf("unknown status lane = %#v", lanes)
+	}
+}
+
+func TestSavedFilteredStatusBoardPagesUnchangedQuery(t *testing.T) {
+	const filter = `status:"Done" assignee:@me`
+	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "todo", Name: "Todo"}, {ID: "done", Name: "Done"}}}
+	itemCalls := 0
+	source := fakePickerSource{itemCalls: &itemCalls, itemPagesByFilter: map[string]map[string]github.ItemsPage{
+		filter: {
+			"":     {Items: []github.Item{{ID: "one", FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "done", Available: true}}}}, HasNext: true, EndCursor: "next"},
+			"next": {Items: []github.Item{{ID: "two", FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "done", Available: true}}}}},
+		},
+	}}
+	model := newPickerModel(source)
+	model.screen = screenBoard
+	model.view = &github.View{Layout: github.BoardLayout, Filter: filter, GroupByFields: []github.Field{status}}
+	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+	model.selectedProject = &github.Project{Number: 1}
+	batch := model.startItemsLoadWithSpinner()().(tea.BatchMsg)
+	if len(batch) != 2 || model.itemsLanePending != 0 || model.itemsLoadingLanes != nil {
+		t.Fatalf("saved filter used lane queries: commands=%d pending=%d", len(batch), model.itemsLanePending)
+	}
+	updated, next := model.Update(batch[1]())
+	model = updated.(Model)
+	if next == nil || !model.itemsLoading || len(model.items) != 1 {
+		t.Fatalf("first filtered page = items:%d loading:%v next:%v", len(model.items), model.itemsLoading, next != nil)
+	}
+	updated, _ = model.Update(next())
+	model = updated.(Model)
+	if itemCalls != 2 || model.itemsLoading || len(model.items) != 2 || len(model.boardLanes()[2].Items) != 2 {
+		t.Fatalf("filtered pages = calls:%d items:%d loading:%v", itemCalls, len(model.items), model.itemsLoading)
 	}
 }
 
@@ -968,6 +1014,28 @@ func TestBoardCardsOmitGroupingFieldsFromInlineSummary(t *testing.T) {
 	}
 	if fields := cardFieldSummary(item, &github.View{Fields: view.Fields}); !strings.Contains(fields, "Status: In Progress") {
 		t.Fatalf("ungrouped field summary omitted status: %q", fields)
+	}
+}
+
+func TestStatusFallbackUsesGuardedLaneMutationPath(t *testing.T) {
+	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "todo", Name: "Todo"}, {ID: "doing", Name: "Doing"}}}
+	mutations := []string{}
+	model := newPickerModel(fakePickerSource{mutations: &mutations})
+	model.screen = screenBoard
+	model.view = &github.View{ProjectID: "project", Name: "Unfiltered Status fallback", Layout: github.BoardLayout, ViewerCanUpdate: true, GroupByFields: []github.Field{status}, Fallback: true}
+	model.items = []github.Item{{ID: "item", Content: &github.Content{Kind: "Issue", Title: "Fallback item"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "todo", Available: true}}}}
+	model.boardLane = 1
+	updated, cmd := model.Update(keyPress("L"))
+	model = updated.(Model)
+	if cmd == nil || !model.mutationLoading {
+		t.Fatalf("writable fallback move did not start: status=%q", model.status)
+	}
+	_ = cmd()
+	if !reflect.DeepEqual(mutations, []string{"field:doing"}) {
+		t.Fatalf("fallback mutation = %#v", mutations)
+	}
+	if reason := model.boardMutationUnavailable(); reason != "" {
+		t.Fatalf("fallback rejected by normal write guard: %q", reason)
 	}
 }
 
