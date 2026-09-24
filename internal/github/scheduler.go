@@ -16,6 +16,8 @@ import (
 type APIStatus struct {
 	Requests  int
 	Remaining int
+	LastCost  int
+	TotalCost int
 	Resource  string
 	Reset     time.Time
 	Cooldown  time.Time
@@ -24,7 +26,8 @@ type APIStatus struct {
 	RequestID string
 	// Breakdown counts completed HTTP requests by fingerprint (GraphQL
 	// operation name or REST method + path template). Bounded.
-	Breakdown map[string]int
+	Breakdown       map[string]int
+	CostByOperation map[string]int
 	// Recent lists the most recent request fingerprints, oldest first.
 	// Bounded to the last 20.
 	Recent []string
@@ -79,6 +82,13 @@ func (s *requestScheduler) snapshot() APIStatus {
 			copied[key] = value
 		}
 		out.Breakdown = copied
+	}
+	if out.CostByOperation != nil {
+		copied := make(map[string]int, len(out.CostByOperation))
+		for key, value := range out.CostByOperation {
+			copied[key] = value
+		}
+		out.CostByOperation = copied
 	}
 	out.Recent = append([]string(nil), out.Recent...)
 	return out
@@ -154,12 +164,19 @@ func (s *requestScheduler) RoundTrip(req *http.Request) (*http.Response, error) 
 	operation := req.Method
 	fingerprint := req.Method + " " + restPathTemplate(req.URL.Path, req.URL.RawQuery)
 	if strings.HasSuffix(req.URL.Path, "/graphql") {
-		var payload struct {
-			Query string `json:"query"`
-		}
+		var payload map[string]json.RawMessage
 		if json.Unmarshal(body, &payload) == nil {
-			query := strings.TrimSpace(payload.Query)
+			var query string
+			_ = json.Unmarshal(payload["query"], &query)
+			query = strings.TrimSpace(query)
 			write = strings.HasPrefix(query, "mutation")
+			if !write {
+				var original string
+				_ = json.Unmarshal(payload["query"], &original)
+				updated, _ := json.Marshal(addRateLimitSelection(original))
+				payload["query"] = updated
+				body, _ = json.Marshal(payload)
+			}
 			fingerprint = graphqlFingerprint(query)
 			if write {
 				operation = "GraphQL mutation"
@@ -183,6 +200,7 @@ func (s *requestScheduler) RoundTrip(req *http.Request) (*http.Response, error) 
 		clone := req.Clone(ctx)
 		if req.Body != nil {
 			clone.Body = io.NopCloser(bytes.NewReader(body))
+			clone.ContentLength = int64(len(body))
 		}
 		started := s.now()
 		response, err := s.base.RoundTrip(clone)
@@ -217,6 +235,15 @@ func (s *requestScheduler) RoundTrip(req *http.Request) (*http.Response, error) 
 				s.status.Reset = time.Unix(reset, 0)
 			}
 		}
+		cost, hasCost := responseQueryCost(data)
+		if hasCost {
+			s.status.LastCost = cost
+			s.status.TotalCost += cost
+			if s.status.CostByOperation == nil {
+				s.status.CostByOperation = map[string]int{}
+			}
+			s.status.CostByOperation[fingerprint] += cost
+		}
 		s.mu.Unlock()
 		if err != nil {
 			return nil, err
@@ -249,6 +276,84 @@ func (s *requestScheduler) RoundTrip(req *http.Request) (*http.Response, error) 
 		}
 		response.Body.Close()
 	}
+}
+
+func responseQueryCost(body []byte) (int, bool) {
+	var payload struct {
+		Data struct {
+			RateLimit *struct {
+				Cost int `json:"cost"`
+			} `json:"rateLimit"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(body, &payload) != nil || payload.Data.RateLimit == nil {
+		return 0, false
+	}
+	return payload.Data.RateLimit.Cost, true
+}
+
+func addRateLimitSelection(query string) string {
+	if strings.Contains(query, "rateLimit {") {
+		return query
+	}
+	depth := 0
+	opened := false
+	inString, inBlockString, escaped, inComment := false, false, false, false
+	for index := 0; index < len(query); index++ {
+		char := query[index]
+		if inComment {
+			if char == '\n' {
+				inComment = false
+			}
+			continue
+		}
+		if inBlockString {
+			if index+2 < len(query) && query[index:index+3] == `"""` {
+				inBlockString = false
+				index += 2
+			}
+			continue
+		}
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if char == '\\' {
+				escaped = true
+				continue
+			}
+			if char == '"' {
+				inString = false
+			}
+			continue
+		}
+		if char == '#' {
+			inComment = true
+			continue
+		}
+		if index+2 < len(query) && query[index:index+3] == `"""` {
+			inBlockString = true
+			index += 2
+			continue
+		}
+		if char == '"' {
+			inString = true
+			continue
+		}
+		if char == '{' {
+			depth++
+			opened = true
+			continue
+		}
+		if char == '}' && opened {
+			depth--
+			if depth == 0 {
+				return query[:index] + " rateLimit { cost remaining resetAt } " + query[index:]
+			}
+		}
+	}
+	return query
 }
 
 func rateLimited(response *http.Response, body []byte) bool {

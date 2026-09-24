@@ -26,7 +26,10 @@ func (s apiStatusSource) Ledger() map[string]int { return s.ledger }
 func TestAPIToggleShowsLedgerBreakdown(t *testing.T) {
 	source := apiStatusSource{
 		fakePickerSource: fakePickerSource{discovery: testDiscovery()},
-		status:           github.APIStatus{Requests: 700, Remaining: 4200},
+		status: github.APIStatus{
+			Requests: 700, Remaining: 4200, TotalCost: 700,
+			CostByOperation: map[string]int{"query OrganizationProjectItems": 400},
+		},
 		ledger: map[string]int{
 			"query OrganizationProjectItems": 400,
 			"query UserProjectViews":         2,
@@ -40,11 +43,14 @@ func TestAPIToggleShowsLedgerBreakdown(t *testing.T) {
 		t.Fatal("A did not open the API inspector")
 	}
 	content := ansi.Strip(result.View().Content)
-	if !strings.Contains(content, "API requests this run: 700") {
+	if !strings.Contains(content, "HTTP requests this run: 700") {
 		t.Fatalf("inspector missing totals: %q", content)
 	}
-	if !strings.Contains(content, "400  query OrganizationProjectItems") {
+	if !strings.Contains(content, "400 req") || !strings.Contains(content, "query OrganizationProjectItems") {
 		t.Fatalf("inspector missing breakdown: %q", content)
+	}
+	if !strings.Contains(content, "400 pts") || !strings.Contains(content, "700 query") || !strings.Contains(content, "points measured") {
+		t.Fatalf("inspector missing point telemetry: %q", content)
 	}
 	updated, _ = result.Update(keyPress("A"))
 	if updated.(Model).showAPI {

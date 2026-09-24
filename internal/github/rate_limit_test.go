@@ -64,6 +64,42 @@ func TestSchedulerPacesWritesAndHonorsCooldown(t *testing.T) {
 	}
 }
 
+func TestSchedulerInstrumentsQueryCostWithoutDroppingVariables(t *testing.T) {
+	base := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			Query     string                 `json:"query"`
+			Variables map[string]interface{} `json:"variables"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(payload.Query, "rateLimit { cost remaining resetAt }") {
+			t.Fatalf("query missing rateLimit selection: %s", payload.Query)
+		}
+		if payload.Variables["login"] != "org" {
+			t.Fatalf("variables were dropped: %#v", payload.Variables)
+		}
+		header := http.Header{}
+		header.Set("X-RateLimit-Remaining", "4200")
+		header.Set("X-RateLimit-Resource", "graphql")
+		return &http.Response{StatusCode: 200, Header: header, Body: io.NopCloser(strings.NewReader(`{"data":{"rateLimit":{"cost":17,"remaining":4200,"resetAt":"2026-09-23T16:00:00Z"}}}`)), Request: req}, nil
+	})
+	scheduler := newRequestScheduler(base)
+	scheduler.wait = func(context.Context, time.Duration) error { return nil }
+	req, _ := http.NewRequest("POST", "https://api.github.com/graphql", strings.NewReader(`{"query":"query UserProjectViews($login: String!) { user(login: $login) { id } }","variables":{"login":"org"}}`))
+	if _, err := scheduler.RoundTrip(req); err != nil {
+		t.Fatalf("RoundTrip() error = %v", err)
+	}
+	status := scheduler.snapshot()
+	if status.LastCost != 17 || status.TotalCost != 17 || status.Remaining != 4200 || status.CostByOperation["query UserProjectViews"] != 17 {
+		t.Fatalf("query telemetry = %#v", status)
+	}
+}
+
 func TestSchedulerLedgerGroupsRequestsByFingerprint(t *testing.T) {
 	base := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return testResponse(200, map[string]string{"X-RateLimit-Remaining": "100"}), nil

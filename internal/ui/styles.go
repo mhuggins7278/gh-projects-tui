@@ -137,6 +137,9 @@ func (m Model) headerTelemetry() string {
 			parts = append(parts, fmt.Sprintf("api cooldown %ds", int(remaining.Seconds())+1))
 		} else if status.Remaining >= 0 {
 			parts = append(parts, fmt.Sprintf("api %d left", status.Remaining))
+			if status.TotalCost > 0 {
+				parts = append(parts, fmt.Sprintf("%d query pts", status.TotalCost))
+			}
 		}
 	}
 	if source, ok := m.source.(interface{ CachedReadAt() time.Time }); ok {

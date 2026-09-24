@@ -1581,9 +1581,12 @@ func (m Model) apiInspector() string {
 	} else {
 		breakdown = status.Breakdown
 	}
-	lines := []string{fmt.Sprintf("API requests this run: %d", status.Requests)}
+	lines := []string{fmt.Sprintf("HTTP requests this run: %d", status.Requests)}
 	if status.Remaining >= 0 {
-		lines[0] += fmt.Sprintf(" · %d points left", status.Remaining)
+		lines[0] += fmt.Sprintf(" · %d primary points left", status.Remaining)
+	}
+	if status.TotalCost > 0 {
+		lines[0] += fmt.Sprintf(" · %d query points measured", status.TotalCost)
 	}
 	if !status.Reset.IsZero() {
 		lines[0] += fmt.Sprintf(" · resets %s", status.Reset.Local().Format("15:04:05"))
@@ -1617,7 +1620,11 @@ func (m Model) apiInspector() string {
 	})
 	lines = append(lines, "by operation:")
 	for _, name := range names {
-		lines = append(lines, fmt.Sprintf("  %4d  %s", breakdown[name], name))
+		if cost := status.CostByOperation[name]; cost > 0 {
+			lines = append(lines, fmt.Sprintf("  %4d req · %4d pts  %s", breakdown[name], cost, name))
+		} else {
+			lines = append(lines, fmt.Sprintf("  %4d req ·   n/a pts  %s", breakdown[name], name))
+		}
 	}
 	if len(status.Recent) > 0 {
 		recent := append([]string(nil), status.Recent...)
