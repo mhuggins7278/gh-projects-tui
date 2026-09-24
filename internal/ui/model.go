@@ -129,6 +129,7 @@ type Model struct {
 	mutationLoading      bool
 	mutationSession      *boardMutationSession
 	nextMutationSession  uint64
+	pendingFilteredMove  *filteredMoveFocus
 }
 
 func NewModel(source DiscoverySource) Model {
@@ -656,7 +657,49 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	}
 	m.itemsLoading = false
 	m.clampBoardCursor()
+	m.reconcileFilteredMoveFocus()
 	return m, nil
+}
+
+func (m *Model) reconcileFilteredMoveFocus() {
+	pending := m.pendingFilteredMove
+	if pending == nil {
+		return
+	}
+	m.pendingFilteredMove = nil
+	for _, item := range m.items {
+		if item.ID == pending.itemID {
+			return
+		}
+	}
+	for index, candidate := range []string{pending.nextID, pending.previousID} {
+		if candidate == "" {
+			continue
+		}
+		m.boardFocusID = candidate
+		m.clampBoardCursor()
+		if m.boardFocusID == candidate {
+			which := "next"
+			if index == 1 {
+				which = "previous"
+			}
+			m.status = "Move saved; card no longer matches this saved filter. Focus moved to the " + which + " remaining card."
+			return
+		}
+	}
+	m.boardFocusID = ""
+	lanes := m.boardLanes()
+	if len(lanes) > 0 {
+		m.boardLane = pending.laneIndex
+		if m.boardLane < 0 {
+			m.boardLane = 0
+		}
+		if m.boardLane >= len(lanes) {
+			m.boardLane = len(lanes) - 1
+		}
+	}
+	m.boardCard = 0
+	m.status = "Move saved; card no longer matches this saved filter. The lane is empty."
 }
 
 func (m *Model) laneItemsCmd(request laneItemsRequest) tea.Cmd {

@@ -935,18 +935,22 @@ func TestCombinedSwimlaneMoveChangesColumnAndPreservesSwimlane(t *testing.T) {
 	}
 }
 
-func TestSavedFilteredBoardDoesNotOfferMutations(t *testing.T) {
+func TestSavedFilteredBoardAllowsSupportedMutations(t *testing.T) {
 	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "one", Name: "One"}, {ID: "two", Name: "Two"}}}
 	view := github.View{ProjectID: "project", ViewerCanUpdate: true, Filter: "iteration:@current", GroupByFields: []github.Field{status}}
-	model := newPickerModel(fakePickerSource{})
-	model.screen = screenBoard
-	model.view = &view
-	model.items = []github.Item{{ID: "item", Content: &github.Content{Kind: "Issue", Title: "Item"}}}
+	canonical := []github.Item{{ID: "item", Content: &github.Content{Kind: "Issue", Title: "Item"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}}}
+	mutations := []string{}
+	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
+	model.boardLane = 1
 
 	updated, cmd := model.Update(keyPress("L"))
-	result := updated.(Model)
-	if cmd != nil || result.mutationLoading || !strings.Contains(result.status, "filtered") {
-		t.Fatalf("filtered mutation state = %#v, cmd nil = %v", result, cmd == nil)
+	model = updated.(Model)
+	if cmd == nil || model.mutationSession == nil {
+		t.Fatalf("supported filtered mutation did not start: status=%q", model.status)
+	}
+	model = runMutationCommands(t, model, cmd)
+	if !reflect.DeepEqual(mutations, []string{"field:two"}) || !strings.Contains(model.status, "shared across views") {
+		t.Fatalf("filtered mutation = calls:%#v status:%q", mutations, model.status)
 	}
 }
 

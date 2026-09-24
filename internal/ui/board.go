@@ -456,9 +456,6 @@ func (m Model) boardMutationUnavailable() string {
 	if m.itemsErr != nil {
 		return "Refresh before mutating an incomplete board"
 	}
-	if strings.TrimSpace(m.view.Filter) != "" {
-		return "Saved-filtered views are read-only until hidden anchors are handled"
-	}
 	if m.filtering || strings.TrimSpace(m.filter) != "" {
 		return "Clear local search before mutating the board"
 	}
@@ -605,10 +602,6 @@ func (m *Model) reorderBoardItem(delta int) tea.Cmd {
 	}
 	if !positionOnly(m.view) {
 		m.status = "Manual reorder is disabled when the view has a saved field sort"
-		return nil
-	}
-	if strings.TrimSpace(m.view.Filter) != "" {
-		m.status = "Manual reorder is disabled for filtered saved views"
 		return nil
 	}
 	lanes := m.boardLanes()
@@ -805,6 +798,7 @@ func (m Model) renderBoardContent(b *strings.Builder) {
 	b.WriteString(mutedStyle.Render("Display note: collapsed-group state is not exposed by this API; groups follow saved field and option order.") + "\n")
 	if m.view.Filter != "" {
 		fmt.Fprintf(b, "%s %s\n", mutedStyle.Render("Filter:"), m.view.Filter)
+		b.WriteString(mutedStyle.Render("Position is project-wide; moving a card can change its relationship to hidden cards and other saved views.") + "\n")
 	}
 	visibleItems := m.boardItems()
 	if m.filtering || strings.TrimSpace(m.filter) != "" {

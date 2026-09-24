@@ -447,6 +447,58 @@ func TestReadbackFailurePreventsMutationUntilRetry(t *testing.T) {
 	}
 }
 
+func TestFilteredReorderUsesHiddenProjectPredecessorForFirstVisibleCard(t *testing.T) {
+	view := writableStatusView()
+	view.Filter = `status:"A"`
+	items := []github.Item{
+		{ID: "hidden", FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "b", Available: true}}},
+		{ID: "first", FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "a", Available: true}}},
+		{ID: "moving", FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "a", Available: true}}},
+	}
+	visible := map[string]bool{"first": true, "moving": true}
+	plan, err := resolveBoardMutationPlan(view, items, boardMutationIntent{kind: boardMutationReorder, itemID: "moving", direction: -1}, visible)
+	if err != nil {
+		t.Fatalf("resolve filtered reorder: %v", err)
+	}
+	if plan.positionAfter == nil || *plan.positionAfter != "hidden" {
+		t.Fatalf("first visible card did not retain hidden project predecessor: %#v", plan.positionAfter)
+	}
+}
+
+func TestFilteredSuccessfulMoveRefreshesAndFocusesNextVisibleCard(t *testing.T) {
+	view := writableStatusView()
+	view.Filter = `status:"A"`
+	canonical := []github.Item{
+		{ID: "moving", FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "a", Available: true}}},
+		{ID: "next", FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "a", Available: true}}},
+	}
+	mutations := []string{}
+	source := fakePickerSource{
+		mutations:      &mutations,
+		canonicalItems: &canonical,
+		itemPagesByFilter: map[string]map[string]github.ItemsPage{
+			view.Filter: {"": {Items: []github.Item{canonical[1]}}},
+		},
+	}
+	model := mutationModel(source, view, canonical)
+	model.boardLane = 1
+	model.boardCard = 0
+	updated, cmd := model.Update(keyPress("L"))
+	model = updated.(Model)
+	model = runMutationCommands(t, model, cmd)
+	if model.itemsLoading {
+		pageCmd := model.itemsPageCmd("", true)
+		updated, _ = model.Update(pageCmd())
+		model = updated.(Model)
+	}
+	if len(model.items) != 1 || model.items[0].ID != "next" || model.boardFocusID != "next" {
+		t.Fatalf("filtered readback/focus = items:%#v focus:%q", model.items, model.boardFocusID)
+	}
+	if !strings.Contains(model.status, "no longer matches this saved filter") || !strings.Contains(model.status, "next remaining card") {
+		t.Fatalf("filtered disappearance explanation = %q", model.status)
+	}
+}
+
 func TestCanonicalReadbackPaginatesTheWholeProject(t *testing.T) {
 	first := github.ItemsPage{Items: []github.Item{{ID: "one"}}, HasNext: true, EndCursor: "cursor-1"}
 	second := github.ItemsPage{Items: []github.Item{{ID: "two"}}}

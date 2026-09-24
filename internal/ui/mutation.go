@@ -53,6 +53,8 @@ type boardMutationSession struct {
 	projectID      string
 	view           github.View
 	canonicalItems []github.Item
+	visibleItemIDs map[string]bool
+	filteredFocus  filteredMoveFocus
 	intents        []boardMutationIntent
 	plan           *boardMutationPlan
 	attempt        *mutationAttemptResult
@@ -63,6 +65,13 @@ type boardMutationSession struct {
 	readbackCount  int
 	notice         string
 	lastSuccess    string
+}
+
+type filteredMoveFocus struct {
+	itemID     string
+	nextID     string
+	previousID string
+	laneIndex  int
 }
 
 type mutationAttemptResult struct {
@@ -87,6 +96,10 @@ func (m *Model) enqueueBoardMutation(intent boardMutationIntent) tea.Cmd {
 	if m.mutationSession == nil {
 		m.nextMutationSession++
 		view := *m.view
+		filteredFocus := filteredMoveFocus{}
+		if strings.TrimSpace(view.Filter) != "" {
+			filteredFocus = filteredMoveFocusFor(m, intent.itemID)
+		}
 		m.mutationSession = &boardMutationSession{
 			id:             m.nextMutationSession,
 			owner:          *m.selectedOwner,
@@ -94,6 +107,8 @@ func (m *Model) enqueueBoardMutation(intent boardMutationIntent) tea.Cmd {
 			projectID:      m.view.ProjectID,
 			view:           view,
 			canonicalItems: cloneItems(m.items),
+			visibleItemIDs: visibleBoardItemIDs(m.items),
+			filteredFocus:  filteredFocus,
 		}
 	} else {
 		session := m.mutationSession
@@ -109,11 +124,14 @@ func (m *Model) enqueueBoardMutation(intent boardMutationIntent) tea.Cmd {
 	}
 
 	session := m.mutationSession
+	if strings.TrimSpace(session.view.Filter) != "" {
+		session.filteredFocus = filteredMoveFocusFor(m, intent.itemID)
+	}
 	// Only contiguous unsent edits of the same card can be collapsed.
 	// Interleaved cards and already submitted steps are dependency barriers.
 	if last := len(session.intents) - 1; last >= 0 && (last > 0 || session.plan == nil) && session.intents[last].kind == intent.kind && session.intents[last].itemID == intent.itemID {
 		if intent.kind == boardMutationMoveLane {
-			if plan, err := resolveBoardMutationPlan(session.view, m.items, intent); err == nil {
+			if plan, err := resolveBoardMutationPlan(session.view, m.items, intent, session.visibleItemIDs); err == nil {
 				intent.destination = "no-value"
 				if plan.fieldValue.SingleSelectOptionID != nil {
 					intent.destination = "option:" + *plan.fieldValue.SingleSelectOptionID
@@ -339,7 +357,7 @@ func (m *Model) updateBoardMutation(msg boardMutationMsg) (tea.Model, tea.Cmd) {
 		refresh := m.showReconciledItems(session)
 		status := session.notice
 		if status == "" {
-			status = session.lastSuccess
+			status = mutationCompletionStatus(session)
 		}
 		m.mutationSession = nil
 		m.mutationLoading = false
@@ -458,7 +476,7 @@ func (m *Model) dispatchNextMutation() tea.Cmd {
 	refresh := m.showReconciledItems(session)
 	status := session.notice
 	if status == "" {
-		status = session.lastSuccess
+		status = mutationCompletionStatus(session)
 	}
 	m.mutationSession = nil
 	m.mutationLoading = false
@@ -466,6 +484,14 @@ func (m *Model) dispatchNextMutation() tea.Cmd {
 		m.status = status
 	}
 	return refresh
+}
+
+func mutationCompletionStatus(session *boardMutationSession) string {
+	status := session.lastSuccess
+	if status != "" && strings.TrimSpace(session.view.Filter) != "" {
+		status += "; project position is shared across views, so this move can change the card's relationship to hidden items and other views"
+	}
+	return status
 }
 
 func (m *Model) applyMutationPlanCmd(sessionID, writeID uint64, plan boardMutationPlan) tea.Cmd {
@@ -501,12 +527,12 @@ func (m *Model) applyMutationPlanCmd(sessionID, writeID uint64, plan boardMutati
 
 func (m *Model) projectPendingMutations() {
 	session := m.mutationSession
-	if session == nil || session.blocked || !sameMutationProjectByModel(session, m) || m.screen != screenBoard || m.view == nil || strings.TrimSpace(m.view.Filter) != "" || len(session.intents) == 0 {
+	if session == nil || session.blocked || !sameMutationProjectByModel(session, m) || m.screen != screenBoard || m.view == nil || len(session.intents) == 0 {
 		return
 	}
 	items := cloneItems(session.canonicalItems)
 	for _, intent := range session.intents {
-		plan, err := resolveBoardMutationPlan(session.view, items, intent)
+		plan, err := resolveBoardMutationPlan(session.view, items, intent, session.visibleItemIDs)
 		if err == nil && !plan.noOp {
 			applyBoardMutationPlan(&items, plan)
 		}
@@ -521,6 +547,9 @@ func (m *Model) showReconciledItems(session *boardMutationSession) tea.Cmd {
 		return nil
 	}
 	if m.view != nil && strings.TrimSpace(m.view.Filter) != "" {
+		if session.lastSuccess != "" {
+			m.pendingFilteredMove = &session.filteredFocus
+		}
 		if m.itemsLoading {
 			m.cancelItemsLoad()
 		}
@@ -528,6 +557,28 @@ func (m *Model) showReconciledItems(session *boardMutationSession) tea.Cmd {
 	}
 	m.showCanonicalWithoutOptimism(session)
 	return nil
+}
+
+func filteredMoveFocusFor(m *Model, itemID string) filteredMoveFocus {
+	focus := filteredMoveFocus{itemID: itemID, laneIndex: m.boardLane}
+	lanes := m.boardLanes()
+	if m.boardLane < 0 || m.boardLane >= len(lanes) {
+		return focus
+	}
+	items := lanes[m.boardLane].Items
+	for index, item := range items {
+		if item.ID != itemID {
+			continue
+		}
+		if index+1 < len(items) {
+			focus.nextID = items[index+1].ID
+		}
+		if index > 0 {
+			focus.previousID = items[index-1].ID
+		}
+		return focus
+	}
+	return focus
 }
 
 func (m *Model) showCanonicalWithoutOptimism(session *boardMutationSession) {
@@ -561,7 +612,7 @@ func sameMutationProjectByModel(session *boardMutationSession, m *Model) bool {
 	return m.selectedOwner != nil && m.selectedProject != nil && sameMutationProject(session, *m.selectedOwner, m.selectedProject.Number)
 }
 
-func resolveBoardMutationPlan(view github.View, items []github.Item, intent boardMutationIntent) (boardMutationPlan, error) {
+func resolveBoardMutationPlan(view github.View, items []github.Item, intent boardMutationIntent, visibleIDs ...map[string]bool) (boardMutationPlan, error) {
 	plan := boardMutationPlan{intent: intent, projectID: view.ProjectID}
 	itemIndex := -1
 	for index, item := range items {
@@ -573,7 +624,21 @@ func resolveBoardMutationPlan(view github.View, items []github.Item, intent boar
 	if itemIndex < 0 {
 		return boardMutationPlan{}, fmt.Errorf("card %q is no longer in the project", intent.itemID)
 	}
-	lanes := lanesForView(&view, sortedItemsForView(&view, items))
+	visible := map[string]bool(nil)
+	if len(visibleIDs) > 0 {
+		visible = visibleIDs[0]
+	}
+	viewItems := sortedItemsForView(&view, items)
+	if visible != nil {
+		filtered := make([]github.Item, 0, len(viewItems))
+		for _, item := range viewItems {
+			if visible[item.ID] {
+				filtered = append(filtered, item)
+			}
+		}
+		viewItems = filtered
+	}
+	lanes := lanesForView(&view, viewItems)
 	switch intent.kind {
 	case boardMutationMoveLane:
 		field, grouped := mutationGroupingField(&view)
@@ -639,7 +704,7 @@ func resolveBoardMutationPlan(view github.View, items []github.Item, intent boar
 		plan.noOp = !plan.hasField && !plan.hasPosition
 		return plan, nil
 	case boardMutationReorder:
-		if !positionOnly(&view) || strings.TrimSpace(view.Filter) != "" {
+		if !positionOnly(&view) {
 			return boardMutationPlan{}, fmt.Errorf("manual reorder is not available for this saved view")
 		}
 		currentLane := -1
@@ -676,6 +741,14 @@ func resolveBoardMutationPlan(view github.View, items []github.Item, intent boar
 	default:
 		return boardMutationPlan{}, fmt.Errorf("unknown board movement intent")
 	}
+}
+
+func visibleBoardItemIDs(items []github.Item) map[string]bool {
+	visible := make(map[string]bool, len(items))
+	for _, item := range items {
+		visible[item.ID] = true
+	}
+	return visible
 }
 
 func projectPredecessor(items []github.Item, movingID, targetID string) *string {
