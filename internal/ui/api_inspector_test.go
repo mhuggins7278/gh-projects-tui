@@ -33,6 +33,7 @@ func TestAPIToggleShowsLedgerBreakdown(t *testing.T) {
 		},
 	}
 	model := feedDiscovery(t, newPickerModel(source), source.fakePickerSource)
+	model.SetDebug(true)
 	updated, _ := model.Update(keyPress("A"))
 	result := updated.(Model)
 	if !result.showAPI {
@@ -53,10 +54,27 @@ func TestAPIToggleShowsLedgerBreakdown(t *testing.T) {
 
 func TestAPIInspectorWithoutTelemetry(t *testing.T) {
 	model := feedDiscovery(t, newPickerModel(fakePickerSource{discovery: testDiscovery()}), fakePickerSource{discovery: testDiscovery()})
+	model.SetDebug(true)
 	updated, _ := model.Update(keyPress("A"))
 	content := ansi.Strip(updated.(Model).View().Content)
 	if !strings.Contains(content, "telemetry is unavailable") {
 		t.Fatalf("expected unavailable message, got: %q", content)
+	}
+}
+
+func TestAPIToggleIgnoredWithoutDebug(t *testing.T) {
+	source := apiStatusSource{
+		fakePickerSource: fakePickerSource{discovery: testDiscovery()},
+		status:           github.APIStatus{Requests: 700, Remaining: 4200},
+	}
+	model := feedDiscovery(t, newPickerModel(source), source.fakePickerSource)
+	updated, _ := model.Update(keyPress("A"))
+	result := updated.(Model)
+	if result.showAPI {
+		t.Fatal("A should do nothing without --debug")
+	}
+	if strings.Contains(ansi.Strip(result.View().Content), "API requests this run") {
+		t.Fatal("inspector leaked without --debug")
 	}
 }
 

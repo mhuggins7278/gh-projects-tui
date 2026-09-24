@@ -63,7 +63,8 @@ go run ./cmd/gh-projects-tui --owner OWNER --project NUMBER --view NUMBER
 
 You can also pass only `--owner` to start at that owner's project picker.
 `--project` requires `--owner`, and `--view` requires both `--owner` and
-`--project`.
+`--project`. Pass `--debug` (or set `GH_PROJECTS_TUI_DEBUG=1`) to show API
+telemetry in the header and enable the `A` inspector overlay.
 
 ### Build a local binary
 

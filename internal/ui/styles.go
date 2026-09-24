@@ -35,7 +35,6 @@ var (
 	headerFrameStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(border).
-				Background(ink).
 				Padding(0, 1)
 	bodyFrameStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -111,45 +110,41 @@ func (m Model) bodyCanvasHeight() int {
 }
 
 func (m Model) renderHeader() string {
-	mode := "READ ONLY"
-	modeStyle := readOnlyBadgeStyle
-	if m.screen == screenBoard {
-		switch {
-		case m.mutationLoading:
-			mode = "SAVING"
-			modeStyle = statusPillStyle
-		case m.itemsLoading:
-			mode = "SYNCING"
-		case m.boardMutationUnavailable() == "":
-			mode = "WRITABLE"
-			modeStyle = statusPillStyle
-		}
-	}
-	if source, ok := m.source.(interface{ APIStatus() github.APIStatus }); ok {
-		status := source.APIStatus()
-		if remaining := time.Until(status.Cooldown); remaining > 0 {
-			mode = fmt.Sprintf("API COOLDOWN %ds", int(remaining.Seconds())+1)
-		} else if status.Remaining >= 0 {
-			mode += fmt.Sprintf(" · API %d left", status.Remaining)
-		}
-	}
-	modeBadge := modeStyle.Render(mode)
-	if source, ok := m.source.(interface{ CachedReadAt() time.Time }); ok {
-		if at := source.CachedReadAt(); !at.IsZero() && time.Since(at) < 30*time.Second {
-			modeBadge += mutedStyle.Render(fmt.Sprintf(" · cached %ds · r refresh", int(time.Since(at).Seconds())))
-		}
-	}
 	top := lipgloss.JoinHorizontal(
 		lipgloss.Center,
 		brandStyle.Render("gh projects-tui"),
 		"  ",
 		hostStyle.Render("["+m.host+"]"),
-		"  ",
-		modeBadge,
 	)
+	lines := []string{top, crumbStyle.Render(m.breadcrumb())}
+	if telemetry := m.headerTelemetry(); telemetry != "" {
+		lines = append(lines, mutedStyle.Render(telemetry))
+	}
 	return headerFrameStyle.Width(m.frameContentWidth()).Render(
-		lipgloss.JoinVertical(lipgloss.Left, top, crumbStyle.Render(m.breadcrumb())),
+		lipgloss.JoinVertical(lipgloss.Left, lines...),
 	)
+}
+
+// headerTelemetry reports API request state for --debug runs only.
+func (m Model) headerTelemetry() string {
+	if !m.debug {
+		return ""
+	}
+	parts := []string{}
+	if source, ok := m.source.(interface{ APIStatus() github.APIStatus }); ok {
+		status := source.APIStatus()
+		if remaining := time.Until(status.Cooldown); remaining > 0 {
+			parts = append(parts, fmt.Sprintf("api cooldown %ds", int(remaining.Seconds())+1))
+		} else if status.Remaining >= 0 {
+			parts = append(parts, fmt.Sprintf("api %d left", status.Remaining))
+		}
+	}
+	if source, ok := m.source.(interface{ CachedReadAt() time.Time }); ok {
+		if at := source.CachedReadAt(); !at.IsZero() && time.Since(at) < 30*time.Second {
+			parts = append(parts, fmt.Sprintf("cached %ds · r refresh", int(time.Since(at).Seconds())))
+		}
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (m Model) renderFooter() string {
@@ -181,7 +176,7 @@ func (m Model) renderScreen() string {
 	if m.showHelp {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, helpStyle.Width(m.frameContentWidth()-2).Render(m.helpText()))
 	}
-	if m.showAPI {
+	if m.showAPI && m.debug {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, helpStyle.Width(m.frameContentWidth()-2).Render(m.apiInspector()))
 	}
 	return bodyFrameStyle.Width(m.frameContentWidth()).Render(body)

@@ -81,7 +81,8 @@ type Model struct {
 	view       *github.View
 	err        error
 
-	host string
+	host  string
+	debug bool
 
 	screen               screen
 	cursor               int
@@ -157,15 +158,23 @@ func NewModelWithHost(source DiscoverySource, selection Selection, host string) 
 	return m
 }
 
+// SetDebug enables API telemetry in the header and the A inspector overlay.
+// It is off by default; enable it with --debug or GH_PROJECTS_TUI_DEBUG=1.
+func (m *Model) SetDebug(debug bool) {
+	m.debug = debug
+}
+
 func (m Model) Init() tea.Cmd {
-	if _, ok := m.source.(interface{ APIStatus() github.APIStatus }); ok {
-		var load tea.Cmd
-		if m.selection.OwnerLogin != "" {
-			load = resolveSelection(m.source, m.ctx, m.selection, m.generation)
-		} else {
-			load = discover(m.source, m.ctx, m.generation)
+	if m.debug {
+		if _, ok := m.source.(interface{ APIStatus() github.APIStatus }); ok {
+			var load tea.Cmd
+			if m.selection.OwnerLogin != "" {
+				load = resolveSelection(m.source, m.ctx, m.selection, m.generation)
+			} else {
+				load = discover(m.source, m.ctx, m.generation)
+			}
+			return tea.Batch(load, apiStatusTick())
 		}
-		return tea.Batch(load, apiStatusTick())
 	}
 	if m.selection.OwnerLogin != "" {
 		return resolveSelection(m.source, m.ctx, m.selection, m.generation)
@@ -176,6 +185,9 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case apiStatusTickMsg:
+		if !m.debug {
+			return m, nil
+		}
 		return m, apiStatusTick()
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
@@ -861,7 +873,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "A":
-		if !m.filtering {
+		if !m.filtering && m.debug {
 			m.showAPI = !m.showAPI
 			return m, nil
 		}
@@ -1482,22 +1494,33 @@ func (m Model) footerHints() string {
 	}
 	switch m.screen {
 	case screenOwnerPicker:
-		return "j/k move · enter select · / filter · r refresh · ? help · A api · q quit"
+		return "j/k move · enter select · / filter · r refresh · ? help · q quit" + m.debugHint()
 	case screenProjectPicker:
-		return "j/k move · enter select · / filter · esc owners · r refresh · ? help · A api · q quit"
+		return "j/k move · enter select · / filter · esc owners · r refresh · ? help · q quit" + m.debugHint()
 	case screenViewPicker:
-		return "j/k move · enter open · / filter · esc projects · p projects · r refresh · ? help · A api · q quit"
+		return "j/k move · enter open · / filter · esc projects · p projects · r refresh · ? help · q quit" + m.debugHint()
 	case screenBoard:
-		return "h/l lanes · j/k cards · H/L move · J/K reorder · / search · v views · p projects · r refresh · o browser · ? help · A api · q quit"
+		return "h/l lanes · j/k cards · H/L move · J/K reorder · / search · v views · p projects · r refresh · o browser · ? help · q quit" + m.debugHint()
 	default:
 		return "Loading... q to quit"
 	}
 }
 
+func (m Model) debugHint() string {
+	if m.debug {
+		return " · A api"
+	}
+	return ""
+}
+
 func (m Model) helpText() string {
+	debugKey := ""
+	if m.debug {
+		debugKey = " · A api inspector"
+	}
 	return "Keys: j/k or up/down move · enter select · / filter/search (enter done, esc clear) ·\n" +
 		"esc/backspace back · p projects · v reload views · r refresh · o browser URL ·\n" +
-		"? toggle help · A api inspector · q quit.\n" +
+		"? toggle help" + debugKey + " · q quit.\n" +
 		"On the board, h/l changes lanes, j/k changes cards, / searches loaded cards, and enter opens detail.\n" +
 		"H/L moves cards and J/K reorders cards when the view is writable and fully loaded.\n" +
 		"In detail, j/k scrolls, f toggles all project fields, and esc returns to the board."
