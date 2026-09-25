@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -166,6 +167,7 @@ type Model struct {
 	mutationSession      *boardMutationSession
 	nextMutationSession  uint64
 	pendingFilteredMove  *filteredMoveFocus
+	openBrowser          func(string) error
 }
 
 func NewModel(source DiscoverySource) Model {
@@ -183,6 +185,7 @@ func NewModelWithSelection(source DiscoverySource, selection Selection) Model {
 		screen:      screenLoading,
 		host:        config.DefaultHost(),
 		detailCache: make(map[string]github.ItemDetail),
+		openBrowser: openURLInBrowser,
 	}
 }
 
@@ -348,6 +351,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateMutationReadback(msg)
 	case mutationSettleMsg:
 		return m.updateMutationSettle(msg)
+	case browserOpenMsg:
+		if msg.generation != m.generation {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not open browser (%v). Copy this URL to open it manually: %s", msg.err, msg.url)
+		} else if msg.fallback {
+			m.status = "This item has no browser URL; opened the project instead."
+		} else {
+			m.status = "Opened in browser."
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -1018,6 +1033,8 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.detail = nil
 				m.detailErr = nil
 				return m, nil
+			case "o":
+				return m, m.openBrowserCmd()
 			case "j", "down", "J":
 				m.moveDetail(1)
 				return m, nil
@@ -1111,8 +1128,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m, m.refresh()
 	case "o":
-		m.status = m.browserURL()
-		return m, nil
+		return m, m.openBrowserCmd()
 	}
 	// Board navigation reserves h/l for lanes; ignore in pickers.
 	return m, nil
@@ -1335,14 +1351,64 @@ func (m *Model) refresh() tea.Cmd {
 	}
 }
 
-func (m Model) browserURL() string {
-	if m.selectedProject != nil && m.selectedProject.URL != "" {
-		return "Open in browser: " + m.selectedProject.URL
+func (m *Model) openBrowserCmd() tea.Cmd {
+	target, fallback, err := m.browserTarget()
+	if err != nil {
+		m.status = err.Error()
+		return nil
+	}
+	if m.openBrowser == nil {
+		m.status = "Browser opening is unavailable. Copy this URL to open it manually: " + target
+		return nil
+	}
+	opener := m.openBrowser
+	generation := m.generation
+	return func() tea.Msg {
+		return browserOpenMsg{generation: generation, url: target, fallback: fallback, err: opener(target)}
+	}
+}
+
+func (m Model) browserTarget() (string, bool, error) {
+	itemURLMissing := false
+	if m.screen == screenBoard {
+		if m.detailVisible && m.detail != nil && m.detail.Content != nil {
+			if target := validBrowserURL(m.detail.Content.URL); target != "" {
+				return target, false, nil
+			}
+		}
+		if item, ok := m.selectedBoardItem(); ok {
+			if item.Content != nil {
+				if target := validBrowserURL(item.Content.URL); target != "" {
+					return target, false, nil
+				}
+			}
+			itemURLMissing = true
+		}
+	}
+	if m.selectedProject != nil {
+		if target := validBrowserURL(m.selectedProject.URL); target != "" {
+			return target, itemURLMissing, nil
+		}
+		if m.selectedOwner != nil && m.selectedProject.Number > 0 {
+			ownerPath := "users"
+			if m.selectedOwner.Kind == github.OrganizationOwner {
+				ownerPath = "orgs"
+			}
+			return (&url.URL{Scheme: "https", Host: m.host, Path: fmt.Sprintf("/%s/%s/projects/%d", ownerPath, url.PathEscape(m.selectedOwner.Login), m.selectedProject.Number)}).String(), itemURLMissing, nil
+		}
 	}
 	if m.selectedOwner != nil {
-		return fmt.Sprintf("No browser URL for %s yet.", m.selectedOwner.Login)
+		return (&url.URL{Scheme: "https", Host: m.host, Path: "/" + url.PathEscape(m.selectedOwner.Login)}).String(), itemURLMissing, nil
 	}
-	return "Nothing to open yet."
+	return "", false, fmt.Errorf("Select an issue or project before opening the browser.")
+}
+
+func validBrowserURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return ""
+	}
+	return parsed.String()
 }
 
 func findOwner(discovery github.Discovery, login string) *github.Owner {
@@ -1572,7 +1638,7 @@ func (m Model) filterLine() string {
 
 func (m Model) footerHints() string {
 	if m.screen == screenBoard && m.detailVisible {
-		return "j/k scroll detail · f all fields · esc close · q quit"
+		return "j/k scroll detail · f all fields · o open in browser · esc close · q quit"
 	}
 	switch m.screen {
 	case screenOwnerPicker:
@@ -1582,7 +1648,7 @@ func (m Model) footerHints() string {
 	case screenViewPicker:
 		return "j/k move · enter open · / filter · esc projects · p projects · r refresh · ? help · q quit" + m.debugHint()
 	case screenBoard:
-		return "h/l lanes · j/k cards · H/L move · J/K reorder · / search · v views · p projects · r refresh · o browser · ? help · q quit" + m.debugHint()
+		return "h/l lanes · j/k cards · H/L move · J/K reorder · / search · enter details · v views · p projects · r refresh · o open in browser · ? help · q quit" + m.debugHint()
 	default:
 		return "Loading... q to quit"
 	}
@@ -1601,7 +1667,7 @@ func (m Model) helpText() string {
 		debugKey = " · A api inspector"
 	}
 	return "Keys: j/k or up/down move · enter select · / filter/search (enter done, esc clear) ·\n" +
-		"esc/backspace back · p projects · v reload views · r refresh · o browser URL ·\n" +
+		"esc/backspace back · p projects · v reload views · r refresh · o open selected item/project in browser ·\n" +
 		"? toggle help" + debugKey + " · q quit.\n" +
 		"On the board, h/l changes lanes, j/k changes cards, / searches loaded cards, and enter opens detail.\n" +
 		"H/L moves cards and J/K reorders cards when the view is writable and fully loaded.\n" +
@@ -1769,6 +1835,13 @@ type itemDetailDebounceMsg struct {
 	requestID  uint64
 	generation uint64
 	scope      boardReadScope
+}
+
+type browserOpenMsg struct {
+	generation uint64
+	url        string
+	fallback   bool
+	err        error
 }
 
 func itemsLoadingTick(generation uint64) tea.Cmd {

@@ -771,13 +771,26 @@ func minInt(left, right int) int {
 }
 
 func (m Model) renderBoard(b *strings.Builder) {
-	board := &strings.Builder{}
-	m.renderBoardContent(board)
-	if !m.detailVisible {
-		b.WriteString(board.String())
+	if m.detailVisible {
+		if !m.wideDetailLayout() {
+			b.WriteString(m.renderDetailPanel())
+			return
+		}
+		paneWidth := m.detailPaneOuterWidth()
+		gap := 2
+		boardWidth := m.frameContentWidth() - paneWidth - gap
+		boardModel := m
+		boardModel.width = m.width - paneWidth - gap
+		boardModel.detailVisible = false
+		board := &strings.Builder{}
+		boardModel.renderBoardContent(board)
+		left := lipgloss.NewStyle().Width(boardWidth).MaxWidth(boardWidth).Render(board.String())
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), m.renderDetailPanel()))
 		return
 	}
-	b.WriteString(renderPopover(board.String(), m.renderDetailPanel(), m.frameContentWidth(), m.bodyCanvasHeight()))
+	board := &strings.Builder{}
+	m.renderBoardContent(board)
+	b.WriteString(board.String())
 }
 
 func (m Model) renderBoardContent(b *strings.Builder) {

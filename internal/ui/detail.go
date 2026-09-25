@@ -11,15 +11,19 @@ import (
 )
 
 func (m Model) renderDetailPanel() string {
+	frame := detailFrameStyle.Width(m.detailPanelWidth())
+	if m.detailVisible {
+		frame = frame.Height(m.detailPanelHeight())
+	}
 	if m.detailLoading {
-		return detailFrameStyle.Width(m.detailPanelWidth()).Render(sectionStyle.Render("Loading item details..."))
+		return frame.Render(sectionStyle.Render("Loading item details..."))
 	}
 	if m.detailErr != nil {
 		body := errorStyle.Render("Detail failed: "+m.detailErr.Error()) + "\n" + mutedStyle.Render("Press esc to return to the board.")
-		return detailFrameStyle.Width(m.detailPanelWidth()).Render(body)
+		return frame.Render(body)
 	}
 	if m.detail == nil {
-		return detailFrameStyle.Width(m.detailPanelWidth()).Render(mutedStyle.Render("No item selected."))
+		return frame.Render(mutedStyle.Render("No item selected."))
 	}
 
 	lines := detailLines(*m.detail, m.detailPanelWidth(), m.detailShowAll)
@@ -65,10 +69,16 @@ func (m Model) renderDetailPanel() string {
 	if end < len(lines) {
 		visible = append(visible, mutedStyle.Render("... scroll down for more"))
 	}
-	return detailFrameStyle.Width(m.detailPanelWidth()).Render(strings.Join(visible, "\n"))
+	return frame.Render(strings.Join(visible, "\n"))
 }
 
 func (m Model) detailPanelWidth() int {
+	if m.detailVisible {
+		if m.wideDetailLayout() {
+			return m.detailPaneOuterWidth() - 4
+		}
+		return m.frameContentWidth() - 4
+	}
 	width := m.frameContentWidth() - 8
 	if width > 108 {
 		width = 108
@@ -80,6 +90,29 @@ func (m Model) detailPanelWidth() int {
 		return 16
 	}
 	return width
+}
+
+func (m Model) wideDetailLayout() bool {
+	return m.detailVisible && m.width >= 128
+}
+
+func (m Model) detailPaneOuterWidth() int {
+	width := m.frameContentWidth() / 3
+	if width < 42 {
+		return 42
+	}
+	if width > 58 {
+		return 58
+	}
+	return width
+}
+
+func (m Model) detailPanelHeight() int {
+	height := m.bodyCanvasHeight() - 4
+	if height < 4 {
+		return 4
+	}
+	return height
 }
 
 func (m Model) detailViewportLines() int {
