@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -186,7 +187,7 @@ func (c *Client) Discover(ctx context.Context) (Discovery, error) {
 
 	organizations, err := c.memberships(ctx)
 	if err != nil {
-		discovery.MembershipError = err
+		discovery.MembershipError = explainMembershipError(err)
 		return discovery, nil
 	}
 	for _, organization := range organizations {
@@ -203,14 +204,104 @@ func (c *Client) Discover(ctx context.Context) (Discovery, error) {
 // picker. SAML-protected owners surface a typed error so the picker can show
 // an actionable message while keeping other owners usable.
 func (c *Client) OwnerProjects(ctx context.Context, owner Owner) ([]Project, error) {
-	return c.projects(ctx, owner)
+	projects, err := c.projects(ctx, owner)
+	if err != nil {
+		return nil, explainOwnerProjectsError(owner, err)
+	}
+	return projects, nil
 }
 
-func isSAMLProtectedError(err error) bool {
+type actionableAccessError struct {
+	message string
+	cause   error
+}
+
+func (e *actionableAccessError) Error() string { return e.message }
+func (e *actionableAccessError) Unwrap() error { return e.cause }
+
+type accessFailureKind uint8
+
+const (
+	accessFailureUnknown accessFailureKind = iota
+	accessFailureSSO
+	accessFailureScope
+	accessFailureRateLimit
+	accessFailureDenied
+)
+
+func classifyAccessFailure(err error) accessFailureKind {
 	if err == nil {
-		return false
+		return accessFailureUnknown
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "organization saml enforcement")
+	message := strings.ToLower(err.Error())
+	var httpErr *api.HTTPError
+	if errors.As(err, &httpErr) {
+		if strings.Contains(strings.ToLower(httpErr.Headers.Get("X-GitHub-SSO")), "required") {
+			return accessFailureSSO
+		}
+		if httpErr.StatusCode == 429 {
+			return accessFailureRateLimit
+		}
+	}
+	if strings.Contains(message, "saml") || strings.Contains(message, "sso authorization") || strings.Contains(message, "single sign-on") {
+		return accessFailureSSO
+	}
+	if strings.Contains(message, "rate limit") || strings.Contains(message, "abuse detection") || strings.Contains(message, "secondary rate") {
+		return accessFailureRateLimit
+	}
+	if strings.Contains(message, "insufficient scope") || strings.Contains(message, "scope") ||
+		strings.Contains(message, "resource not accessible by integration") {
+		return accessFailureScope
+	}
+	if strings.Contains(message, "forbidden") || strings.Contains(message, "unauthorized") ||
+		strings.Contains(message, "not authorized") || strings.Contains(message, "bad credentials") ||
+		strings.Contains(message, "authentication required") || strings.Contains(message, "requires authentication") {
+		return accessFailureDenied
+	}
+	if errors.As(err, &httpErr) && (httpErr.StatusCode == 401 || httpErr.StatusCode == 403) {
+		return accessFailureDenied
+	}
+	return accessFailureUnknown
+}
+
+func explainMembershipError(err error) error {
+	var message string
+	switch classifyAccessFailure(err) {
+	case accessFailureSSO:
+		message = "Organization discovery requires SAML/SSO authorization. Authorize GitHub CLI for your organization, then press r to retry."
+	case accessFailureScope:
+		message = "Organization discovery requires the read:org token scope. Run `gh auth refresh -s read:org`, then press r to retry."
+	case accessFailureRateLimit:
+		message = "GitHub rate-limited organization discovery. Wait for the rate limit to reset, then press r to retry."
+	case accessFailureDenied:
+		message = "GitHub denied organization discovery. Check your organization membership and token access, then press r to retry."
+	default:
+		message = "Could not discover organization memberships. Check GitHub connectivity and your read:org access, then press r to retry."
+	}
+	return &actionableAccessError{message: message, cause: err}
+}
+
+func explainOwnerProjectsError(owner Owner, err error) error {
+	ownerLabel := "owner"
+	if owner.Kind == OrganizationOwner {
+		ownerLabel = "organization"
+	} else if owner.Kind == UserOwner {
+		ownerLabel = "user"
+	}
+	var message string
+	switch classifyAccessFailure(err) {
+	case accessFailureSSO:
+		message = fmt.Sprintf("Projects for %s %q are protected by SAML/SSO. Authorize GitHub CLI for this organization, then press r to retry.", ownerLabel, owner.Login)
+	case accessFailureScope:
+		message = fmt.Sprintf("GitHub denied project access for %s %q because required token scopes are missing. Run `gh auth refresh -s project -s read:org`, authorize SSO if prompted, then press r to retry.", ownerLabel, owner.Login)
+	case accessFailureRateLimit:
+		message = fmt.Sprintf("GitHub rate-limited project loading for %s %q. Wait for the rate limit to reset, then press r to retry.", ownerLabel, owner.Login)
+	case accessFailureDenied:
+		message = fmt.Sprintf("GitHub denied project access for %s %q. Confirm membership and project access, authorize SSO if required, then press r to retry.", ownerLabel, owner.Login)
+	default:
+		message = fmt.Sprintf("Could not load projects for %s %q. Confirm the owner exists and your account can access its projects, then press r to retry.", ownerLabel, owner.Login)
+	}
+	return &actionableAccessError{message: message, cause: err}
 }
 
 func (c *Client) memberships(ctx context.Context) ([]organization, error) {
@@ -337,5 +428,13 @@ func (c *Client) ResolveOwner(ctx context.Context, login string) (Owner, []Proje
 	if userErr == nil {
 		return user, projects, nil
 	}
-	return Owner{}, nil, fmt.Errorf("owner %q could not be loaded as an organization (%v) or user (%v)", login, organizationErr, userErr)
+	preferredOwner, preferredErr := organization, organizationErr
+	if classifyAccessFailure(preferredErr) == accessFailureUnknown && classifyAccessFailure(userErr) != accessFailureUnknown {
+		preferredOwner, preferredErr = user, userErr
+	}
+	explained := explainOwnerProjectsError(preferredOwner, preferredErr)
+	return Owner{}, nil, &actionableAccessError{
+		message: fmt.Sprintf("Could not resolve owner %q. %s", login, explained.Error()),
+		cause:   errors.Join(organizationErr, userErr),
+	}
 }

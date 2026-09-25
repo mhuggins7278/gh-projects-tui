@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/cli/go-gh/v2/pkg/api"
 )
 
 type fakeGraphQL struct {
@@ -135,6 +138,36 @@ func TestOwnerProjectsLoadsOnDemand(t *testing.T) {
 	}
 	if _, err := client.OwnerProjects(context.Background(), Owner{Login: "org-fails", Kind: OrganizationOwner}); !errors.Is(err, failure) {
 		t.Fatalf("expected SSO error, got %v", err)
+	} else if !strings.Contains(err.Error(), "org-fails") || !strings.Contains(err.Error(), "SAML/SSO") || !strings.Contains(err.Error(), "press r") {
+		t.Fatalf("SSO error is not owner-specific/actionable: %v", err)
+	}
+}
+
+func TestAccessErrorsAreActionableAndDoNotExposeRawDetails(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "SAML header",
+			err:  &api.HTTPError{StatusCode: http.StatusForbidden, Headers: http.Header{"X-Github-Sso": []string{"required; url=https://github.com/orgs/acme/sso"}}, Message: "token=ghp_private issue body"},
+			want: "SAML/SSO",
+		},
+		{name: "insufficient scope", err: errors.New("Resource not accessible by integration: token=ghp_private issue body"), want: "gh auth refresh -s read:org"},
+		{name: "rate limited", err: errors.New("API rate limit exceeded: token=ghp_private issue body"), want: "rate-limited"},
+		{name: "membership unavailable", err: errors.New("network unavailable: token=ghp_private issue body"), want: "Could not discover organization memberships"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := explainMembershipError(test.err)
+			if !errors.Is(got, test.err) {
+				t.Fatalf("actionable error lost its cause: %v", got)
+			}
+			if !strings.Contains(got.Error(), test.want) || strings.Contains(got.Error(), "ghp_private") || strings.Contains(got.Error(), "issue body") {
+				t.Fatalf("unsafe or unactionable error = %q", got)
+			}
+		})
 	}
 }
 
@@ -177,6 +210,9 @@ func TestDiscoverPreservesViewerWhenMembershipFails(t *testing.T) {
 	}
 	if !errors.Is(discovery.MembershipError, failure) || len(discovery.Projects["me"]) != 1 || len(discovery.Owners) != 1 {
 		t.Fatalf("partial discovery = %#v", discovery)
+	}
+	if !strings.Contains(discovery.MembershipError.Error(), "read:org") || !strings.Contains(discovery.MembershipError.Error(), "press r") {
+		t.Fatalf("membership failure lacks retry guidance: %v", discovery.MembershipError)
 	}
 }
 
