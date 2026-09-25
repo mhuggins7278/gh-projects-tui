@@ -25,6 +25,20 @@ func (m Model) renderDetailPanel() string {
 	if m.detail == nil {
 		return frame.Render(mutedStyle.Render("No item selected."))
 	}
+	if m.commentEditing {
+		target := "issue"
+		if m.detail.Content.Number > 0 {
+			target = fmt.Sprintf("issue #%d", m.detail.Content.Number)
+		}
+		return frame.Render(sectionStyle.Render("New comment on "+target) + "\n" + truncateText(m.detail.Content.Title, m.detailPanelWidth()-4) + "\n\n" + m.commentDraft + "_\n\n" + mutedStyle.Render("enter submit · esc cancel"))
+	}
+	if m.issueActionConfirm {
+		action := "Reopen"
+		if m.issueActionClosing {
+			action = "Close"
+		}
+		return frame.Render(sectionStyle.Render(fmt.Sprintf("%s issue #%d?", action, m.detail.Content.Number)) + "\n" + truncateText(m.detail.Content.Title, m.detailPanelWidth()-4) + "\n\n" + mutedStyle.Render("enter confirm · esc cancel"))
+	}
 
 	lines := detailLines(*m.detail, m.detailPanelWidth(), m.detailShowAll)
 	viewport := m.detailViewportLines()
@@ -224,6 +238,9 @@ func detailLines(detail github.ItemDetail, width int, showAllFields bool) []stri
 		titleStyle.Render(truncateText(detail.Content.Title, width-4)),
 		itemKindStyle(contentKind(detail.Content)).Render(identity),
 	)
+	if detail.Content.Kind == "Issue" && detail.Content.State != "" {
+		lines = append(lines, "State: "+detail.Content.State)
+	}
 	if detail.Content.URL != "" {
 		lines = append(lines, mutedStyle.Render(truncateText(detail.Content.URL, width-4)))
 	}

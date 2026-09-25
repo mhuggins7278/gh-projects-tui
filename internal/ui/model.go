@@ -53,6 +53,11 @@ type ItemMutationSource interface {
 	UpdateItemPosition(context.Context, github.ItemPositionUpdate) error
 }
 
+type IssueActionSource interface {
+	IssueComment(context.Context, string, string) error
+	SetIssueClosed(context.Context, string, bool) error
+}
+
 type Selection struct {
 	OwnerLogin    string
 	ProjectNumber int
@@ -121,53 +126,58 @@ type Model struct {
 	host  string
 	debug bool
 
-	screen               screen
-	cursor               int
-	filter               string
-	filtering            bool
-	showHelp             bool
-	showAPI              bool
-	selectedOwner        *github.Owner
-	selectedProject      *github.Project
-	projectsLoading      bool
-	projectsErr          error
-	views                []github.ViewSummary
-	viewsErr             error
-	loadingViews         bool
-	viewsCache           map[string]viewsCacheEntry
-	boardViewReasons     map[int]string
-	pendingRejectedBoard *github.View
-	viewPickerNotice     string
-	loadingDetail        bool
-	status               string
-	items                []github.Item
-	itemsLoading         bool
-	itemsHasNext         bool
-	itemsCursor          string
-	itemsErr             error
-	itemsLoadFrame       int
-	itemsLanePending     int
-	itemsLoadingLanes    map[string]bool
-	itemsFailedLanes     map[string]bool
-	boardLane            int
-	boardCard            int
-	boardFocusID         string
-	width                int
-	height               int
-	detailVisible        bool
-	detailLoading        bool
-	detailItemID         string
-	detailRequestID      uint64
-	detail               *github.ItemDetail
-	detailCache          map[string]github.ItemDetail
-	detailErr            error
-	detailOffset         int
-	detailShowAll        bool
-	mutationLoading      bool
-	mutationSession      *boardMutationSession
-	nextMutationSession  uint64
-	pendingFilteredMove  *filteredMoveFocus
-	openBrowser          func(string) error
+	screen                screen
+	cursor                int
+	filter                string
+	filtering             bool
+	showHelp              bool
+	showAPI               bool
+	selectedOwner         *github.Owner
+	selectedProject       *github.Project
+	projectsLoading       bool
+	projectsErr           error
+	views                 []github.ViewSummary
+	viewsErr              error
+	loadingViews          bool
+	viewsCache            map[string]viewsCacheEntry
+	boardViewReasons      map[int]string
+	pendingRejectedBoard  *github.View
+	viewPickerNotice      string
+	loadingDetail         bool
+	status                string
+	items                 []github.Item
+	itemsLoading          bool
+	itemsHasNext          bool
+	itemsCursor           string
+	itemsErr              error
+	itemsLoadFrame        int
+	itemsLanePending      int
+	itemsLoadingLanes     map[string]bool
+	itemsFailedLanes      map[string]bool
+	boardLane             int
+	boardCard             int
+	boardFocusID          string
+	width                 int
+	height                int
+	detailVisible         bool
+	detailLoading         bool
+	detailItemID          string
+	detailRequestID       uint64
+	detail                *github.ItemDetail
+	detailCache           map[string]github.ItemDetail
+	detailErr             error
+	detailOffset          int
+	detailShowAll         bool
+	commentEditing        bool
+	commentDraft          string
+	issueActionConfirm    bool
+	issueActionClosing    bool
+	issueActionRefreshing bool
+	mutationLoading       bool
+	mutationSession       *boardMutationSession
+	nextMutationSession   uint64
+	pendingFilteredMove   *filteredMoveFocus
+	openBrowser           func(string) error
 }
 
 func NewModel(source DiscoverySource) Model {
@@ -331,6 +341,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.detailLoading = false
+		if m.issueActionRefreshing {
+			m.issueActionRefreshing = false
+			m.mutationLoading = false
+			if msg.err != nil {
+				m.status = "Issue state could not be reconciled; refresh before making another issue change."
+			} else if msg.detail != nil && msg.detail.Content != nil {
+				for i := range m.items {
+					if m.items[i].ID == msg.itemID && m.items[i].Content != nil {
+						m.items[i].Content.State = msg.detail.Content.State
+					}
+				}
+			}
+		}
 		m.detailErr = msg.err
 		if msg.err == nil && msg.detail != nil {
 			m.detail = msg.detail
@@ -363,6 +386,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Opened in browser."
 		}
 		return m, nil
+	case issueActionMsg:
+		if msg.generation != m.generation || msg.itemID != m.detailItemID {
+			return m, nil
+		}
+		m.mutationLoading = false
+		if msg.err != nil {
+			if github.IsAmbiguousMutationError(msg.err) {
+				if msg.closed == nil {
+					m.status = msg.status
+					return m, nil
+				}
+				m.status = "Issue action outcome is uncertain; refreshing issue state. Do not retry until it finishes."
+				m.mutationLoading = true
+				m.issueActionRefreshing = true
+				m.detailRequestID++
+				return m, m.loadItemDetailCmd(m.detailItemID, m.detailRequestID, m.currentBoardReadScope())
+			}
+			m.status = "Issue action failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.status = msg.status
+		if msg.closed != nil {
+			state := "OPEN"
+			if *msg.closed {
+				state = "CLOSED"
+			}
+			if m.detail != nil && m.detail.Content != nil {
+				m.detail.Content.State = state
+			}
+			for i := range m.items {
+				if m.items[i].ID == msg.itemID && m.items[i].Content != nil {
+					m.items[i].Content.State = state
+				}
+			}
+		}
+		m.detailRequestID++
+		return m, m.loadItemDetailCmd(m.detailItemID, m.detailRequestID, m.currentBoardReadScope())
 	}
 	return m, nil
 }
@@ -1025,6 +1085,83 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if m.screen == screenBoard {
 		if m.detailVisible {
+			if m.mutationLoading {
+				return m, nil
+			}
+			if m.issueActionConfirm {
+				switch key {
+				case "esc":
+					m.issueActionConfirm = false
+					m.status = "Issue action cancelled"
+					return m, nil
+				case "enter":
+					m.issueActionConfirm = false
+					source, ok := m.source.(IssueActionSource)
+					if !ok {
+						m.status = "Issue actions are unavailable for this client"
+						return m, nil
+					}
+					closed := m.issueActionClosing
+					id, itemID, gen := m.detail.Content.ID, m.detailItemID, m.generation
+					m.mutationLoading = true
+					label := "Issue reopened."
+					if closed {
+						label = "Issue closed."
+					}
+					return m, func() tea.Msg {
+						err := source.SetIssueClosed(context.Background(), id, closed)
+						return issueActionMsg{generation: gen, itemID: itemID, err: err, status: label, closed: &closed}
+					}
+				default:
+					return m, nil
+				}
+			}
+			if m.commentEditing {
+				switch key {
+				case "esc":
+					m.commentEditing = false
+					m.commentDraft = ""
+					return m, nil
+				case "enter":
+					body := strings.TrimSpace(m.commentDraft)
+					if body == "" {
+						m.status = "Comment cannot be empty"
+						return m, nil
+					}
+					if m.detail == nil || m.detail.Content == nil || m.detail.Content.Kind != "Issue" {
+						m.status = "Comments are available for issues only"
+						return m, nil
+					}
+					source, ok := m.source.(IssueActionSource)
+					if !ok {
+						m.status = "Issue actions are unavailable for this client"
+						return m, nil
+					}
+					m.commentEditing = false
+					m.commentDraft = ""
+					m.mutationLoading = true
+					id, itemID, gen := m.detail.Content.ID, m.detailItemID, m.generation
+					return m, func() tea.Msg {
+						err := source.IssueComment(context.Background(), id, body)
+						status := "Comment added."
+						if github.IsAmbiguousMutationError(err) {
+							status = "Comment submission outcome is uncertain; check GitHub before retrying."
+						}
+						return issueActionMsg{generation: gen, itemID: itemID, err: err, status: status}
+					}
+				case "backspace":
+					comment := []rune(m.commentDraft)
+					if len(comment) > 0 {
+						m.commentDraft = string(comment[:len(comment)-1])
+					}
+					return m, nil
+				default:
+					if msg.Text != "" {
+						m.commentDraft += msg.Text
+					}
+					return m, nil
+				}
+			}
 			switch key {
 			case "esc":
 				m.detailVisible = false
@@ -1035,6 +1172,36 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "o":
 				return m, m.openBrowserCmd()
+			case "c":
+				if m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
+					m.commentEditing = true
+					m.commentDraft = ""
+					m.status = fmt.Sprintf("Comment on #%d: %s", m.detail.Content.Number, m.detail.Content.Title)
+				} else {
+					m.status = "Comments are available for issues only"
+				}
+				return m, nil
+			case "x":
+				if m.detail == nil || m.detail.Content == nil || m.detail.Content.Kind != "Issue" {
+					m.status = "Close/reopen is available for issues only"
+					return m, nil
+				}
+				if !strings.EqualFold(m.detail.Content.State, "OPEN") && !strings.EqualFold(m.detail.Content.State, "CLOSED") {
+					m.status = "Issue state is unavailable; refresh details before changing it"
+					return m, nil
+				}
+				if _, ok := m.source.(IssueActionSource); !ok {
+					m.status = "Issue actions are unavailable for this client"
+					return m, nil
+				}
+				m.issueActionClosing = strings.EqualFold(m.detail.Content.State, "OPEN")
+				m.issueActionConfirm = true
+				verb := "reopen"
+				if m.issueActionClosing {
+					verb = "close"
+				}
+				m.status = fmt.Sprintf("Press enter to %s issue #%d: %s · esc cancels", verb, m.detail.Content.Number, m.detail.Content.Title)
+				return m, nil
 			case "j", "down", "J":
 				m.moveDetail(1)
 				return m, nil
@@ -1638,7 +1805,17 @@ func (m Model) filterLine() string {
 
 func (m Model) footerHints() string {
 	if m.screen == screenBoard && m.detailVisible {
-		return "j/k scroll detail · f all fields · o open in browser · esc close · q quit"
+		if m.commentEditing {
+			return "type comment · enter submit · esc cancel" + m.debugHint()
+		}
+		if m.issueActionConfirm {
+			return "enter confirm · esc cancel" + m.debugHint()
+		}
+		hints := "j/k scroll · f fields · o browser · esc close · q quit"
+		if m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
+			hints = "j/k scroll · f fields · c comment · x close/reopen · o browser · esc close · q quit"
+		}
+		return hints + m.debugHint()
 	}
 	switch m.screen {
 	case screenOwnerPicker:
@@ -1842,6 +2019,14 @@ type browserOpenMsg struct {
 	url        string
 	fallback   bool
 	err        error
+}
+
+type issueActionMsg struct {
+	generation uint64
+	itemID     string
+	err        error
+	status     string
+	closed     *bool
 }
 
 func itemsLoadingTick(generation uint64) tea.Cmd {

@@ -59,6 +59,80 @@ type ItemPositionUpdate struct {
 	AfterID   *string
 }
 
+const addIssueCommentMutation = `mutation AddIssueComment($input: AddCommentInput!) { addComment(input: $input) { commentEdge { node { id } } } }`
+const closeIssueMutation = `mutation CloseIssue($input: CloseIssueInput!) { closeIssue(input: $input) { issue { id state } } }`
+const reopenIssueMutation = `mutation ReopenIssue($input: ReopenIssueInput!) { reopenIssue(input: $input) { issue { id state } } }`
+
+func (c *Client) IssueComment(ctx context.Context, issueID, body string) error {
+	if err := validateMutationIDs(issueID); err != nil {
+		return err
+	}
+	if body == "" {
+		return fmt.Errorf("comment must not be empty")
+	}
+	var response struct {
+		Add *struct {
+			Edge *struct {
+				Node *struct {
+					ID string `json:"id"`
+				} `json:"node"`
+			} `json:"commentEdge"`
+		} `json:"addComment"`
+	}
+	if err := c.graphql.DoWithContext(ctx, addIssueCommentMutation, map[string]interface{}{"input": map[string]interface{}{"issueId": issueID, "body": body}}, &response); err != nil {
+		return classifyMutationError(err)
+	}
+	if response.Add == nil || response.Add.Edge == nil || response.Add.Edge.Node == nil {
+		return classifyMutationError(fmt.Errorf("add comment returned no payload"))
+	}
+	return nil
+}
+
+func (c *Client) SetIssueClosed(ctx context.Context, issueID string, closed bool) error {
+	if err := validateMutationIDs(issueID); err != nil {
+		return err
+	}
+	mutation, field := closeIssueMutation, "closeIssue"
+	if !closed {
+		mutation, field = reopenIssueMutation, "reopenIssue"
+	}
+	var response struct {
+		Close *struct {
+			Issue *struct {
+				ID    string `json:"id"`
+				State string `json:"state"`
+			} `json:"issue"`
+		} `json:"closeIssue"`
+		Reopen *struct {
+			Issue *struct {
+				ID    string `json:"id"`
+				State string `json:"state"`
+			} `json:"issue"`
+		} `json:"reopenIssue"`
+	}
+	if err := c.graphql.DoWithContext(ctx, mutation, map[string]interface{}{"input": map[string]interface{}{"issueId": issueID}}, &response); err != nil {
+		return classifyMutationError(err)
+	}
+	var issue *struct {
+		ID    string `json:"id"`
+		State string `json:"state"`
+	}
+	if field == "closeIssue" && response.Close != nil {
+		issue = response.Close.Issue
+	}
+	if field == "reopenIssue" && response.Reopen != nil {
+		issue = response.Reopen.Issue
+	}
+	wantState := "CLOSED"
+	if !closed {
+		wantState = "OPEN"
+	}
+	if issue == nil || issue.ID != issueID || issue.State != wantState {
+		return classifyMutationError(fmt.Errorf("issue state mutation returned no payload"))
+	}
+	return nil
+}
+
 // MutationError records whether a failed mutation may have reached GitHub.
 // Ambiguous outcomes must be read back before another write can depend on them.
 type MutationError struct {

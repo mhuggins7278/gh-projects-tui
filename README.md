@@ -119,12 +119,15 @@ reload from GitHub when you want to pick up external changes.
 | `v` | Pick a saved view |
 | `p` | Pick a project |
 | `r` | Refresh from GitHub; retry readback when a save outcome is unknown |
-| `o` | Show the selected project's browser URL |
+| `o` | Open the selected item or project in a browser |
 | `?` | Toggle help |
 | `q` or `ctrl+c` | Quit |
 
 In item details, `j/k` scrolls, `f` toggles all fields (including unset/unavailable
-values), and `esc` closes the panel.
+values), and `esc` closes the panel. For GitHub issues, `c` opens a comment
+composer (`enter` submits, `esc` cancels), and `x` prompts to close or reopen the
+issue (`enter` confirms, `esc` cancels). Pull requests and draft issues do not
+offer these issue actions.
 
 ## Pre-alpha limitations
 
