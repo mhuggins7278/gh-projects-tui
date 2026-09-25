@@ -1358,8 +1358,12 @@ func TestBoardViewportKeepsFocusedCardVisible(t *testing.T) {
 	model.height = 24
 	lane := boardLane{Name: "All items"}
 	for i := 0; i < 20; i++ {
+		title := "Card"
+		if i%3 == 1 {
+			title = "A longer card title that wraps onto a second line at this lane width"
+		}
 		lane.Items = append(lane.Items, github.Item{
-			Content:     &github.Content{Kind: "Issue", Number: i + 1, Title: "Card"},
+			Content:     &github.Content{Kind: "Issue", Number: i + 1, Title: title},
 			FieldValues: []github.FieldValue{{FieldID: "status", Value: "Todo", Available: true}},
 		})
 	}

@@ -35,7 +35,11 @@ type laneItemsRequest struct {
 var itemsLoadingFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func (m Model) boardLanes() []boardLane {
-	lanes := lanesForView(m.view, m.boardItems())
+	return m.boardLanesForItems(m.boardItems())
+}
+
+func (m Model) boardLanesForItems(items []github.Item) []boardLane {
+	lanes := lanesForView(m.view, items)
 	for index := range lanes {
 		if m.itemsLoading && len(m.itemsLoadingLanes) == 0 {
 			lanes[index].Loading = true
@@ -877,7 +881,7 @@ func (m Model) renderBoardContent(b *strings.Builder) {
 		return
 	}
 
-	lanes := m.boardLanes()
+	lanes := m.boardLanesForItems(visibleItems)
 	b.WriteString("\n" + m.renderLaneGrid(lanes) + "\n")
 	if m.itemsErr != nil {
 		b.WriteString(errorStyle.Render("Lane loading failed: "+m.itemsErr.Error()) + "\n")
@@ -1287,12 +1291,19 @@ func (m Model) boardWindowForLane(lane boardLane, selected, width, viewportHeigh
 		selected = len(lane.Items) - 1
 	}
 
-	heights := make([]int, len(lane.Items))
-	for i, item := range lane.Items {
-		heights[i] = lipgloss.Height(m.renderLaneCard(item, false, width))
-		if heights[i] < 1 {
-			heights[i] = 1
+	// Measure cards only as the viewport expands. A project can have thousands
+	// of cards in one lane, but only a handful can be visible at once.
+	heights := make(map[int]int)
+	heightAt := func(index int) int {
+		if height, ok := heights[index]; ok {
+			return height
 		}
+		height := lipgloss.Height(m.renderLaneCard(lane.Items[index], false, width))
+		if height < 1 {
+			height = 1
+		}
+		heights[index] = height
+		return height
 	}
 
 	// A lane frame consumes two border rows and one header row. Reserve
@@ -1316,8 +1327,8 @@ func (m Model) boardWindowForLane(lane boardLane, selected, width, viewportHeigh
 	if !active {
 		used := 0
 		end := 0
-		for end < len(heights) && (end == 0 || used+heights[end] <= capacity) {
-			used += heights[end]
+		for end < len(lane.Items) && (end == 0 || used+heightAt(end) <= capacity) {
+			used += heightAt(end)
 			end++
 		}
 		if end == 0 {
@@ -1327,23 +1338,23 @@ func (m Model) boardWindowForLane(lane boardLane, selected, width, viewportHeigh
 	}
 
 	start, end := selected, selected+1
-	used := heights[selected]
-	for start > 0 || end < len(heights) {
+	used := heightAt(selected)
+	for start > 0 || end < len(lane.Items) {
 		beforeHeight := 0
 		if start > 0 {
-			beforeHeight = heights[start-1]
+			beforeHeight = heightAt(start - 1)
 		}
 		afterHeight := 0
-		if end < len(heights) {
-			afterHeight = heights[end]
+		if end < len(lane.Items) {
+			afterHeight = heightAt(end)
 		}
-		preferBefore := start > 0 && (end >= len(heights) || selected-start <= end-selected)
+		preferBefore := start > 0 && (end >= len(lane.Items) || selected-start <= end-selected)
 		if preferBefore && used+beforeHeight <= capacity {
 			start--
 			used += beforeHeight
 			continue
 		}
-		if end < len(heights) && used+afterHeight <= capacity {
+		if end < len(lane.Items) && used+afterHeight <= capacity {
 			end++
 			used += afterHeight
 			continue
