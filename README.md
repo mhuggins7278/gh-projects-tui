@@ -2,9 +2,9 @@
 
 A terminal UI for GitHub Projects v2, built with Go and Bubble Tea.
 
-**Status: pre-alpha, not published yet.** There are no published releases or
-precompiled extension downloads. Run it manually from source using the steps
-below. Features, keybindings, and supported view types are still evolving.
+**Status: pre-alpha.** Releases are private and installable by users with access
+to this repository. Features, keybindings, and supported view types are still
+evolving.
 
 ## Screenshots
 
@@ -15,6 +15,34 @@ binary or a promise of visual/API parity with GitHub's web UI.
 ![Board view](docs/screenshots/board.png)
 
 ![Table view](docs/screenshots/table.png)
+
+## Install the GitHub CLI extension
+
+The repository is private, so first authenticate with an account that can read
+it and check the active host:
+
+```sh
+gh auth login
+gh auth status
+```
+
+Install and run the extension:
+
+```sh
+gh extension install mhuggins7278/gh-projects-tui
+gh projects-tui
+```
+
+Update it when a new release is available:
+
+```sh
+gh extension upgrade projects-tui
+```
+
+Remove it with `gh extension remove projects-tui`. Release tags trigger the
+release workflow, which builds precompiled binaries and attaches them to the
+private GitHub Release. The first-party `gh-extension-precompile` action
+publishes assets that `gh extension install` can select for the local platform.
 
 ## Run locally
 
@@ -78,9 +106,7 @@ go build -o gh-projects-tui ./cmd/gh-projects-tui
 ./gh-projects-tui --owner OWNER --project NUMBER --view NUMBER
 ```
 
-The intended future extension command is `gh projects-tui`; the commands above
-are the current way to run the unpublished app. After pulling updates, rerun
-`go run` or rebuild your local binary.
+After pulling updates, rerun `go run` or rebuild your local binary.
 
 ## Current features
 
@@ -171,3 +197,18 @@ go build ./...
 
 The default tests use local fixtures. Opt-in live API tests and the verified
 GitHub API behavior are documented in [docs/api-contract.md](docs/api-contract.md).
+
+The live smoke test is read-only and opt-in. Supply an owner and project/view
+that your authenticated `gh` account can read; set owner kind to `user` for a
+personal project (organization is the default):
+
+```sh
+GH_PROJECTS_TUI_LIVE_OWNER=OWNER \
+GH_PROJECTS_TUI_LIVE_PROJECT=PROJECT_NUMBER \
+GH_PROJECTS_TUI_LIVE_VIEW=VIEW_NUMBER \
+go test -tags live ./internal/github
+```
+
+It runs discovery, opens the selected view, pages items, and loads one item's
+detail. It does not submit mutations. Mutation verification belongs only on the
+disposable sandbox project documented in `docs/api-contract.md`.
