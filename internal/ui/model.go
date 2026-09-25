@@ -58,6 +58,42 @@ type Selection struct {
 	ViewNumber    int
 }
 
+// boardReadScope binds asynchronous board reads to the complete selection.
+// The generation rejects superseded work; the remaining fields make the
+// identity check explicit if a selection is replaced while a request races
+// cancellation.
+type boardReadScope struct {
+	host          string
+	owner         github.Owner
+	projectNumber int
+	projectID     string
+	viewNumber    int
+	generation    uint64
+}
+
+func (m Model) currentBoardReadScope() boardReadScope {
+	scope := boardReadScope{host: m.host, generation: m.generation}
+	if m.selectedOwner != nil {
+		scope.owner = *m.selectedOwner
+	}
+	if m.selectedProject != nil {
+		scope.projectNumber = m.selectedProject.Number
+	}
+	if m.view != nil {
+		scope.projectID = m.view.ProjectID
+		scope.viewNumber = m.view.Number
+	}
+	return scope
+}
+
+func (scope boardReadScope) matches(m Model) bool {
+	return scope.generation == m.generation && scope.host == m.host &&
+		m.screen == screenBoard && m.selectedOwner != nil && m.selectedProject != nil && m.view != nil &&
+		scope.owner.Login == m.selectedOwner.Login && scope.owner.Kind == m.selectedOwner.Kind &&
+		scope.projectNumber == m.selectedProject.Number && scope.projectID == m.view.ProjectID &&
+		scope.viewNumber == m.view.Number
+}
+
 type screen int
 
 const (
@@ -288,7 +324,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case laneItemsMsg:
 		return m.updateLaneItems(msg)
 	case itemDetailMsg:
-		if msg.generation != m.generation || m.screen != screenBoard || !m.detailVisible || msg.itemID != m.detailItemID || msg.requestID != m.detailRequestID {
+		if msg.generation != m.generation || !msg.scope.matches(m) || !m.detailVisible || msg.itemID != m.detailItemID || msg.requestID != m.detailRequestID {
 			return m, nil
 		}
 		m.detailLoading = false
@@ -302,10 +338,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case itemDetailDebounceMsg:
-		if msg.generation != m.generation || m.screen != screenBoard || !m.detailVisible || msg.itemID != m.detailItemID || msg.requestID != m.detailRequestID {
+		if msg.generation != m.generation || !msg.scope.matches(m) || !m.detailVisible || msg.itemID != m.detailItemID || msg.requestID != m.detailRequestID {
 			return m, nil
 		}
-		return m, m.loadItemDetailCmd(msg.itemID, msg.requestID)
+		return m, m.loadItemDetailCmd(msg.itemID, msg.requestID, msg.scope)
 	case boardMutationMsg:
 		return m.updateBoardMutation(msg)
 	case mutationReadbackMsg:
@@ -599,12 +635,13 @@ func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
 	filter := strings.TrimSpace(m.view.Filter)
 	fields := boardReadFields(*m.view)
 	generation := m.generation
+	scope := m.currentBoardReadScope()
 	ctx := m.ctx
 	source := m.source
 	return func() tea.Msg {
 		loader, ok := source.(ItemsSource)
 		if !ok {
-			return itemsPageMsg{after: after, reset: reset, err: fmt.Errorf("item loading is not supported by this client"), generation: generation}
+			return itemsPageMsg{after: after, reset: reset, err: fmt.Errorf("item loading is not supported by this client"), generation: generation, scope: scope}
 		}
 		if ctx == nil {
 			ctx = context.Background()
@@ -616,7 +653,7 @@ func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
 		} else {
 			page, err = loader.PageItems(ctx, owner, project, filter, after)
 		}
-		return itemsPageMsg{page: page, after: after, reset: reset, err: err, generation: generation}
+		return itemsPageMsg{page: page, after: after, reset: reset, err: err, generation: generation, scope: scope}
 	}
 }
 
@@ -631,7 +668,7 @@ func boardReadFields(view github.View) []github.Field {
 }
 
 func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
-	if msg.generation != m.generation || m.screen != screenBoard {
+	if msg.generation != m.generation || !msg.scope.matches(m) {
 		return m, nil
 	}
 	if msg.reset {
@@ -710,12 +747,13 @@ func (m *Model) laneItemsCmd(request laneItemsRequest) tea.Cmd {
 		fields = boardReadFields(*m.view)
 	}
 	generation := m.generation
+	scope := m.currentBoardReadScope()
 	ctx := m.ctx
 	source := m.source
 	return func() tea.Msg {
 		loader, ok := source.(ItemsSource)
 		if !ok {
-			return laneItemsMsg{request: request, err: fmt.Errorf("item loading is not supported by this client"), generation: generation}
+			return laneItemsMsg{request: request, err: fmt.Errorf("item loading is not supported by this client"), generation: generation, scope: scope}
 		}
 		if ctx == nil {
 			ctx = context.Background()
@@ -732,11 +770,11 @@ func (m *Model) laneItemsCmd(request laneItemsRequest) tea.Cmd {
 				page, err = loader.PageItems(ctx, owner, project, request.filter, after)
 			}
 			if err != nil {
-				return laneItemsMsg{request: request, items: items, err: err, generation: generation}
+				return laneItemsMsg{request: request, items: items, err: err, generation: generation, scope: scope}
 			}
 			items = append(items, page.Items...)
 			if !page.HasNext {
-				return laneItemsMsg{request: request, items: items, generation: generation}
+				return laneItemsMsg{request: request, items: items, generation: generation, scope: scope}
 			}
 			after = page.EndCursor
 		}
@@ -744,7 +782,7 @@ func (m *Model) laneItemsCmd(request laneItemsRequest) tea.Cmd {
 }
 
 func (m Model) updateLaneItems(msg laneItemsMsg) (tea.Model, tea.Cmd) {
-	if msg.generation != m.generation || m.screen != screenBoard || !m.itemsLoadingLanes[msg.request.key] {
+	if msg.generation != m.generation || !msg.scope.matches(m) || !m.itemsLoadingLanes[msg.request.key] {
 		return m, nil
 	}
 	m.items = appendUniqueItems(m.items, msg.items)
@@ -824,12 +862,13 @@ func (m *Model) openItemDetailCmd() tea.Cmd {
 	m.detailLoading = true
 	requestID := m.detailRequestID
 	generation := m.generation
+	scope := m.currentBoardReadScope()
 	return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
-		return itemDetailDebounceMsg{itemID: item.ID, requestID: requestID, generation: generation}
+		return itemDetailDebounceMsg{itemID: item.ID, requestID: requestID, generation: generation, scope: scope}
 	})
 }
 
-func (m *Model) loadItemDetailCmd(itemID string, requestID uint64) tea.Cmd {
+func (m *Model) loadItemDetailCmd(itemID string, requestID uint64, scope boardReadScope) tea.Cmd {
 	owner := *m.selectedOwner
 	project := m.selectedProject.Number
 	generation := m.generation
@@ -838,13 +877,13 @@ func (m *Model) loadItemDetailCmd(itemID string, requestID uint64) tea.Cmd {
 	return func() tea.Msg {
 		loader, ok := source.(ItemDetailSource)
 		if !ok {
-			return itemDetailMsg{itemID: itemID, requestID: requestID, err: fmt.Errorf("item detail is not supported by this client"), generation: generation}
+			return itemDetailMsg{itemID: itemID, requestID: requestID, err: fmt.Errorf("item detail is not supported by this client"), generation: generation, scope: scope}
 		}
 		if ctx == nil {
 			ctx = context.Background()
 		}
 		detail, err := loader.LoadItemDetail(ctx, owner, project, itemID)
-		return itemDetailMsg{itemID: itemID, requestID: requestID, detail: &detail, err: err, generation: generation}
+		return itemDetailMsg{itemID: itemID, requestID: requestID, detail: &detail, err: err, generation: generation, scope: scope}
 	}
 }
 
@@ -1701,6 +1740,7 @@ type itemsPageMsg struct {
 	reset      bool
 	err        error
 	generation uint64
+	scope      boardReadScope
 }
 
 type itemsLoadingTickMsg struct {
@@ -1712,6 +1752,7 @@ type laneItemsMsg struct {
 	items      []github.Item
 	err        error
 	generation uint64
+	scope      boardReadScope
 }
 
 type itemDetailMsg struct {
@@ -1720,12 +1761,14 @@ type itemDetailMsg struct {
 	detail     *github.ItemDetail
 	err        error
 	generation uint64
+	scope      boardReadScope
 }
 
 type itemDetailDebounceMsg struct {
 	itemID     string
 	requestID  uint64
 	generation uint64
+	scope      boardReadScope
 }
 
 func itemsLoadingTick(generation uint64) tea.Cmd {

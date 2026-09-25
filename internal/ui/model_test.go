@@ -59,6 +59,59 @@ func TestModelIgnoresStaleDiscoveryMessages(t *testing.T) {
 	}
 }
 
+func TestBoardReadScopeRejectsSameGenerationFromAnotherProject(t *testing.T) {
+	model := NewModel(nil)
+	model.screen = screenBoard
+	model.host = "github.com"
+	model.generation = 7
+	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+	model.selectedProject = &github.Project{Number: 1}
+	model.view = &github.View{Number: 3, ProjectID: "project-one"}
+	model.items = []github.Item{{ID: "current"}}
+	scope := model.currentBoardReadScope()
+
+	model.selectedProject = &github.Project{Number: 2}
+	model.view = &github.View{Number: 3, ProjectID: "project-two"}
+	updated, _ := model.Update(itemsPageMsg{
+		page:       github.ItemsPage{Items: []github.Item{{ID: "stale"}}},
+		reset:      true,
+		generation: model.generation,
+		scope:      scope,
+	})
+	result := updated.(Model)
+	if len(result.items) != 1 || result.items[0].ID != "current" {
+		t.Fatalf("same-generation page from another project was applied: %#v", result.items)
+	}
+}
+
+func TestDetailResultRequiresMatchingProjectAndViewScope(t *testing.T) {
+	model := NewModel(nil)
+	model.screen = screenBoard
+	model.generation = 11
+	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+	model.selectedProject = &github.Project{Number: 1}
+	model.view = &github.View{Number: 2, ProjectID: "project-one"}
+	model.detailVisible = true
+	model.detailLoading = true
+	model.detailItemID = "same-item-id"
+	model.detailRequestID = 4
+	scope := model.currentBoardReadScope()
+
+	model.selectedProject = &github.Project{Number: 2}
+	model.view = &github.View{Number: 3, ProjectID: "project-two"}
+	updated, _ := model.Update(itemDetailMsg{
+		itemID:     "same-item-id",
+		requestID:  4,
+		detail:     &github.ItemDetail{ID: "same-item-id"},
+		generation: model.generation,
+		scope:      scope,
+	})
+	result := updated.(Model)
+	if result.detail != nil || !result.detailLoading {
+		t.Fatalf("detail from previous project/view was applied: %#v", result.detail)
+	}
+}
+
 func TestRefreshCancelsPreviousDiscovery(t *testing.T) {
 	source := &fakeDiscoverySource{}
 	model := NewModel(source)

@@ -147,6 +147,9 @@ func TestSelectiveBoardQueryOmitsUnrelatedConnections(t *testing.T) {
 			if strings.Contains(query, "type content") {
 				t.Fatalf("board query has invalid content selection: %q", query)
 			}
+			if strings.Contains(query, "body") || strings.Contains(query, "fieldValues(first:") {
+				t.Fatalf("board query fetched bodies or all field values: %q", query)
+			}
 			if !strings.Contains(query, "fieldValueByName") {
 				t.Fatalf("board query missing selective field lookup: %q", query)
 			}
