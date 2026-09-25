@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
@@ -263,7 +264,39 @@ func detailLines(detail github.ItemDetail, width int, showAllFields bool) []stri
 		lines = append(lines, renderMarkdown(detail.Content.Body, width-4)...)
 	}
 
+	if detail.Content.Kind == "Issue" {
+		lines = append(lines, "", sectionStyle.Render("Comments"))
+		switch {
+		case detail.CommentsError != "":
+			lines = append(lines, errorStyle.Render("Comments unavailable: "+detail.CommentsError))
+		case !detail.CommentsLoaded:
+			lines = append(lines, mutedStyle.Render("Comments have not been loaded"))
+		case len(detail.Comments) == 0:
+			lines = append(lines, mutedStyle.Render("No comments yet."))
+		default:
+			for index, comment := range detail.Comments {
+				if index > 0 {
+					lines = append(lines, "")
+				}
+				lines = append(lines, detailLabelStyle.Render(comment.Author+" · "+formatCommentTime(comment.CreatedAt)))
+				if strings.TrimSpace(comment.Body) == "" {
+					lines = append(lines, mutedStyle.Render("(empty comment)"))
+				} else {
+					lines = append(lines, renderMarkdown(comment.Body, width-4)...)
+				}
+			}
+		}
+	}
+
 	return lines
+}
+
+func formatCommentTime(raw string) string {
+	created, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return raw
+	}
+	return created.Local().Format("Jan 2, 2006 3:04 PM")
 }
 
 func detailFieldPills(fields []github.DetailField, width int, showAll bool) []string {

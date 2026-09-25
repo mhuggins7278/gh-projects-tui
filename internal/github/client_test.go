@@ -553,7 +553,7 @@ func TestLoadItemDetailPaginatesFieldsAndValues(t *testing.T) {
 			}}}
 			result.Node = &rawDetailItem{
 				ID:      "item-1",
-				Content: &rawContent{Kind: "Issue", Number: 42, Title: "Fix it", Body: &body},
+				Content: &rawContent{Kind: "PullRequest", Number: 42, Title: "Fix it", Body: &body},
 				FieldValues: rawFieldValuePage{
 					Nodes:    []*rawFieldValue{{Kind: "ProjectV2ItemFieldSingleSelectValue", Field: rawFieldRef{ID: "status", Name: "Status"}, OptionID: "todo", Name: "Todo"}},
 					PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("values-next")},
@@ -687,6 +687,74 @@ func TestLoadItemDetailPaginatesNestedMultiValueConnections(t *testing.T) {
 		if detail.Fields[index].Value == nil || !strings.HasSuffix(detail.Fields[index].Value.Value, tc.want) || strings.Count(detail.Fields[index].Value.Value, ",") != 100 {
 			t.Fatalf("%s = %#v, want %q", tc.name, detail.Fields[index].Value, tc.want)
 		}
+	}
+}
+
+func TestLoadIssueCommentsPaginatesAndSortsOldestFirst(t *testing.T) {
+	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+		func(query string, variables map[string]interface{}, response interface{}) error {
+			if !strings.Contains(query, "comments(first: 100") || variables["issueID"] != "issue-node" || variables["after"] != nil {
+				t.Fatalf("first comments query: %s %#v", query, variables)
+			}
+			return json.Unmarshal([]byte(`{"node":{"comments":{"nodes":[{"id":"c2","body":"second","createdAt":"2025-01-02T10:00:00Z","author":{"login":"b"}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}`), response)
+		},
+		func(query string, variables map[string]interface{}, response interface{}) error {
+			if variables["after"] != "cursor-1" {
+				t.Fatalf("second comments cursor: %#v", variables)
+			}
+			return json.Unmarshal([]byte(`{"node":{"comments":{"nodes":[{"id":"c1","body":"first","createdAt":"2025-01-01T10:00:00Z","author":{"login":"a"}},{"id":"c3","body":"third","createdAt":"2025-01-03T10:00:00Z","author":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`), response)
+		},
+	}}
+	comments, errText := newClient(graphql, &fakeREST{}).loadIssueComments(context.Background(), "issue-node")
+	if errText != "" || len(comments) != 3 || comments[0].ID != "c1" || comments[1].ID != "c2" || comments[2].ID != "c3" || comments[2].Author != "Unknown author" {
+		t.Fatalf("comments = %#v, error = %q", comments, errText)
+	}
+}
+
+func TestLoadIssueCommentsDistinguishesEmptyAndUnavailable(t *testing.T) {
+	empty := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+		func(_ string, _ map[string]interface{}, response interface{}) error {
+			return json.Unmarshal([]byte(`{"node":{"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`), response)
+		},
+	}}
+	comments, errText := newClient(empty, &fakeREST{}).loadIssueComments(context.Background(), "issue-node")
+	if errText != "" || comments == nil || len(comments) != 0 {
+		t.Fatalf("empty thread = %#v, error = %q", comments, errText)
+	}
+	unavailable := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+		func(string, map[string]interface{}, interface{}) error { return errors.New("permission denied") },
+	}}
+	comments, errText = newClient(unavailable, &fakeREST{}).loadIssueComments(context.Background(), "issue-node")
+	if errText == "" || comments != nil {
+		t.Fatalf("unavailable thread = %#v, error = %q", comments, errText)
+	}
+}
+
+func TestLoadItemDetailFetchesIssueCommentsOnDemand(t *testing.T) {
+	body := "Issue body"
+	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+		func(query string, _ map[string]interface{}, response interface{}) error {
+			if !strings.Contains(query, "ItemDetailFields") {
+				t.Fatalf("detail query = %q", query)
+			}
+			result := response.(*itemDetailResponse)
+			result.Organization = &detailOwner{Project: &detailProject{}}
+			result.Node = &rawDetailItem{ID: "project-item", Content: &rawContent{Kind: "Issue", ID: "issue-node", Number: 9, Title: "On demand", Body: &body}}
+			return nil
+		},
+		func(query string, variables map[string]interface{}, response interface{}) error {
+			if !strings.Contains(query, "comments(first: 100") || variables["issueID"] != "issue-node" {
+				t.Fatalf("comments query = %q, vars %#v", query, variables)
+			}
+			return json.Unmarshal([]byte(`{"node":{"comments":{"nodes":[{"id":"c1","body":"visible","createdAt":"2025-01-01T00:00:00Z","author":{"login":"reader"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`), response)
+		},
+	}}
+	detail, err := newClient(graphql, &fakeREST{}).LoadItemDetail(context.Background(), Owner{Login: "org", Kind: OrganizationOwner}, 1, "project-item")
+	if err != nil {
+		t.Fatalf("LoadItemDetail() error = %v", err)
+	}
+	if !detail.CommentsLoaded || detail.CommentsError != "" || len(detail.Comments) != 1 || detail.Comments[0].Body != "visible" {
+		t.Fatalf("issue comments = %#v", detail)
 	}
 }
 

@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -73,10 +74,48 @@ query ItemNestedFieldValue($itemID: ID!, $fieldName: String!, $labelsAfter: Stri
   }
 }`
 
+const issueCommentsQuery = `
+query ItemIssueComments($issueID: ID!, $after: String) {
+  node(id: $issueID) {
+    ... on Issue {
+      comments(first: 100, after: $after) {
+        nodes { id body createdAt author { login } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`
+
 type ItemDetail struct {
-	ID      string
-	Content *Content
-	Fields  []DetailField
+	ID             string
+	Content        *Content
+	Fields         []DetailField
+	Comments       []IssueComment
+	CommentsLoaded bool
+	CommentsError  string
+}
+
+type IssueComment struct {
+	ID        string
+	Author    string
+	CreatedAt string
+	Body      string
+}
+
+type issueCommentsResponse struct {
+	Node *struct {
+		Comments *struct {
+			Nodes []*struct {
+				ID        string `json:"id"`
+				Body      string `json:"body"`
+				CreatedAt string `json:"createdAt"`
+				Author    *struct {
+					Login string `json:"login"`
+				} `json:"author"`
+			} `json:"nodes"`
+			PageInfo pageInfo `json:"pageInfo"`
+		} `json:"comments"`
+	} `json:"node"`
 }
 
 type DetailField struct {
@@ -135,6 +174,10 @@ func (c *Client) LoadItemDetail(ctx context.Context, owner Owner, projectNumber 
 		return ItemDetail{}, fmt.Errorf("project item %q was not found or is inaccessible", itemID)
 	}
 	detail := ItemDetail{ID: page.Item.ID, Content: projectContent(page.Item.Content)}
+	if detail.Content != nil && detail.Content.Kind == "Issue" {
+		detail.Comments, detail.CommentsError = c.loadIssueComments(ctx, detail.Content.ID)
+		detail.CommentsLoaded = detail.CommentsError == ""
+	}
 	if cached != nil {
 		page.ProjectFields = fieldConnection{Nodes: cached.fields}
 	}
@@ -235,6 +278,52 @@ func (c *Client) LoadItemDetail(ctx context.Context, owner Owner, projectNumber 
 		})
 	}
 	return detail, nil
+}
+
+func (c *Client) loadIssueComments(ctx context.Context, issueID string) ([]IssueComment, string) {
+	comments := make([]IssueComment, 0)
+	after := ""
+	for {
+		var response issueCommentsResponse
+		variables := map[string]interface{}{"issueID": issueID, "after": nullableCursor(after)}
+		if err := c.graphql.DoWithContext(ctx, issueCommentsQuery, variables, &response); err != nil {
+			return nil, err.Error()
+		}
+		if response.Node == nil || response.Node.Comments == nil {
+			return nil, fmt.Sprintf("issue comments are unavailable for %q", issueID)
+		}
+		for _, raw := range response.Node.Comments.Nodes {
+			if raw == nil {
+				continue
+			}
+			author := "Unknown author"
+			if raw.Author != nil && raw.Author.Login != "" {
+				author = raw.Author.Login
+			}
+			comments = append(comments, IssueComment{ID: raw.ID, Author: author, CreatedAt: raw.CreatedAt, Body: raw.Body})
+		}
+		info := response.Node.Comments.PageInfo
+		if !info.HasNextPage {
+			break
+		}
+		next, err := nextCursor(info, after)
+		if err != nil {
+			return nil, err.Error()
+		}
+		after = next
+	}
+	sort.SliceStable(comments, func(i, j int) bool {
+		left, leftErr := time.Parse(time.RFC3339Nano, comments[i].CreatedAt)
+		right, rightErr := time.Parse(time.RFC3339Nano, comments[j].CreatedAt)
+		if leftErr == nil && rightErr == nil && !left.Equal(right) {
+			return left.Before(right)
+		}
+		if comments[i].CreatedAt != comments[j].CreatedAt {
+			return comments[i].CreatedAt < comments[j].CreatedAt
+		}
+		return comments[i].ID < comments[j].ID
+	})
+	return comments, ""
 }
 
 func (c *Client) fetchNestedFieldValuePage(ctx context.Context, itemID, fieldName, kind, after string) (*rawFieldValue, error) {

@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -1554,6 +1555,85 @@ func TestMarkdownRendererWrapsGitHubBody(t *testing.T) {
 	joined := strings.Join(strings.Fields(ansi.Strip(strings.Join(lines, " "))), " ")
 	if !strings.Contains(joined, "terminal detail popover") {
 		t.Fatalf("markdown content was lost: %q", joined)
+	}
+}
+
+type commentActionPickerSource struct {
+	fakePickerSource
+	comments []github.IssueComment
+}
+
+func (s *commentActionPickerSource) IssueComment(_ context.Context, issueID, body string) error {
+	s.comments = append(s.comments, github.IssueComment{ID: "new-comment", Author: "viewer", CreatedAt: "2025-01-01T12:00:00Z", Body: body})
+	return nil
+}
+
+func (s *commentActionPickerSource) SetIssueClosed(context.Context, string, bool) error { return nil }
+
+func (s *commentActionPickerSource) LoadItemDetail(_ context.Context, _ github.Owner, _ int, itemID string) (github.ItemDetail, error) {
+	return github.ItemDetail{ID: itemID, Content: &github.Content{Kind: "Issue", ID: "issue-node", Number: 7, Title: "Comment refresh"}, Comments: append([]github.IssueComment(nil), s.comments...), CommentsLoaded: true}, nil
+}
+
+func TestIssueCommentsRenderEmptyUnavailableAndScroll(t *testing.T) {
+	base := github.ItemDetail{Content: &github.Content{Kind: "Issue", Title: "Thread"}}
+	base.CommentsLoaded = true
+	lines := detailLines(base, 60, false)
+	if !strings.Contains(ansi.Strip(strings.Join(lines, "\n")), "No comments yet.") {
+		t.Fatalf("empty comment thread not explained: %q", ansi.Strip(strings.Join(lines, "\n")))
+	}
+	base.CommentsLoaded = false
+	base.CommentsError = "permission denied"
+	lines = detailLines(base, 60, false)
+	if !strings.Contains(ansi.Strip(strings.Join(lines, "\n")), "Comments unavailable: permission denied") {
+		t.Fatalf("unavailable comments not distinguished: %q", ansi.Strip(strings.Join(lines, "\n")))
+	}
+	base.CommentsError = ""
+	base.CommentsLoaded = true
+	for i := 0; i < 30; i++ {
+		base.Comments = append(base.Comments, github.IssueComment{ID: fmt.Sprintf("comment-%02d", i), Author: "author", CreatedAt: "2025-01-01T12:00:00Z", Body: fmt.Sprintf("comment-body-%02d", i)})
+	}
+	model := NewModel(nil)
+	model.width, model.height, model.detailVisible = 80, 12, true
+	model.detail = &base
+	model.moveDetail(model.detailMaxOffset())
+	panel := ansi.Strip(model.renderDetailPanel())
+	if !strings.Contains(panel, "author") || !strings.Contains(panel, "comment-body-29") {
+		t.Fatalf("last comments are not reachable by detail scrolling: %q", panel)
+	}
+}
+
+func TestSubmittedCommentAppearsAfterDetailRefresh(t *testing.T) {
+	source := &commentActionPickerSource{}
+	model := NewModel(source)
+	model.screen = screenBoard
+	model.detailVisible = true
+	model.detailItemID = "project-item"
+	model.detail = &github.ItemDetail{ID: "project-item", Content: &github.Content{Kind: "Issue", ID: "issue-node", Number: 7, Title: "Comment refresh"}, CommentsLoaded: true}
+	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+	model.selectedProject = &github.Project{Number: 1}
+	model.view = &github.View{ProjectID: "project-id", Number: 1}
+
+	updated, _ := model.Update(keyPress("c"))
+	model = updated.(Model)
+	for _, r := range "posted from the TUI" {
+		updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: r, Text: string(r)}))
+		model = updated.(Model)
+	}
+	updated, submitCmd := model.Update(keyPress("enter"))
+	model = updated.(Model)
+	if submitCmd == nil {
+		t.Fatal("comment submission did not start")
+	}
+	updated, refreshCmd := model.Update(submitCmd())
+	model = updated.(Model)
+	if refreshCmd == nil {
+		t.Fatal("successful submission did not refresh issue details")
+	}
+	updated, _ = model.Update(refreshCmd())
+	model = updated.(Model)
+	panel := ansi.Strip(model.renderDetailPanel())
+	if !strings.Contains(panel, "posted from the TUI") {
+		t.Fatalf("submitted comment missing after refresh: %q", panel)
 	}
 }
 
