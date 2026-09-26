@@ -626,7 +626,7 @@ func TestBoardLoadsSinglePaginatedStream(t *testing.T) {
 }
 
 func TestSavedFilteredStatusBoardPagesUnchangedQuery(t *testing.T) {
-	const filter = `status:"Done" assignee:@me`
+	const filter = `  label:bug,support status:"Done" assignee:@me  `
 	status := github.Field{ID: "status", Name: "Status", Kind: "ProjectV2SingleSelectField", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "todo", Name: "Todo"}, {ID: "done", Name: "Done"}}}
 	itemCalls := 0
 	source := fakePickerSource{itemCalls: &itemCalls, itemPagesByFilter: map[string]map[string]github.ItemsPage{

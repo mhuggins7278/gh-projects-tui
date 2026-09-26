@@ -23,6 +23,16 @@ fragment FieldConfiguration on ProjectV2FieldConfiguration {
   }
 }`
 
+// Filter validation needs field names and types, not options or iterations.
+const filterFieldFragment = `
+fragment FilterFieldConfiguration on ProjectV2FieldConfiguration {
+  __typename
+  ... on ProjectV2Field { id name dataType }
+  ... on ProjectV2SingleSelectField { id name dataType }
+  ... on ProjectV2IterationField { id name dataType }
+  ... on ProjectV2MultiSelectField { id name dataType }
+}`
+
 const viewFieldsFragment = `
 fragment ViewFields on ProjectV2View {
   id number name layout filter
@@ -35,16 +45,16 @@ fragment ViewFields on ProjectV2View {
 const userViewQuery = `
 query UserProjectView($login: String!, $project: Int!, $view: Int!, $fieldsAfter: String, $groupsAfter: String, $verticalGroupsAfter: String, $sortsAfter: String) {
   user(login: $login) {
-    projectV2(number: $project) { id viewerCanUpdate view(number: $view) { ...ViewFields } }
+    projectV2(number: $project) { id viewerCanUpdate projectFields: fields(first: 100) { nodes { ...FilterFieldConfiguration } pageInfo { hasNextPage endCursor } } view(number: $view) { ...ViewFields } }
   }
-}` + viewFieldsFragment
+}` + viewFieldsFragment + filterFieldFragment
 
 const organizationViewQuery = `
 query OrganizationProjectView($login: String!, $project: Int!, $view: Int!, $fieldsAfter: String, $groupsAfter: String, $verticalGroupsAfter: String, $sortsAfter: String) {
   organization(login: $login) {
-    projectV2(number: $project) { id viewerCanUpdate view(number: $view) { ...ViewFields } }
+    projectV2(number: $project) { id viewerCanUpdate projectFields: fields(first: 100) { nodes { ...FilterFieldConfiguration } pageInfo { hasNextPage endCursor } } view(number: $view) { ...ViewFields } }
   }
-}` + viewFieldsFragment
+}` + viewFieldsFragment + filterFieldFragment
 
 const viewFieldsPageFragment = `
 fragment ViewFieldsPage on ProjectV2View {
@@ -106,6 +116,7 @@ type View struct {
 	Layout          ViewLayout
 	Filter          string
 	ViewerCanUpdate bool
+	ProjectFields   []Field
 	Fields          []Field
 	GroupByFields   []Field
 	VerticalGroupBy []Field
@@ -149,9 +160,10 @@ type viewOwner struct {
 }
 
 type viewProject struct {
-	ProjectID       string   `json:"id"`
-	ViewerCanUpdate bool     `json:"viewerCanUpdate"`
-	View            *rawView `json:"view"`
+	ProjectID       string          `json:"id"`
+	ViewerCanUpdate bool            `json:"viewerCanUpdate"`
+	ProjectFields   fieldConnection `json:"projectFields"`
+	View            *rawView        `json:"view"`
 }
 
 type rawView struct {
@@ -217,8 +229,22 @@ func (c *Client) OpenView(ctx context.Context, owner Owner, projectNumber, viewN
 		return View{}, err
 	}
 	raw := project.View
-
 	after := ""
+	for project.ProjectFields.PageInfo.HasNextPage {
+		nextAfter, cursorErr := nextCursor(project.ProjectFields.PageInfo, after)
+		if cursorErr != nil {
+			return View{}, cursorErr
+		}
+		page, fetchErr := c.fetchProjectFieldsPage(ctx, owner, projectNumber, nextAfter)
+		if fetchErr != nil {
+			return View{}, fetchErr
+		}
+		project.ProjectFields.Nodes = append(project.ProjectFields.Nodes, page.Nodes...)
+		project.ProjectFields.PageInfo = page.PageInfo
+		after = nextAfter
+	}
+
+	after = ""
 	for raw.Configuration.VisibleFields.PageInfo.HasNextPage {
 		nextAfter, cursorErr := nextCursor(raw.Configuration.VisibleFields.PageInfo, after)
 		if cursorErr != nil {
@@ -283,11 +309,45 @@ func (c *Client) OpenView(ctx context.Context, owner Owner, projectNumber, viewN
 		Layout:          raw.Layout,
 		Filter:          raw.Filter,
 		ViewerCanUpdate: project.ViewerCanUpdate,
+		ProjectFields:   project.ProjectFields.project(),
 		Fields:          raw.Configuration.VisibleFields.project(),
 		GroupByFields:   raw.GroupByFields.project(),
 		VerticalGroupBy: raw.VerticalGroupBy.project(),
 		SortByFields:    raw.SortByFields.sorts(),
 	}, nil
+}
+
+func (c *Client) fetchProjectFieldsPage(ctx context.Context, owner Owner, projectNumber int, after string) (fieldConnection, error) {
+	branch := "organization"
+	if owner.Kind == UserOwner {
+		branch = "user"
+	} else if owner.Kind != OrganizationOwner {
+		return fieldConnection{}, fmt.Errorf("unsupported owner kind %q", owner.Kind)
+	}
+	query := `query ProjectFieldsPage($login: String!, $project: Int!, $after: String) { ` + branch + `(login: $login) { projectV2(number: $project) { fields(first: 100, after: $after) { nodes { ...FilterFieldConfiguration } pageInfo { hasNextPage endCursor } } } } }` + filterFieldFragment
+	var response struct {
+		User *struct {
+			Project *struct {
+				Fields fieldConnection `json:"fields"`
+			} `json:"projectV2"`
+		} `json:"user"`
+		Organization *struct {
+			Project *struct {
+				Fields fieldConnection `json:"fields"`
+			} `json:"projectV2"`
+		} `json:"organization"`
+	}
+	if err := c.graphql.DoWithContext(ctx, query, map[string]interface{}{"login": owner.Login, "project": projectNumber, "after": after}, &response); err != nil {
+		return fieldConnection{}, err
+	}
+	selected := response.Organization
+	if owner.Kind == UserOwner {
+		selected = response.User
+	}
+	if selected == nil || selected.Project == nil {
+		return fieldConnection{}, fmt.Errorf("project fields for %d in %q were not returned", projectNumber, owner.Login)
+	}
+	return selected.Project.Fields, nil
 }
 
 func (c *Client) fetchView(ctx context.Context, owner Owner, projectNumber, viewNumber int, cursors viewCursors) (*viewProject, error) {

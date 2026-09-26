@@ -67,6 +67,55 @@ func cursor(value string) *string {
 	return &value
 }
 
+func TestPageBoardItemsPreservesSavedFilterAcrossPages(t *testing.T) {
+	filter := `label:"bug","needs review" assignee:@me is:closed`
+	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+		func(query string, variables map[string]interface{}, response interface{}) error {
+			if variables["filter"] != filter || variables["after"] != nil || !strings.Contains(query, "query: $filter") {
+				t.Fatalf("first page query = %q variables = %#v", query, variables)
+			}
+			return json.Unmarshal([]byte(`{"user":{"projectV2":{"items":{"nodes":[{"id":"first"}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}`), response)
+		},
+		func(query string, variables map[string]interface{}, response interface{}) error {
+			if variables["filter"] != filter || variables["after"] != "next" || !strings.Contains(query, "query: $filter") {
+				t.Fatalf("next page query = %q variables = %#v", query, variables)
+			}
+			return json.Unmarshal([]byte(`{"user":{"projectV2":{"items":{"nodes":[{"id":"second"}],"pageInfo":{"hasNextPage":false}}}}}`), response)
+		},
+	}}
+	client := newClient(graphql, &fakeREST{})
+	owner := Owner{Login: "me", Kind: UserOwner}
+	first, err := client.PageBoardItems(context.Background(), owner, 2, filter, "", nil)
+	if err != nil || len(first.Items) != 1 || first.Items[0].ID != "first" || !first.HasNext {
+		t.Fatalf("first page = %#v, %v", first, err)
+	}
+	second, err := client.PageBoardItems(context.Background(), owner, 2, filter, first.EndCursor, nil)
+	if err != nil || len(second.Items) != 1 || second.Items[0].ID != "second" || second.HasNext {
+		t.Fatalf("second page = %#v, %v", second, err)
+	}
+}
+
+func TestOpenViewPaginatesProjectFilterFields(t *testing.T) {
+	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+		func(query string, variables map[string]interface{}, response interface{}) error {
+			if !strings.Contains(query, "projectFields: fields(first: 100)") || variables["view"] != 3 {
+				t.Fatalf("view metadata query = %q variables = %#v", query, variables)
+			}
+			return json.Unmarshal([]byte(`{"user":{"projectV2":{"id":"project","projectFields":{"nodes":[{"__typename":"ProjectV2Field","id":"points","name":"TUI Probe Points","dataType":"NUMBER"}],"pageInfo":{"hasNextPage":true,"endCursor":"fields-next"}},"view":{"id":"view","number":3,"filter":"tui-probe-points:>=2","layout":"BOARD_LAYOUT"}}}}`), response)
+		},
+		func(query string, variables map[string]interface{}, response interface{}) error {
+			if !strings.Contains(query, "fields(first: 100, after: $after)") || variables["after"] != "fields-next" {
+				t.Fatalf("project field page = %q variables = %#v", query, variables)
+			}
+			return json.Unmarshal([]byte(`{"user":{"projectV2":{"fields":{"nodes":[{"__typename":"ProjectV2IterationField","id":"iteration","name":"TUI Probe Iteration","dataType":"ITERATION"}],"pageInfo":{"hasNextPage":false}}}}}`), response)
+		},
+	}}
+	view, err := newClient(graphql, &fakeREST{}).OpenView(context.Background(), Owner{Login: "me", Kind: UserOwner}, 2, 3)
+	if err != nil || len(view.ProjectFields) != 2 || view.ProjectFields[0].DataType != "NUMBER" || view.ProjectFields[1].DataType != "ITERATION" {
+		t.Fatalf("filter field metadata = %#v, %v", view.ProjectFields, err)
+	}
+}
+
 func TestDiscoverListsOwnersWithoutPreloadingProjects(t *testing.T) {
 	viewer := project(1)
 	viewerNext := project(2)

@@ -158,11 +158,26 @@ offer these issue actions.
 ## Pre-alpha limitations
 
 - Roadmap views are not supported.
-- Supported saved filters are currently no filter, `iteration:@current`,
-  `status:"value"`, `no:status`, `-status:"value"`, `assignee:@me`, and
-  verified two-term conjunctions of Status with `assignee:@me`, negated Status
-  with `assignee:@me`, or `iteration:@current` with Status. Other expressions and
-  unsupported grouping/sorting semantics stay in the picker with an explanation.
+- Saved filters support `status:Todo`, `status:"In Progress"`, `assignee:@me`,
+  `assignee:USERNAME`, `label:bug`, `repo:OWNER/REPO`, `is:open`, `is:closed`,
+  `is:issue`, `is:pr`, `is:draft`, `is:merged`, `has:`/`no:` for Status,
+  assignee, label, and verified single-select/number/iteration project fields,
+  plus `iteration:@current`. Custom fields use their hyphenated names, for
+  example `phase:"Phase I"`, `points:>=2`, or `sprint:@previous`. `created:` and
+  `updated:` accept dates, comparisons, ranges, and relative `@today` offsets.
+  `title:"Exact title"`, `title:*word*`, and unqualified words such as `filter`
+  use GitHub's title/general-text matching.
+  Values separated by commas in a single select, assignee, label, or numeric
+  qualifier act as OR; whitespace-separated terms
+  act as AND (including repeated qualifiers). A leading `-` negates supported
+  qualifiers except iteration and `has:`; `-no:` checks for a present value. Double-quote
+  Status or label names with spaces, for example `status:"In Progress"`.
+  Examples: `label:bug,support assignee:@me` and `status:"Todo","Done" is:issue`.
+  See [the filter grammar and evidence matrix](docs/api-contract.md#saved-filter-grammar-and-evidence)
+  for exact boundaries. Cross-field `OR`, unverified custom field types,
+  next-iteration offsets, unverified text-field/wildcard forms, escaped quotes,
+  and other unverified forms remain blocked with a
+  picker explanation. Unsupported grouping/sorting semantics are also blocked.
 - If a project has no compatible saved board, unsupported views stay in the
   picker with an explanation; the TUI never substitutes an unfiltered board.
 - Card mutations require a writable, fully loaded, unfiltered board with

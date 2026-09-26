@@ -707,7 +707,10 @@ func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
 	}
 	owner := *m.selectedOwner
 	project := m.selectedProject.Number
-	filter := strings.TrimSpace(m.view.Filter)
+	filter := m.view.Filter
+	if strings.TrimSpace(filter) == "" {
+		filter = ""
+	}
 	fields := boardReadFields(*m.view)
 	generation := m.generation
 	scope := m.currentBoardReadScope()

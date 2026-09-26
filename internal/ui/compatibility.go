@@ -31,7 +31,7 @@ func evaluateViewCompatibility(view github.View) viewCompatibility {
 		reasons = append(reasons, fmt.Sprintf("layout %q is not supported", view.Layout))
 	}
 
-	if err := validateSavedFilter(view.Filter); err != nil {
+	if err := validateSavedFilterWithFields(view.Filter, view.ProjectFields); err != nil {
 		reasons = append(reasons, fmt.Sprintf("saved filter %q is unsupported: %v", view.Filter, err))
 	}
 
