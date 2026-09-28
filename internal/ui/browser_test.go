@@ -98,32 +98,52 @@ func TestOpenBrowserReportsActionableFailureAndMissingTarget(t *testing.T) {
 	}
 }
 
-func TestDetailUsesSidePaneWideAndFullscreenNarrow(t *testing.T) {
+func TestDetailOverlaysCurrentViewAtAnyWidth(t *testing.T) {
 	model := browserTestModel()
 	model.height = 42
 	model.detailVisible = true
 	model.detail = &github.ItemDetail{ID: "issue-item", Content: &github.Content{Kind: "Issue", Number: 42, Title: "Detail title", Body: "Issue body", BodyAvailable: true}}
-	model.width = 150
-	if !model.wideDetailLayout() {
-		t.Fatal("wide terminal did not select side-pane layout")
-	}
-	wide := ansi.Strip(model.View().Content)
-	if !strings.Contains(wide, "Roadmap") || !strings.Contains(wide, "Detail title") {
-		t.Fatalf("wide layout omitted board or details: %q", wide)
-	}
-	for _, line := range strings.Split(wide, "\n") {
-		if lipgloss.Width(line) > model.frameContentWidth()+4 {
-			t.Fatalf("wide layout exceeded content width: %d > %d", lipgloss.Width(line), model.frameContentWidth()+4)
+	for _, width := range []int{150, 90} {
+		model.width = width
+		baseModel := model
+		baseModel.detailVisible = false
+		base := ansi.Strip(baseModel.View().Content)
+		overlay := ansi.Strip(model.View().Content)
+		if !strings.Contains(overlay, "Roadmap") || !strings.Contains(overlay, "Detail title") {
+			t.Fatalf("width %d omitted current view or details: %q", width, overlay)
+		}
+		baseHeader, overlayHeader := "", ""
+		for _, line := range strings.Split(base, "\n") {
+			if strings.Contains(line, "Roadmap") {
+				baseHeader = line
+				break
+			}
+		}
+		for _, line := range strings.Split(overlay, "\n") {
+			if strings.Contains(line, "Roadmap") {
+				overlayHeader = line
+				break
+			}
+		}
+		if baseHeader == "" || overlayHeader != baseHeader {
+			t.Fatalf("width %d shifted the underlying view header: base=%q overlay=%q", width, baseHeader, overlayHeader)
+		}
+		for _, line := range strings.Split(overlay, "\n") {
+			if lipgloss.Width(line) > model.frameContentWidth()+4 {
+				t.Fatalf("width %d overlay exceeded content width: %d > %d", width, lipgloss.Width(line), model.frameContentWidth()+4)
+			}
 		}
 	}
 
-	model.width = 90
-	if model.wideDetailLayout() {
-		t.Fatal("narrow terminal selected side-pane layout")
+	model.width = 150
+	model.view.Layout = github.TableLayout
+	model.view.Fields = []github.Field{{Name: "Title", DataType: "TITLE"}}
+	table := ansi.Strip(model.View().Content)
+	if !strings.Contains(table, "Roadmap") || !strings.Contains(table, "Detail title") || !strings.Contains(table, "Fix it") {
+		t.Fatalf("table detail overlay omitted table or details: %q", table)
 	}
-	narrow := ansi.Strip(model.View().Content)
-	if !strings.Contains(narrow, "Detail title") || strings.Contains(narrow, "All items") || strings.Contains(narrow, "Fix it") || !strings.Contains(model.footerHints(), "esc close") {
-		t.Fatalf("narrow detail overlay/footer = %q / %q", narrow, model.footerHints())
+	if !strings.Contains(model.footerHints(), "esc close") {
+		t.Fatalf("detail footer hints = %q", model.footerHints())
 	}
 	model.height = 10
 	if got := lipgloss.Height(model.renderDetailPanel()); got > model.bodyCanvasHeight()+4 {

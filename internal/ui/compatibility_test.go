@@ -29,6 +29,13 @@ func TestViewCompatibilityAcceptsSupportedBoard(t *testing.T) {
 	}
 }
 
+func TestViewCompatibilityAcceptsIssueTypeFilteredBoard(t *testing.T) {
+	view := github.View{Layout: github.BoardLayout, Filter: "-type:Epic"}
+	if compatibility := evaluateViewCompatibility(view); !compatibility.supported() {
+		t.Fatalf("issue-type-filtered board rejected: %s", compatibility.summary())
+	}
+}
+
 func TestValidateSavedFilterAllowsProbedTermsAndConjunctions(t *testing.T) {
 	filters := []string{
 		"",
@@ -57,6 +64,9 @@ func TestValidateSavedFilterAllowsProbedTermsAndConjunctions(t *testing.T) {
 		"is:pr",
 		"is:draft",
 		"is:merged",
+		"type:Epic",
+		`type:"Epic"`,
+		"-type:Epic",
 		"created:2026-09-23", "created:>=2026-09-24", "created:2026-09-23..2026-09-24",
 		"updated:@today-1d", "updated:>@today-2d", "updated:@today-3d..@today-1d",
 		"updated:@today",
@@ -99,6 +109,7 @@ func TestValidateSavedFilterRejectsUnverifiedSyntax(t *testing.T) {
 		"-has:label",
 		"is:review",
 		"is:open,closed",
+		"type:Epic,Bug",
 		"iteration:@next",
 		"date:>=@today",
 		"created:2026-02-30", "created:2026-9-2", "created:>=", "updated:@today-",

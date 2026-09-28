@@ -89,10 +89,14 @@ func (m Model) renderDetailPanel() string {
 
 func (m Model) detailPanelWidth() int {
 	if m.detailVisible {
-		if m.wideDetailLayout() {
-			return m.detailPaneOuterWidth() - 4
+		width := m.frameContentWidth() - 4
+		if width > 96 {
+			width = 96
 		}
-		return m.frameContentWidth() - 4
+		if width < 12 {
+			return 12
+		}
+		return width
 	}
 	width := m.frameContentWidth() - 8
 	if width > 108 {
@@ -103,21 +107,6 @@ func (m Model) detailPanelWidth() int {
 	}
 	if width < 16 {
 		return 16
-	}
-	return width
-}
-
-func (m Model) wideDetailLayout() bool {
-	return m.detailVisible && m.width >= 128
-}
-
-func (m Model) detailPaneOuterWidth() int {
-	width := m.frameContentWidth() / 3
-	if width < 42 {
-		return 42
-	}
-	if width > 58 {
-		return 58
 	}
 	return width
 }

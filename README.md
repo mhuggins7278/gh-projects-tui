@@ -160,7 +160,8 @@ offer these issue actions.
 - Roadmap views are not supported.
 - Saved filters support `status:Todo`, `status:"In Progress"`, `assignee:@me`,
   `assignee:USERNAME`, `label:bug`, `repo:OWNER/REPO`, `is:open`, `is:closed`,
-  `is:issue`, `is:pr`, `is:draft`, `is:merged`, `has:`/`no:` for Status,
+  `is:issue`, `is:pr`, `is:draft`, `is:merged`, `type:Epic` or
+  `type:"Epic"` for issue types, `has:`/`no:` for Status,
   assignee, label, and verified single-select/number/iteration project fields,
   plus `iteration:@current`. Custom fields use their hyphenated names, for
   example `phase:"Phase I"`, `points:>=2`, or `sprint:@previous`. `created:` and

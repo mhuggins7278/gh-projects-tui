@@ -121,6 +121,10 @@ func validateSavedFilterTerm(term string, fields []github.Field) error {
 		if len(values) != 1 || !oneOf(values[0], "open", "closed", "issue", "pr", "draft", "merged") {
 			return unverifiedFilterTerm(term, "use one of open, closed, issue, pr, draft, merged")
 		}
+	case "type":
+		if len(values) != 1 || !simpleFilterValue(values[0], true) {
+			return unverifiedFilterTerm(term, "issue types accept one unquoted word or double-quoted name")
+		}
 	case "has", "no":
 		if negative && qualifier == "has" {
 			return unverifiedFilterTerm(term, "use no:FIELD instead of -has:FIELD")

@@ -300,7 +300,7 @@ func lanesForView(view *github.View, items []github.Item) []boardLane {
 		}
 		lanes[index].Items = append(lanes[index].Items, item)
 	}
-	return lanes
+	return withoutEmptyNoStatusLanes(lanes)
 }
 
 func combinedLanesForView(columnField, verticalField github.Field, items []github.Item) []boardLane {
@@ -361,7 +361,47 @@ func combinedLanesForView(columnField, verticalField github.Field, items []githu
 			lanes[index].Items = append(lanes[index].Items, item)
 		}
 	}
-	return lanes
+	return withoutEmptyNoStatusLanes(lanes)
+}
+
+func withoutEmptyNoStatusLanes(lanes []boardLane) []boardLane {
+	if len(lanes) == 0 {
+		return lanes
+	}
+	if lanes[0].RowKey == "" {
+		filtered := lanes[:0]
+		for _, lane := range lanes {
+			if lane.Key == "no-value" && lane.Name == "No Status" && len(lane.Items) == 0 {
+				continue
+			}
+			filtered = append(filtered, lane)
+		}
+		return filtered
+	}
+
+	hasNoStatusRow, hasNoStatusColumn := false, false
+	for _, lane := range lanes {
+		if lane.RowKey == "no-value" && lane.RowName == "No Status" && len(lane.Items) > 0 {
+			hasNoStatusRow = true
+		}
+		_, columnKey, ok := strings.Cut(lane.Key, "\x00")
+		if ok && columnKey == "no-value" && lane.Name == "No Status" && len(lane.Items) > 0 {
+			hasNoStatusColumn = true
+		}
+	}
+
+	filtered := lanes[:0]
+	for _, lane := range lanes {
+		if lane.RowKey == "no-value" && lane.RowName == "No Status" && !hasNoStatusRow {
+			continue
+		}
+		_, columnKey, ok := strings.Cut(lane.Key, "\x00")
+		if ok && columnKey == "no-value" && lane.Name == "No Status" && !hasNoStatusColumn {
+			continue
+		}
+		filtered = append(filtered, lane)
+	}
+	return filtered
 }
 
 func containsLaneKey(definitions []laneDefinition, key string) bool {
@@ -775,25 +815,12 @@ func minInt(left, right int) int {
 }
 
 func (m Model) renderBoard(b *strings.Builder) {
-	if m.detailVisible {
-		if !m.wideDetailLayout() {
-			b.WriteString(m.renderDetailPanel())
-			return
-		}
-		paneWidth := m.detailPaneOuterWidth()
-		gap := 2
-		boardWidth := m.frameContentWidth() - paneWidth - gap
-		boardModel := m
-		boardModel.width = m.width - paneWidth - gap
-		boardModel.detailVisible = false
-		board := &strings.Builder{}
-		boardModel.renderBoardContent(board)
-		left := lipgloss.NewStyle().Width(boardWidth).MaxWidth(boardWidth).Render(board.String())
-		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), m.renderDetailPanel()))
-		return
-	}
 	board := &strings.Builder{}
 	m.renderBoardContent(board)
+	if m.detailVisible {
+		b.WriteString(renderPopover(board.String(), m.renderDetailPanel(), m.frameContentWidth(), m.bodyCanvasHeight()))
+		return
+	}
 	b.WriteString(board.String())
 }
 

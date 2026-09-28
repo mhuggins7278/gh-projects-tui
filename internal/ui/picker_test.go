@@ -546,10 +546,10 @@ func TestBoardLoadsPagesAndGroupsItems(t *testing.T) {
 		t.Fatalf("final page state = %#v, next nil = %v", model, next == nil)
 	}
 	lanes := model.boardLanes()
-	if len(lanes) != 3 || len(lanes[0].Items) != 0 || len(lanes[1].Items) != 1 || len(lanes[2].Items) != 1 {
+	if len(lanes) != 2 || len(lanes[0].Items) != 1 || len(lanes[1].Items) != 1 {
 		t.Fatalf("lanes = %#v", lanes)
 	}
-	if names := []string{lanes[0].Name, lanes[1].Name, lanes[2].Name}; !reflect.DeepEqual(names, []string{"No Status", "Todo", "Done"}) {
+	if names := []string{lanes[0].Name, lanes[1].Name}; !reflect.DeepEqual(names, []string{"Todo", "Done"}) {
 		t.Fatalf("lane order = %#v", names)
 	}
 	content := model.View().Content
@@ -651,7 +651,7 @@ func TestSavedFilteredStatusBoardPagesUnchangedQuery(t *testing.T) {
 	}
 	updated, _ = model.Update(next())
 	model = updated.(Model)
-	if itemCalls != 2 || model.itemsLoading || len(model.items) != 2 || len(model.boardLanes()[2].Items) != 2 {
+	if itemCalls != 2 || model.itemsLoading || len(model.items) != 2 || len(model.boardLanes()[1].Items) != 2 {
 		t.Fatalf("filtered pages = calls:%d items:%d loading:%v", itemCalls, len(model.items), model.itemsLoading)
 	}
 }
@@ -765,18 +765,18 @@ func TestWritableBoardMoveUpdatesFieldAndAppendsDestination(t *testing.T) {
 	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
 	model.selectedProject = &github.Project{Number: 1}
 	model.items = cloneItems(canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
 	if cmd == nil {
 		t.Fatalf("move did not start settling: %#v", model)
 	}
-	if len(mutations) != 0 || model.boardLane != 2 || model.boardCard != 1 {
+	if len(mutations) != 0 || model.boardLane != 1 || model.boardCard != 1 {
 		t.Fatalf("optimistic move state = lane %d card %d mutations %#v", model.boardLane, model.boardCard, mutations)
 	}
-	if lanes := model.boardLanes(); len(lanes[2].Items) != 2 || lanes[2].Items[1].ID != "a" || lanes[2].Items[1].FieldValues[0].OptionID != "two" {
-		t.Fatalf("optimistic destination lane = %#v", lanes[2])
+	if lanes := model.boardLanes(); len(lanes[1].Items) != 2 || lanes[1].Items[1].ID != "a" || lanes[1].Items[1].FieldValues[0].OptionID != "two" {
+		t.Fatalf("optimistic destination lane = %#v", lanes[1])
 	}
 	model = runMutationCommands(t, model, cmd)
 	if !reflect.DeepEqual(mutations, []string{"field:two", "position:b"}) {
@@ -807,7 +807,7 @@ func TestWritableVerticalBoardMoveUpdatesFieldAndAppendsDestination(t *testing.T
 	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
 	model.selectedProject = &github.Project{Number: 1}
 	model.items = cloneItems(canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
@@ -845,7 +845,7 @@ func TestSuccessfulMutationReconcilesCanonicalState(t *testing.T) {
 	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
 	model.selectedProject = &github.Project{Number: 1}
 	model.items = cloneItems(canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 
 	updated, mutationCmd := model.Update(keyPress("L"))
 	model = updated.(Model)
@@ -878,15 +878,15 @@ func TestDefinitiveMutationFailureUsesCanonicalReadback(t *testing.T) {
 	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
 	model.selectedProject = &github.Project{Number: 1}
 	model.items = cloneItems(canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 
 	updated, mutationCmd := model.Update(keyPress("L"))
 	model = updated.(Model)
-	if model.boardLane != 2 || len(model.items) != 2 || model.items[1].ID != "a" || model.items[1].FieldValues[0].OptionID != "two" {
+	if model.boardLane != 1 || len(model.items) != 2 || model.items[1].ID != "a" || model.items[1].FieldValues[0].OptionID != "two" {
 		t.Fatalf("optimistic state was not applied: lane=%d items=%#v", model.boardLane, model.items)
 	}
 	model = runMutationCommands(t, model, mutationCmd)
-	if model.boardLane != 1 || model.boardCard != 0 || model.items[0].FieldValues[0].OptionID != "one" || model.mutationSession != nil {
+	if model.boardLane != 0 || model.boardCard != 0 || model.items[0].FieldValues[0].OptionID != "one" || model.mutationSession != nil {
 		t.Fatalf("reconciled state = lane %d card %d items %#v session=%#v", model.boardLane, model.boardCard, model.items, model.mutationSession)
 	}
 	if !strings.Contains(model.status, "Move card failed") {
@@ -905,7 +905,7 @@ func TestCombinedSwimlaneMoveChangesColumnAndPreservesSwimlane(t *testing.T) {
 	}
 	mutations := []string{}
 	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
-	model.boardLane = 4 // Todo swimlane, P0 column.
+	model.boardLane = 1 // Todo swimlane, P0 column; the empty No value priority column remains visible.
 
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
@@ -942,7 +942,7 @@ func TestSavedFilteredBoardAllowsSupportedMutations(t *testing.T) {
 	canonical := []github.Item{{ID: "item", Content: &github.Content{Kind: "Issue", Title: "Item"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "one", Available: true}}}}
 	mutations := []string{}
 	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
@@ -970,7 +970,7 @@ func TestWritableBoardReorderUsesVisibleAnchors(t *testing.T) {
 	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
 	model.selectedProject = &github.Project{Number: 1}
 	model.items = cloneItems(canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	model.boardCard = 1
 	updated, cmd := model.Update(keyPress("J"))
 	model = updated.(Model)
@@ -1287,8 +1287,24 @@ func TestBoardUsesVerticalGroupingWhenColumnsAreUnset(t *testing.T) {
 	view := github.View{VerticalGroupBy: []github.Field{status}}
 	item := github.Item{Content: &github.Content{Kind: "Issue", Title: "Vertical item"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "todo", Available: true}}}
 	lanes := lanesForView(&view, []github.Item{item})
-	if len(lanes) != 2 || lanes[0].Name != "No Status" || len(lanes[0].Items) != 0 || lanes[1].Name != "Todo" || len(lanes[1].Items) != 1 {
+	if len(lanes) != 1 || lanes[0].Name != "Todo" || len(lanes[0].Items) != 1 {
 		t.Fatalf("vertical lanes = %#v", lanes)
+	}
+}
+
+func TestBoardKeepsNoStatusLaneWhenItContainsItems(t *testing.T) {
+	status := github.Field{
+		ID:       "status",
+		Name:     "Status",
+		Kind:     "ProjectV2SingleSelectField",
+		DataType: "SINGLE_SELECT",
+		Options:  []github.FieldOption{{ID: "todo", Name: "Todo"}},
+	}
+	view := github.View{GroupByFields: []github.Field{status}}
+	unassigned := github.Item{ID: "unassigned", Content: &github.Content{Kind: "Issue", Title: "Unassigned"}}
+	lanes := lanesForView(&view, []github.Item{unassigned})
+	if len(lanes) != 2 || lanes[0].Name != "No Status" || len(lanes[0].Items) != 1 || lanes[0].Items[0].ID != "unassigned" {
+		t.Fatalf("no-status lanes = %#v", lanes)
 	}
 }
 
@@ -1323,17 +1339,17 @@ func TestBoardProjectsCombinedGroupingIntoSwimlaneRows(t *testing.T) {
 	}
 
 	lanes := lanesForView(&view, items)
-	if len(lanes) != 9 {
-		t.Fatalf("combined lanes = %d, want 9: %#v", len(lanes), lanes)
+	if len(lanes) != 6 {
+		t.Fatalf("combined lanes = %d, want 6: %#v", len(lanes), lanes)
 	}
-	if lanes[4].RowName != "Todo" || lanes[4].Name != "P0" || lanes[4].Items[0].ID != "todo-p0" {
-		t.Fatalf("first populated combined lane = %#v", lanes[4])
+	if lanes[1].RowName != "Todo" || lanes[1].Name != "P0" || lanes[1].Items[0].ID != "todo-p0" {
+		t.Fatalf("first populated combined lane = %#v", lanes[1])
 	}
-	if lanes[8].RowName != "Done" || lanes[8].Name != "P1" || lanes[8].Items[0].ID != "done-p1" {
-		t.Fatalf("second populated combined lane = %#v", lanes[8])
+	if lanes[5].RowName != "Done" || lanes[5].Name != "P1" || lanes[5].Items[0].ID != "done-p1" {
+		t.Fatalf("second populated combined lane = %#v", lanes[5])
 	}
-	if lanes[3].Name != "No value" || lanes[3].Items[0].ID != "todo-unset" {
-		t.Fatalf("unset column lane = %#v", lanes[3])
+	if lanes[0].Name != "No value" || lanes[0].Items[0].ID != "todo-unset" {
+		t.Fatalf("unset column lane = %#v", lanes[0])
 	}
 
 	model := newPickerModel(fakePickerSource{})
@@ -1344,6 +1360,38 @@ func TestBoardProjectsCombinedGroupingIntoSwimlaneRows(t *testing.T) {
 	for _, expected := range []string{"Swimlane: Todo", "Swimlane: Done", "Todo P0", "Done P1"} {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("combined board missing %q: %q", expected, rendered)
+		}
+	}
+}
+
+func TestCombinedBoardHidesEmptyNoStatusColumn(t *testing.T) {
+	status := github.Field{
+		ID:       "status",
+		Name:     "Status",
+		Kind:     "ProjectV2SingleSelectField",
+		DataType: "SINGLE_SELECT",
+		Options:  []github.FieldOption{{ID: "todo", Name: "Todo"}, {ID: "done", Name: "Done"}},
+	}
+	priority := github.Field{
+		ID:       "priority",
+		Name:     "Priority",
+		Kind:     "ProjectV2SingleSelectField",
+		DataType: "SINGLE_SELECT",
+		Options:  []github.FieldOption{{ID: "p0", Name: "P0"}},
+	}
+	view := github.View{GroupByFields: []github.Field{status}, VerticalGroupBy: []github.Field{priority}}
+	item := github.Item{ID: "todo-p0", FieldValues: []github.FieldValue{
+		{FieldID: "status", OptionID: "todo", Available: true},
+		{FieldID: "priority", OptionID: "p0", Available: true},
+	}}
+
+	lanes := lanesForView(&view, []github.Item{item})
+	if len(lanes) != 4 {
+		t.Fatalf("combined lanes = %d, want 4: %#v", len(lanes), lanes)
+	}
+	for _, lane := range lanes {
+		if lane.Name == "No Status" {
+			t.Fatalf("empty No Status column remained: %#v", lanes)
 		}
 	}
 }
@@ -1498,11 +1546,14 @@ func TestDetailCacheClearsWhenBoardReloads(t *testing.T) {
 	}
 }
 
-func TestDetailPopoverExpandsOnWideTerminal(t *testing.T) {
+func TestDetailPanelWidthIsBoundedForCenteredModal(t *testing.T) {
 	model := NewModel(nil)
-	model.width = 120
-	if model.detailPanelWidth() < 90 {
-		t.Fatalf("popover content width = %d", model.detailPanelWidth())
+	model.detailVisible = true
+	for _, width := range []int{120, 300} {
+		model.width = width
+		if got := model.detailPanelWidth(); got != 96 {
+			t.Fatalf("terminal width %d produced detail content width %d, want 96", width, got)
+		}
 	}
 }
 

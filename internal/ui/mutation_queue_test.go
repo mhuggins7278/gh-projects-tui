@@ -83,13 +83,13 @@ func TestQueuedLaneIntentsResolveSeriallyAndContinueAfterDefinitiveFailure(t *te
 			}
 			source := fakePickerSource{mutations: &mutations, mutationErrors: &mutationErrors, canonicalItems: &canonical}
 			model := mutationModel(source, view, canonical)
-			model.boardLane = 1
+			model.boardLane = 0
 			model.boardCard = 0
 
 			updated, first := model.Update(keyPress("L"))
 			model = updated.(Model)
 			// Select the second card (still in the source lane) before queueing.
-			model.boardLane = 1
+			model.boardLane = 0
 			model.boardCard = 0
 			model.boardFocusID = "second"
 			// Ensure the cursor resolves to the second card: lane a now holds
@@ -138,13 +138,13 @@ func TestRapidSameCardMovesCollapseToFinalPlacement(t *testing.T) {
 	canonical := []github.Item{item}
 	source := fakePickerSource{mutations: &mutations, canonicalItems: &canonical}
 	model := mutationModel(source, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 
 	updated, first := model.Update(keyPress("L"))
 	model = updated.(Model)
 	updated, second := model.Update(keyPress("L"))
 	model = updated.(Model)
-	if second != nil || len(model.mutationSession.intents) != 1 || model.boardLane != 3 {
+	if second != nil || len(model.mutationSession.intents) != 1 || model.boardLane != 2 {
 		t.Fatalf("collapsed lane intent state = session:%#v lane:%d cmd nil:%v", model.mutationSession, model.boardLane, second == nil)
 	}
 	model = runMutationCommands(t, model, first)
@@ -170,7 +170,7 @@ func TestQueuedReordersUseFreshProjectAnchorsAcrossInterleavedItems(t *testing.T
 		{ID: "c", FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "a", Available: true}}},
 	}
 	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	model.boardCard = 0
 
 	updated, first := model.Update(keyPress("J"))
@@ -202,7 +202,7 @@ func TestRapidReorderWiggleCollapsesToNoWrites(t *testing.T) {
 		{ID: "c", FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "a", Available: true}}},
 	}
 	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	model.boardCard = 1 // middle card b
 
 	var cmds []tea.Cmd
@@ -239,7 +239,7 @@ func TestViewSwitchDoesNotCancelOrStaleAnInFlightMutation(t *testing.T) {
 	var writeContextErr error
 	source := fakePickerSource{mutations: &mutations, canonicalItems: &canonical, mutationWait: gate, mutationContextErr: &writeContextErr, views: []github.ViewSummary{{Number: 2, Name: "Other", Layout: github.BoardLayout}}}
 	model := mutationModel(source, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	updated, mutationCmd := model.Update(keyPress("L"))
 	model = updated.(Model)
 	if mutationCmd == nil || model.mutationSession == nil {
@@ -285,11 +285,11 @@ func TestAmbiguousMutationBlocksQueuedWritesUntilReadbackConfirmsOutcome(t *test
 	mutationErrors := []error{context.DeadlineExceeded}
 	source := fakePickerSource{mutations: &mutations, mutationErrors: &mutationErrors, canonicalItems: &canonical}
 	model := mutationModel(source, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	model.boardCard = 0
 	updated, first := model.Update(keyPress("L"))
 	model = updated.(Model)
-	model.boardLane = 1
+	model.boardLane = 0
 	model.boardCard = 0
 	model.boardFocusID = "second"
 	model.clampBoardCursor()
@@ -329,7 +329,7 @@ func TestRepeatedUnchangedReadbackKeepsAmbiguousWriteBlocked(t *testing.T) {
 	mutationErrors := []error{context.DeadlineExceeded}
 	source := fakePickerSource{mutations: &mutations, mutationErrors: &mutationErrors, canonicalItems: &canonical}
 	model := mutationModel(source, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	updated, first := model.Update(keyPress("L"))
 	model = updated.(Model)
 	model = runMutationCommands(t, model, first)
@@ -356,7 +356,7 @@ func TestStaleReorderIntentIsDroppedBeforeSubmittingAnOldAnchor(t *testing.T) {
 	}
 	mutations := []string{}
 	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	model.boardCard = 1
 	updated, cmd := model.Update(keyPress("J"))
 	model = updated.(Model)
@@ -377,7 +377,7 @@ func TestAnchorDisappearingAfterPreflightBlocksDependentWrites(t *testing.T) {
 	}
 	mutations := []string{}
 	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	model.boardCard = 1
 	updated, preflight := model.Update(keyPress("J"))
 	model = updated.(Model)
@@ -413,7 +413,7 @@ func TestLaneDirectionIsResolvedAgainstCanonicalCurrentLane(t *testing.T) {
 	canonical := []github.Item{{ID: "item", FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "a", Available: true}}}}
 	mutations := []string{}
 	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
 	// Another client moves the card one lane before the preflight read starts.
@@ -430,7 +430,7 @@ func TestReadbackFailurePreventsMutationUntilRetry(t *testing.T) {
 	mutations := []string{}
 	source := fakePickerSource{mutations: &mutations, canonicalItems: &canonical, canonicalErr: errors.New("read unavailable")}
 	model := mutationModel(source, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
 	model = runMutationCommands(t, model, cmd)
@@ -481,7 +481,7 @@ func TestFilteredSuccessfulMoveRefreshesAndFocusesNextVisibleCard(t *testing.T) 
 		},
 	}
 	model := mutationModel(source, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	model.boardCard = 0
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
@@ -529,7 +529,7 @@ func TestSecondStepFailureReportsPartialMoveFromCanonicalReadback(t *testing.T) 
 		positionMutationErr: &github.MutationError{Err: errors.New("position rejected"), Ambiguous: false},
 	}
 	model := mutationModel(source, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
 	model = runMutationCommands(t, model, cmd)
@@ -546,7 +546,7 @@ func TestCombinedMoveIntoEmptyCellKeepsProjectPosition(t *testing.T) {
 	canonical := []github.Item{combinedItem("item", "p0", "todo"), combinedItem("other-row", "p0", "done")}
 	mutations := []string{}
 	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
-	model.boardLane = 4 // Todo/P0.
+	model.boardLane = 1 // Todo/P0; the empty No value priority column remains visible.
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
 	model = runMutationCommands(t, model, cmd)
@@ -565,7 +565,7 @@ func TestCombinedMoveToNoValueClearsOnlyColumnField(t *testing.T) {
 	canonical := []github.Item{combinedItem("item", "p0", "todo"), combinedItem("anchor", "", "todo")}
 	mutations := []string{}
 	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
-	model.boardLane = 4 // Todo/P0.
+	model.boardLane = 1 // Todo/P0; the empty No value priority column remains visible.
 	updated, cmd := model.Update(keyPress("H"))
 	model = updated.(Model)
 	model = runMutationCommands(t, model, cmd)
@@ -595,7 +595,7 @@ func TestCombinedSortedMoveUpdatesColumnWithoutPositionMutation(t *testing.T) {
 	canonical := []github.Item{combinedItem("item", "p0", "todo"), combinedItem("anchor", "p1", "todo")}
 	mutations := []string{}
 	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
-	model.boardLane = 4
+	model.boardLane = 1
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
 	model = runMutationCommands(t, model, cmd)
@@ -614,7 +614,7 @@ func TestCombinedMoveRefreshShowsCanonicalCell(t *testing.T) {
 	mutations := []string{}
 	source := fakePickerSource{mutations: &mutations, canonicalItems: &canonical, view: view}
 	model := mutationModel(source, view, canonical)
-	model.boardLane = 4
+	model.boardLane = 1
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
 	model = runMutationCommands(t, model, cmd)
@@ -649,7 +649,7 @@ func TestCombinedMoveRespectsReadOnlyPermission(t *testing.T) {
 	view := writableCombinedView()
 	view.ViewerCanUpdate = false
 	model := mutationModel(fakePickerSource{}, view, []github.Item{combinedItem("item", "p0", "todo")})
-	model.boardLane = 4
+	model.boardLane = 1
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
 	if cmd != nil || model.mutationSession != nil || !strings.Contains(model.status, "read-only") {
@@ -662,7 +662,7 @@ func TestCombinedMoveDoesNotWrapIntoAnotherSwimlane(t *testing.T) {
 	canonical := []github.Item{combinedItem("item", "p1", "todo")}
 	mutations := []string{}
 	model := mutationModel(fakePickerSource{mutations: &mutations, canonicalItems: &canonical}, view, canonical)
-	model.boardLane = 5 // Last column in the Todo swimlane.
+	model.boardLane = 2 // Last column in the Todo swimlane.
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
 	if cmd != nil || model.mutationSession != nil || !strings.Contains(model.status, "No destination lane") || len(mutations) != 0 {
@@ -674,7 +674,7 @@ func TestCombinedMoveRejectsUnsupportedSwimlaneField(t *testing.T) {
 	view := writableCombinedView()
 	view.VerticalGroupBy = []github.Field{{ID: "team", Name: "Team", Kind: "ProjectV2Field", DataType: "TEXT"}}
 	model := mutationModel(fakePickerSource{}, view, []github.Item{combinedItem("item", "p0", "")})
-	model.boardLane = 4
+	model.boardLane = 0
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
 	if cmd != nil || model.mutationSession != nil || !strings.Contains(model.status, "both axes") {
@@ -695,7 +695,7 @@ func TestAmbiguousSecondStepStaysBlockedUntilResolved(t *testing.T) {
 		positionMutationErr: context.DeadlineExceeded,
 	}
 	model := mutationModel(source, view, canonical)
-	model.boardLane = 1
+	model.boardLane = 0
 	updated, cmd := model.Update(keyPress("L"))
 	model = updated.(Model)
 	model = runMutationCommands(t, model, cmd)
