@@ -159,6 +159,7 @@ func TestSavedFilterUsesProjectFieldsEvenWhenNotVisible(t *testing.T) {
 		"tui-probe-points:1...2", "tui-probe-points:*..*", "tui-probe-points:>=NaN",
 		"tui-probe-points:>2..5", "tui-probe-points:>=", "tui-probe-iteration:@next",
 		"tui-probe-iteration:@current+3", "tui-probe-iteration:>=2026-09-22",
+		"-tui-probe-iteration:@current",
 		"tui-probe-note:hello", "has:tui-probe-note", "tui-unknown-field:2",
 		`phase:""`, "phase:>=1",
 	}
@@ -256,6 +257,11 @@ func TestViewCompatibilityRejectsUnsupportedSemantics(t *testing.T) {
 		reason string
 	}{
 		{name: "roadmap layout", view: github.View{Layout: github.RoadmapLayout}, reason: "roadmap views are not supported"},
+		{name: "roadmap with date metadata", view: github.View{
+			Layout:        github.RoadmapLayout,
+			ProjectFields: []github.Field{{ID: "start", Name: "Start", DataType: "DATE"}, {ID: "target", Name: "Target", DataType: "DATE"}},
+			Fields:        []github.Field{{ID: "title", Name: "Title", DataType: "TITLE"}, {ID: "start", Name: "Start", DataType: "DATE"}, {ID: "target", Name: "Target", DataType: "DATE"}},
+		}, reason: "roadmap views are not supported"},
 		{name: "unverified filter", view: github.View{Layout: github.BoardLayout, Filter: "reviewers:@me"}, reason: "has not been verified"},
 		{name: "multiple columns", view: github.View{Layout: github.BoardLayout, GroupByFields: []github.Field{status, status}}, reason: "multiple column grouping"},
 		{name: "multiple table groups", view: github.View{Layout: github.TableLayout, GroupByFields: []github.Field{status, status}}, reason: "multiple column grouping"},

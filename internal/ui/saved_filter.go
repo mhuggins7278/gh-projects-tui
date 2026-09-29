@@ -165,7 +165,7 @@ func validateSavedFilterTerm(term string, fields []github.Field) error {
 				}
 			}
 		case "ITERATION":
-			if len(values) != 1 || !validIterationFilter(values[0]) {
+			if negative || len(values) != 1 || !validIterationFilter(values[0]) {
 				return unverifiedFilterTerm(term, "iteration fields accept a quoted title, @current, @previous, comparisons, or ranges between those two keywords")
 			}
 		default:
