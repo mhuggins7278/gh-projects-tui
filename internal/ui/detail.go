@@ -201,7 +201,10 @@ func renderPopover(base, popup string, width, height int) string {
 		left = padANSI(left, x)
 		right := ansi.Cut(baseLine, x+popupWidth, width)
 		right = padANSI(right, width-x-popupWidth)
-		lines[row] = left + popupLine + right
+		// A clipped highlighted row may leave its background active. Reset
+		// terminal attributes at each overlay boundary so it cannot tint the
+		// detail panel or the remainder of the row.
+		lines[row] = left + "\x1b[0m" + popupLine + "\x1b[0m" + right
 	}
 	return strings.Join(lines, "\n")
 }

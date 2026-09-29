@@ -258,6 +258,8 @@ func TestViewCompatibilityRejectsUnsupportedSemantics(t *testing.T) {
 		{name: "roadmap layout", view: github.View{Layout: github.RoadmapLayout}, reason: "roadmap views are not supported"},
 		{name: "unverified filter", view: github.View{Layout: github.BoardLayout, Filter: "reviewers:@me"}, reason: "has not been verified"},
 		{name: "multiple columns", view: github.View{Layout: github.BoardLayout, GroupByFields: []github.Field{status, status}}, reason: "multiple column grouping"},
+		{name: "multiple table groups", view: github.View{Layout: github.TableLayout, GroupByFields: []github.Field{status, status}}, reason: "multiple column grouping"},
+		{name: "vertical table groups", view: github.View{Layout: github.TableLayout, VerticalGroupBy: []github.Field{status}}, reason: "vertical grouping is not supported in table views"},
 		{name: "unsupported vertical grouping", view: github.View{Layout: github.BoardLayout, VerticalGroupBy: []github.Field{{Name: "Labels", DataType: "MULTI_SELECT"}}}, reason: "vertical grouping field"},
 		{name: "unsupported grouping", view: github.View{Layout: github.BoardLayout, GroupByFields: []github.Field{{Name: "Labels", DataType: "MULTI_SELECT"}}}, reason: "not single-select or iteration"},
 		{name: "missing options", view: github.View{Layout: github.BoardLayout, GroupByFields: []github.Field{{Name: "Status", DataType: "SINGLE_SELECT"}}}, reason: "has no options"},

@@ -157,6 +157,8 @@ type Model struct {
 	boardLane             int
 	boardCard             int
 	boardFocusID          string
+	tableRow              int
+	tableFocusID          string
 	width                 int
 	height                int
 	detailVisible         bool
@@ -327,6 +329,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.view = msg.view
+		m.tableRow = 0
+		m.tableFocusID = ""
 		m.err = nil
 		m.status = ""
 		m.screen = screenBoard
@@ -503,6 +507,8 @@ func (m Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 func (m *Model) enterBoardFromDiscovery() {
 	m.screen = screenBoard
 	m.cursor = 0
+	m.tableRow = 0
+	m.tableFocusID = ""
 	m.setDiscoverySelection()
 }
 
@@ -684,6 +690,10 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	m.boardLane = 0
 	m.boardCard = 0
 	m.boardFocusID = ""
+	if m.view.Layout != github.TableLayout {
+		m.tableRow = 0
+		m.tableFocusID = ""
+	}
 	m.detailVisible = false
 	m.detailLoading = false
 	m.detailItemID = ""
@@ -759,6 +769,9 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 		m.itemsLoading = false
 		m.itemsErr = msg.err
 		m.itemsHasNext = false
+		if m.isTable() {
+			m.clampTableRow(true)
+		}
 		return m, nil
 	}
 	m.items = append(m.items, msg.page.Items...)
@@ -767,11 +780,19 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	m.itemsErr = nil
 	if msg.page.HasNext {
 		m.itemsLoading = true
-		m.clampBoardCursor()
+		if m.isTable() {
+			m.clampTableRow(false)
+		} else {
+			m.clampBoardCursor()
+		}
 		return m, m.itemsPageCmd(msg.page.EndCursor, false)
 	}
 	m.itemsLoading = false
-	m.clampBoardCursor()
+	if m.isTable() {
+		m.clampTableRow(true)
+	} else {
+		m.clampBoardCursor()
+	}
 	m.reconcileFilteredMoveFocus()
 	return m, nil
 }
@@ -920,14 +941,18 @@ func (m *Model) openItemDetailCmd() tea.Cmd {
 	if m.detailLoading {
 		return nil
 	}
-	item, ok := m.selectedBoardItem()
+	item, ok := m.selectedItem()
 	if !ok || m.selectedOwner == nil || m.selectedProject == nil {
 		return nil
 	}
 	m.detailVisible = true
 	m.detailItemID = item.ID
 	m.detailRequestID++
-	m.boardFocusID = item.ID
+	if m.isTable() {
+		m.tableFocusID = item.ID
+	} else {
+		m.boardFocusID = item.ID
+	}
 	m.detail = nil
 	m.detailErr = nil
 	m.detailOffset = 0
@@ -1176,6 +1201,9 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			case "o":
 				return m, m.openBrowserCmd()
 			case "c":
+				if m.isTable() {
+					return m, nil
+				}
 				if m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
 					m.commentEditing = true
 					m.commentDraft = ""
@@ -1185,6 +1213,9 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "x":
+				if m.isTable() {
+					return m, nil
+				}
 				if m.detail == nil || m.detail.Content == nil || m.detail.Content.Kind != "Issue" {
 					m.status = "Close/reopen is available for issues only"
 					return m, nil
@@ -1221,6 +1252,22 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.isTable() {
+			switch key {
+			case "j", "down":
+				m.moveTableRow(1)
+				return m, nil
+			case "k", "up":
+				m.moveTableRow(-1)
+				return m, nil
+			case "enter":
+				return m, m.openItemDetailCmd()
+			}
+			// Board lane and mutation keys have no table action.
+			if key == "h" || key == "l" || key == "left" || key == "right" || key == "H" || key == "L" || key == "J" || key == "K" {
+				return m, nil
+			}
+		}
 		switch key {
 		case "H":
 			return m, m.moveBoardLaneMutation(-1)
@@ -1252,7 +1299,11 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.filtering = true
 		if m.screen == screenBoard {
 			m.filter = ""
-			m.clampBoardCursor()
+			if m.isTable() {
+				m.clampTableRow(true)
+			} else {
+				m.clampBoardCursor()
+			}
 		}
 		return m, nil
 	case "esc":
@@ -1305,27 +1356,34 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateBoardSearchKey(key string) (tea.Model, tea.Cmd) {
+	clamp := func() {
+		if m.isTable() {
+			m.clampTableRow(true)
+		} else {
+			m.clampBoardCursor()
+		}
+	}
 	switch key {
 	case "enter":
 		m.filtering = false
-		m.clampBoardCursor()
+		clamp()
 	case "esc":
 		m.filtering = false
 		m.filter = ""
-		m.clampBoardCursor()
+		clamp()
 	case "backspace":
 		runes := []rune(m.filter)
 		if len(runes) > 0 {
 			m.filter = string(runes[:len(runes)-1])
-			m.clampBoardCursor()
+			clamp()
 		}
 	case "ctrl+u":
 		m.filter = ""
-		m.clampBoardCursor()
+		clamp()
 	default:
 		if len([]rune(key)) == 1 {
 			m.filter += key
-			m.clampBoardCursor()
+			clamp()
 		}
 	}
 	return *m, nil
@@ -1546,7 +1604,7 @@ func (m Model) browserTarget() (string, bool, error) {
 				return target, false, nil
 			}
 		}
-		if item, ok := m.selectedBoardItem(); ok {
+		if item, ok := m.selectedItem(); ok {
 			if item.Content != nil {
 				if target := validBrowserURL(item.Content.URL); target != "" {
 					return target, false, nil
@@ -1815,7 +1873,7 @@ func (m Model) footerHints() string {
 			return "enter confirm · esc cancel" + m.debugHint()
 		}
 		hints := "j/k scroll · f fields · o browser · esc close · q quit"
-		if m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
+		if !m.isTable() && m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
 			hints = "j/k scroll · f fields · c comment · x close/reopen · o browser · esc close · q quit"
 		}
 		return hints + m.debugHint()
@@ -1828,6 +1886,9 @@ func (m Model) footerHints() string {
 	case screenViewPicker:
 		return "j/k move · enter open · / filter · esc projects · p projects · r refresh · ? help · q quit" + m.debugHint()
 	case screenBoard:
+		if m.isTable() {
+			return "j/k rows · / search · enter details · o open in browser · v views · p projects · r refresh · ? help · q quit" + m.debugHint()
+		}
 		return "h/l lanes · j/k cards · H/L move · J/K reorder · / search · enter details · v views · p projects · r refresh · o open in browser · ? help · q quit" + m.debugHint()
 	default:
 		return "Loading... q to quit"
@@ -1849,7 +1910,15 @@ func (m Model) helpText() string {
 	return "Keys: j/k or up/down move · enter select · / filter/search (enter done, esc clear) ·\n" +
 		"esc/backspace back · p projects · v reload views · r refresh · o open selected item/project in browser ·\n" +
 		"? toggle help" + debugKey + " · q quit.\n" +
-		"On the board, h/l changes lanes, j/k changes cards, / searches loaded cards, and enter opens detail.\n" +
+		m.layoutHelpText()
+}
+
+func (m Model) layoutHelpText() string {
+	if m.isTable() {
+		return "In tables, j/k moves between rows, / searches loaded rows, and enter opens detail. Tables are read-only.\n" +
+			"In detail, j/k scrolls, f toggles all project fields, and esc returns to the table."
+	}
+	return "On the board, h/l changes lanes, j/k changes cards, / searches loaded cards, and enter opens detail.\n" +
 		"H/L moves cards and J/K reorders cards when the view is writable and fully loaded.\n" +
 		"In detail, j/k scrolls, f toggles all project fields, and esc returns to the board."
 }

@@ -114,7 +114,7 @@ After pulling updates, rerun `go run` or rebuild your local binary.
 - Progressive board loading, with parallel Status-lane loading where supported.
 - Single-select and iteration grouping, including combined columns/swimlanes.
 - Saved visible fields, supported field sorting, and local card search.
-- Read-only table rendering using saved fields.
+- Read-only table rendering using saved fields, single-field grouping, row navigation, local search, and issue sub-issue progress.
 - Issue, pull request, and draft details, including Markdown bodies and project
   fields. Details are cached in memory until refresh or view changes.
 - Optimistic card moves and reordering on supported writable boards.

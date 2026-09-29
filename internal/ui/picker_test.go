@@ -1705,12 +1705,31 @@ func TestPopoverCentersDetailWithoutChangingCanvas(t *testing.T) {
 	base := strings.Repeat(".", 40) + "\n" + strings.Repeat(".", 40) + "\n" + strings.Repeat(".", 40) + "\n" + strings.Repeat(".", 40) + "\n" + strings.Repeat(".", 40)
 	popover := renderPopover(base, "POPUP", 40, 5)
 	lines := strings.Split(popover, "\n")
-	if len(lines) != 5 || lines[2] != strings.Repeat(".", 17)+"POPUP"+strings.Repeat(".", 18) {
+	if len(lines) != 5 || ansi.Strip(lines[2]) != strings.Repeat(".", 17)+"POPUP"+strings.Repeat(".", 18) {
 		t.Fatalf("popover composition = %#v", lines)
 	}
 	for i, line := range lines {
 		if lipgloss.Width(line) != 40 {
 			t.Fatalf("line %d width = %d", i, lipgloss.Width(line))
 		}
+	}
+}
+
+func TestPopoverResetsHighlightedRowAtOverlayBoundaries(t *testing.T) {
+	base := strings.Join([]string{
+		strings.Repeat(" ", 40),
+		selectedRowStyle.Render(strings.Repeat("selected", 5)),
+		strings.Repeat(" ", 40),
+	}, "\n")
+	popup := detailFrameStyle.Width(12).Render("Details")
+	lines := strings.Split(renderPopover(base, popup, 40, 3), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("popover lines = %d", len(lines))
+	}
+	if !strings.Contains(lines[1], "\x1b[0m"+strings.Split(popup, "\n")[1]) {
+		t.Fatalf("highlighted row styling not reset before popup: %q", lines[1])
+	}
+	if !strings.Contains(lines[1], "\x1b[0m"+strings.Split(popup, "\n")[1]+"\x1b[0m") {
+		t.Fatalf("popup styling not reset before remaining row: %q", lines[1])
 	}
 }

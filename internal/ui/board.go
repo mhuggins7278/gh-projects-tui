@@ -476,6 +476,9 @@ func (m Model) boardMutationUnavailable() string {
 	if m.view == nil {
 		return "Mutations require a loaded board view"
 	}
+	if m.view.Layout == github.TableLayout {
+		return "Table views are read-only"
+	}
 	if m.mutationSession != nil {
 		session := m.mutationSession
 		if m.selectedOwner == nil || m.selectedProject == nil || !sameMutationProject(session, *m.selectedOwner, m.selectedProject.Number) || session.projectID != m.view.ProjectID || session.view.Number != m.view.Number {

@@ -41,6 +41,9 @@ func evaluateViewCompatibility(view github.View) viewCompatibility {
 	if len(view.VerticalGroupBy) > 1 {
 		reasons = append(reasons, "multiple vertical grouping fields are not supported")
 	}
+	if view.Layout == github.TableLayout && len(view.VerticalGroupBy) > 0 {
+		reasons = append(reasons, "vertical grouping is not supported in table views")
+	}
 	for _, grouping := range []struct {
 		fields []github.Field
 		axis   string
