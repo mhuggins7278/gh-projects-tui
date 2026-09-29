@@ -43,6 +43,23 @@ func TestViewCompatibilityAcceptsParentIssueFilteredBoard(t *testing.T) {
 	}
 }
 
+func TestViewCompatibilityAcceptsExpandedFiltersOnBoardsAndTables(t *testing.T) {
+	for _, layout := range []github.ViewLayout{github.BoardLayout, github.TableLayout} {
+		for _, filter := range []string{
+			"closed:>=2026-09-24", "has:closed", "no:parent-issue",
+			"reviewers:octocat,stevecat", `reason:completed,"not planned"`,
+			"-parent-issue:octocat/game#12", "label:*bug*", `title:"Title, with comma"`,
+		} {
+			t.Run(string(layout)+"/"+filter, func(t *testing.T) {
+				view := github.View{Layout: layout, Filter: filter, GroupByFields: []github.Field{compatibilityStatusField()}}
+				if compatibility := evaluateViewCompatibility(view); !compatibility.supported() {
+					t.Fatalf("verified filter rejected: %s", compatibility.summary())
+				}
+			})
+		}
+	}
+}
+
 func TestValidateSavedFilterAllowsProbedTermsAndConjunctions(t *testing.T) {
 	filters := []string{
 		"",
@@ -58,12 +75,16 @@ func TestValidateSavedFilterAllowsProbedTermsAndConjunctions(t *testing.T) {
 		"assignee:octocat",
 		"assignee:@me,octocat",
 		"assignee:octocat assignee:stevecat",
+		"reviewers:octocat", "reviewers:octocat,stevecat", "-reviewers:octocat",
+		"-reviewers:octocat,stevecat", "reviewers:octocat reviewers:stevecat",
+		"has:reviewers", "no:reviewers", "-no:reviewers",
 		"no:assignee",
 		"has:assignee",
 		"-no:assignee",
 		"label:bug,support",
 		`label:"bug fix"`,
 		"-label:bug",
+		"label:bu*", "label:*ug", "label:*ug*", "-label:*ug*", "label:*ug*,support",
 		"no:label",
 		"-no:label",
 		"repo:octocat/game",
@@ -71,15 +92,30 @@ func TestValidateSavedFilterAllowsProbedTermsAndConjunctions(t *testing.T) {
 		"is:pr",
 		"is:draft",
 		"is:merged",
+		"reason:completed", `reason:"completed"`, `reason:"not planned"`,
+		"-reason:completed", `-reason:"not planned"`, `reason:completed,"not planned"`,
+		`-reason:completed,"not planned"`, "reason:completed is:issue",
 		"type:Epic",
 		`type:"Epic"`,
 		"-type:Epic",
 		`parent-issue:"octocat/hello-world#123"`,
 		`parent-issue:"glg/5mp#47" is:open`,
+		"parent-issue:octocat/hello-world#123", `-parent-issue:"octocat/hello-world#123"`,
+		"-parent-issue:octocat/hello-world#123",
+		"has:parent-issue", "no:parent-issue", "-no:parent-issue",
+		"has:closed", "no:closed", "-no:closed",
 		"created:2026-09-23", "created:>=2026-09-24", "created:2026-09-23..2026-09-24",
 		"updated:@today-1d", "updated:>@today-2d", "updated:@today-3d..@today-1d",
 		"updated:@today",
+		"closed:2026-09-23", "closed:>=2026-09-24", "closed:>2026-09-24",
+		"closed:<2026-09-25", "closed:<=2026-09-24", "closed:2026-09-23..2026-09-24",
+		"closed:*..2026-09-24", "closed:2026-09-24..*", "-closed:2026-09-23",
+		"closed:@today-4d", "closed:@today-4", "closed:>=@today-4d",
+		"closed:@today-4d..@today-4d", "closed:2026-09-25 is:closed",
 		`title:"Expand saved-view support to broader GitHub filter grammar"`,
+		`title:"Update environment, enhance linting"`,
+		`-title:"Update environment, enhance linting"`,
+		"\tclosed:>=2026-09-24 is:closed  \n",
 		"title:Expand*", "title:*filter*", "filter grammar",
 		"created:*..2026-09-24", "created:<@today",
 		`status:"Done" assignee:@me`,
@@ -108,7 +144,8 @@ func TestValidateSavedFilterRejectsUnverifiedSyntax(t *testing.T) {
 		`status:"Done".."Todo"`,
 		`status:"Work, blocked"`,
 		`status:'Done'`,
-		`label:*bug*`,
+		"label:*", "label:**bug", "label:bug**", "label:b*ug", "label:*bug**,support",
+		`label:"quote\"value"`,
 		`label:"bug" ,support`,
 		"assignee:@here",
 		"assignee:",
@@ -119,22 +156,38 @@ func TestValidateSavedFilterRejectsUnverifiedSyntax(t *testing.T) {
 		"is:review",
 		"is:open,closed",
 		"type:Epic,Bug",
-		"parent-issue:octocat/hello-world#123",
+		"parent-issue:octocat/hello-world#0", "parent-issue:octocat/hello-world#-1",
+		"parent-issue:octocat/hello-world#abc", "parent-issue:octocat/hello-world#1#2",
+		"parent-issue:octocat/hello/world#1", `parent-issue:"octocat/hello-world#1"suffix`,
+		`parent-issue:""`, "parent-issue:octocat/hello-world#18446744073709551616",
 		`parent-issue:"octocat/hello-world"`,
 		`parent-issue:"octocat/hello-world#0"`,
 		`parent-issue:"octocat/hello-world#1,2"`,
 		`parent-issue:"octocat/hello-world#1","octocat/hello-world#2"`,
-		`-parent-issue:"octocat/hello-world#123"`,
 		"iteration:@next",
+		"-iteration:@current",
 		"date:>=@today",
 		"created:2026-02-30", "created:2026-9-2", "created:>=", "updated:@today-",
 		"updated:@today-1month", "updated:@today--1d", "created:*..*",
+		"closed:2026-02-30", "closed:2026-9-2", "closed:>=", "closed:@today-",
+		"closed:@today-1month", "closed:*..*", "closed:2026-09-23,2026-09-24",
+		`closed:"2026-09-23"`, "closed:>2026-09-23..2026-09-24",
 		"points:1..3",
 		"reviewers:@me",
+		"reviewers:@here", `reviewers:"octocat"`, "reviewers:org/team",
+		"reviewers:octocat,", "reviewers:", "-has:reviewers",
+		"reason:reopened", "reason:duplicate", "reason:not-planned", `reason:""`,
+		"reason:completed,reopened", `reason:"not planned",`, "reason:COMPLETED",
+		"reason:completed,", "reason:completed,,completed", `reason:"quote\"value"`,
+		"has:reason", "no:milestone", "has:closed,parent-issue",
+		`title:"quote\"value"`, `title:"comma, \"quote\""`,
 		"title:API**", "title:foo*bar", "title:\"\"", "*",
 		"OR",
 		`status:"Todo" OR assignee:@me`,
 		`status:"Todo" and assignee:@me`,
+		"AND", "or", "and", "--status:Todo", "status:",
+		`title:"unterminated`, `title:"unfinished\`, `title:"    "`,
+		`"filter grammar"`, `title:'Exact title'`, `milestone:"QA release"`,
 	}
 	for _, filter := range filters {
 		t.Run(filter, func(t *testing.T) {
@@ -314,6 +367,30 @@ func TestIncompatibleViewStaysInPicker(t *testing.T) {
 	}
 	if !strings.Contains(result.status, "roadmap views are not supported") {
 		t.Fatalf("status = %q", result.status)
+	}
+}
+
+func TestUnverifiedSavedFiltersStayInPickerWithoutLoadingItems(t *testing.T) {
+	for _, layout := range []github.ViewLayout{github.BoardLayout, github.TableLayout} {
+		for _, filter := range []string{"reviewers:@me", "reason:reopened", "iteration:@next", `title:"quote\"value"`} {
+			t.Run(string(layout)+"/"+filter, func(t *testing.T) {
+				model := NewModel(nil)
+				model.screen = screenViewPicker
+				model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+				model.selectedProject = &github.Project{Number: 1, Title: "Project"}
+				updated, cmd := model.Update(viewDetailMsg{
+					generation: model.generation,
+					view:       &github.View{Number: 2, Name: "Gated view", Layout: layout, Filter: filter},
+				})
+				result := updated.(Model)
+				if cmd != nil || result.screen != screenViewPicker || result.view != nil || result.itemsLoading {
+					t.Fatalf("gated view started item loading: screen=%v loading=%v cmd nil=%v", result.screen, result.itemsLoading, cmd == nil)
+				}
+				if !strings.Contains(result.status, "has not been verified") {
+					t.Fatalf("picker did not explain unsupported filter: %q", result.status)
+				}
+			})
+		}
 	}
 }
 

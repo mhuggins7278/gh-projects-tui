@@ -68,30 +68,52 @@ func cursor(value string) *string {
 }
 
 func TestPageBoardItemsPreservesSavedFilterAcrossPages(t *testing.T) {
-	filter := `label:"bug","needs review" assignee:@me is:closed`
-	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
-		func(query string, variables map[string]interface{}, response interface{}) error {
-			if variables["filter"] != filter || variables["after"] != nil || !strings.Contains(query, "query: $filter") {
-				t.Fatalf("first page query = %q variables = %#v", query, variables)
-			}
-			return json.Unmarshal([]byte(`{"user":{"projectV2":{"items":{"nodes":[{"id":"first"}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}`), response)
-		},
-		func(query string, variables map[string]interface{}, response interface{}) error {
-			if variables["filter"] != filter || variables["after"] != "next" || !strings.Contains(query, "query: $filter") {
-				t.Fatalf("next page query = %q variables = %#v", query, variables)
-			}
-			return json.Unmarshal([]byte(`{"user":{"projectV2":{"items":{"nodes":[{"id":"second"}],"pageInfo":{"hasNextPage":false}}}}}`), response)
-		},
-	}}
-	client := newClient(graphql, &fakeREST{})
-	owner := Owner{Login: "me", Kind: UserOwner}
-	first, err := client.PageBoardItems(context.Background(), owner, 2, filter, "", nil)
-	if err != nil || len(first.Items) != 1 || first.Items[0].ID != "first" || !first.HasNext {
-		t.Fatalf("first page = %#v, %v", first, err)
+	filters := []string{
+		`label:"bug","needs review" assignee:@me is:closed`,
+		`parent-issue:"octocat/hello-world#123" is:open`,
+		"closed:>=2026-09-24",
+		"-closed:2026-09-23",
+		"closed:@today-4d..@today-4d is:closed",
+		"reviewers:octocat,stevecat has:reviewers",
+		`reason:completed,"not planned"`,
+		`-parent-issue:"octocat/hello-world#123"`,
+		"label:*ug*,support",
+		`title:"Update environment, enhance linting"`,
+		"\tclosed:>=2026-09-24 is:closed  \n",
 	}
-	second, err := client.PageBoardItems(context.Background(), owner, 2, filter, first.EndCursor, nil)
-	if err != nil || len(second.Items) != 1 || second.Items[0].ID != "second" || second.HasNext {
-		t.Fatalf("second page = %#v, %v", second, err)
+	for _, ownerKind := range []OwnerKind{UserOwner, OrganizationOwner} {
+		branch := "user"
+		if ownerKind == OrganizationOwner {
+			branch = "organization"
+		}
+		for _, filter := range filters {
+			t.Run(string(ownerKind)+"/"+filter, func(t *testing.T) {
+				graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+					func(query string, variables map[string]interface{}, response interface{}) error {
+						if variables["filter"] != filter || variables["after"] != nil || !strings.Contains(query, "query: $filter") {
+							t.Fatalf("first page query = %q variables = %#v", query, variables)
+						}
+						return json.Unmarshal([]byte(fmt.Sprintf(`{"%s":{"projectV2":{"items":{"nodes":[{"id":"first"}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}`, branch)), response)
+					},
+					func(query string, variables map[string]interface{}, response interface{}) error {
+						if variables["filter"] != filter || variables["after"] != "next" || !strings.Contains(query, "query: $filter") {
+							t.Fatalf("next page query = %q variables = %#v", query, variables)
+						}
+						return json.Unmarshal([]byte(fmt.Sprintf(`{"%s":{"projectV2":{"items":{"nodes":[{"id":"second"}],"pageInfo":{"hasNextPage":false}}}}}`, branch)), response)
+					},
+				}}
+				client := newClient(graphql, &fakeREST{})
+				owner := Owner{Login: "me", Kind: ownerKind}
+				first, err := client.PageBoardItems(context.Background(), owner, 2, filter, "", nil)
+				if err != nil || len(first.Items) != 1 || first.Items[0].ID != "first" || !first.HasNext {
+					t.Fatalf("first page = %#v, %v", first, err)
+				}
+				second, err := client.PageBoardItems(context.Background(), owner, 2, filter, first.EndCursor, nil)
+				if err != nil || len(second.Items) != 1 || second.Items[0].ID != "second" || second.HasNext {
+					t.Fatalf("second page = %#v, %v", second, err)
+				}
+			})
+		}
 	}
 }
 

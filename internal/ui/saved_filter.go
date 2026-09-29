@@ -99,15 +99,21 @@ func validateSavedFilterTerm(term string, fields []github.Field) error {
 				return unverifiedFilterTerm(term, "assignees must be @me or unquoted usernames")
 			}
 		}
+	case "reviewers":
+		for _, part := range values {
+			if !identifier(part, false) {
+				return unverifiedFilterTerm(term, "reviewers accept unquoted usernames; @me and team references still need matching live probes")
+			}
+		}
 	case "label":
 		for _, part := range values {
-			if !simpleFilterValue(part, true) {
-				return unverifiedFilterTerm(term, "labels must be nonempty words or double-quoted names without escapes")
+			if !simpleFilterValue(part, true) && !validWildcardFilter(part) {
+				return unverifiedFilterTerm(term, "labels accept nonempty words, double-quoted names without escapes, or a word with leading/trailing * wildcards")
 			}
 		}
 	case "title":
 		if len(values) != 1 || !validTitleFilter(values[0]) {
-			return unverifiedFilterTerm(term, "Title accepts one exact word, a double-quoted title, or a word with leading/trailing * wildcards")
+			return unverifiedFilterTerm(term, "Title accepts one exact word, a double-quoted title without escapes, or a word with leading/trailing * wildcards")
 		}
 	case "repo":
 		if len(values) != 1 {
@@ -121,13 +127,19 @@ func validateSavedFilterTerm(term string, fields []github.Field) error {
 		if len(values) != 1 || !oneOf(values[0], "open", "closed", "issue", "pr", "draft", "merged") {
 			return unverifiedFilterTerm(term, "use one of open, closed, issue, pr, draft, merged")
 		}
+	case "reason":
+		for _, part := range values {
+			if !oneOf(part, "completed", `"completed"`, `"not planned"`) {
+				return unverifiedFilterTerm(term, `close reasons accept completed or "not planned"; reopened and other reasons still need matching live probes`)
+			}
+		}
 	case "type":
 		if len(values) != 1 || !simpleFilterValue(values[0], true) {
 			return unverifiedFilterTerm(term, "issue types accept one unquoted word or double-quoted name")
 		}
 	case "parent-issue":
-		if negative || len(values) != 1 || !validParentIssueFilter(values[0]) {
-			return unverifiedFilterTerm(term, `use one quoted OWNER/REPO#NUMBER reference, for example parent-issue:"octocat/hello-world#123"`)
+		if len(values) != 1 || !validParentIssueFilter(values[0]) {
+			return unverifiedFilterTerm(term, `use one OWNER/REPO#NUMBER reference, optionally double-quoted; multiple references remain unverified`)
 		}
 	case "has", "no":
 		if negative && qualifier == "has" {
@@ -136,17 +148,20 @@ func validateSavedFilterTerm(term string, fields []github.Field) error {
 		if len(values) != 1 {
 			return unverifiedFilterTerm(term, "presence checks take one field name")
 		}
-		if !oneOf(values[0], "status", "assignee", "label") {
+		if !oneOf(values[0], "status", "assignee", "label", "reviewers", "parent-issue", "closed") {
 			field, ok := filterField(values[0], fields)
 			if !ok || !oneOf(field.DataType, "NUMBER", "ITERATION", "SINGLE_SELECT") {
-				return unverifiedFilterTerm(term, "only Status, assignee, label, and verified number/iteration/single-select project fields can be checked")
+				return unverifiedFilterTerm(term, "presence checks accept Status, assignee, label, reviewers, parent-issue, closed, or verified number/iteration/single-select project fields")
 			}
 		}
 	case "iteration":
-		if negative || len(values) != 1 || values[0] != "@current" {
+		if negative {
+			return unverifiedFilterTerm(term, "negated iteration filters have not been verified; only positive iteration:@current is supported on this qualifier")
+		}
+		if len(values) != 1 || values[0] != "@current" {
 			return unverifiedFilterTerm(term, "only iteration:@current has been probed; other relative iterations need matching live results")
 		}
-	case "created", "updated":
+	case "created", "updated", "closed":
 		if len(values) != 1 || !validDateFilter(values[0]) {
 			return unverifiedFilterTerm(term, "dates accept YYYY-MM-DD, @today offsets, comparisons, or inclusive ranges")
 		}
@@ -169,11 +184,14 @@ func validateSavedFilterTerm(term string, fields []github.Field) error {
 				}
 			}
 		case "ITERATION":
-			if negative || len(values) != 1 || !validIterationFilter(values[0]) {
+			if negative {
+				return unverifiedFilterTerm(term, "negated iteration filters have not been verified; positive title/relative filters and has:/no: checks are supported")
+			}
+			if len(values) != 1 || !validIterationFilter(values[0]) {
 				return unverifiedFilterTerm(term, "iteration fields accept a quoted title, @current, @previous, comparisons, or ranges between those two keywords")
 			}
 		default:
-			return unverifiedFilterTerm(term, "this field type has not been verified with items(query:)")
+			return unverifiedFilterTerm(term, "this field type has not been verified with items(query:); choose a saved view using supported single-select, number, or iteration filters")
 		}
 	}
 	return nil
@@ -183,6 +201,16 @@ func validTitleFilter(value string) bool {
 	if simpleFilterValue(value, true) {
 		return true
 	}
+	// Commas in exact quoted titles were verified separately from commas in
+	// label/single-select names. Escaped quotes remain gated on every field.
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		inner := value[1 : len(value)-1]
+		return strings.TrimSpace(inner) != "" && !strings.ContainsAny(inner, "\\\"")
+	}
+	return validWildcardFilter(value)
+}
+
+func validWildcardFilter(value string) bool {
 	if strings.HasPrefix(value, "**") || strings.HasSuffix(value, "**") {
 		return false
 	}
@@ -257,11 +285,10 @@ func validIterationFilter(value string) bool {
 }
 
 func validParentIssueFilter(value string) bool {
-	if len(value) < 2 || value[0] != '"' || value[len(value)-1] != '"' {
-		return false
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		value = value[1 : len(value)-1]
 	}
-	reference := value[1 : len(value)-1]
-	ownerRepo, number, ok := strings.Cut(reference, "#")
+	ownerRepo, number, ok := strings.Cut(value, "#")
 	if !ok || number == "" || strings.Contains(number, "#") {
 		return false
 	}

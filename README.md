@@ -172,24 +172,28 @@ offer these issue actions.
 - Saved filters support `status:Todo`, `status:"In Progress"`, `assignee:@me`,
   `assignee:USERNAME`, `label:bug`, `repo:OWNER/REPO`, `is:open`, `is:closed`,
   `is:issue`, `is:pr`, `is:draft`, `is:merged`, `type:Epic` or
-  `type:"Epic"` for issue types, `parent-issue:"OWNER/REPO#123"`, and
-  `has:`/`no:` for Status,
-  assignee, label, and verified single-select/number/iteration project fields,
-  plus `iteration:@current`. Custom fields use their hyphenated names, for
-  example `phase:"Phase I"`, `points:>=2`, or `sprint:@previous`. `created:` and
-  `updated:` accept dates, comparisons, ranges, and relative `@today` offsets.
-  `title:"Exact title"`, `title:*word*`, and unqualified words such as `filter`
-  use GitHub's title/general-text matching.
-  Values separated by commas in a single select, assignee, label, or numeric
-  qualifier act as OR; whitespace-separated terms
+  `type:"Epic"` for issue types, `parent-issue:OWNER/REPO#123` (optionally
+  double-quoted), `reviewers:USERNAME`, `reason:completed`, and
+  `reason:"not planned"`. `has:`/`no:` check Status, assignee, label, reviewers,
+  parent-issue, closed, and verified single-select/number/iteration project fields.
+  `iteration:@current` is also supported. Custom fields use their hyphenated names, for
+  example `phase:"Phase I"`, `points:>=2`, or `sprint:@previous`. `created:`,
+  `updated:`, and `closed:` accept dates, comparisons, ranges, and relative
+  `@today` offsets. `closed:` filters the closure date, not the current state;
+  use `is:closed` for the latter.
+  `title:"Exact title"`, `title:*word*`, `label:*word*`, and unqualified words
+  such as `filter` use GitHub's text matching. Commas inside exact quoted titles
+  are supported, but embedded escaped quotes remain blocked.
+  Values separated by commas in a single-select, assignee, reviewers, label,
+  numeric, or supported reason qualifier act as OR; whitespace-separated terms
   act as AND (including repeated qualifiers). A leading `-` negates supported
-  qualifiers except iteration, `parent-issue`, and `has:`; `-no:` checks for a
-  present value. Double-quote
-  Status or label names with spaces, for example `status:"In Progress"`.
+  qualifiers except iteration and `has:`; `-no:` checks for a present value.
+  Double-quote Status or label names with spaces, for example `status:"In Progress"`.
   Examples: `label:bug,support assignee:@me` and `status:"Todo","Done" is:issue`.
   See [the filter grammar and evidence matrix](docs/api-contract.md#saved-filter-grammar-and-evidence)
   for exact boundaries. Cross-field `OR`, unverified custom field types,
-  next-iteration offsets, unverified text-field/wildcard forms, escaped quotes,
+  next-iteration offsets, reviewer `@me`/team references, `reason:reopened`,
+  milestone filters, unverified text-field/wildcard forms, escaped/single quotes,
   and other unverified forms remain blocked with a
   picker explanation. Unsupported grouping/sorting semantics are also blocked.
 - If a project has no compatible saved board, unsupported views stay in the
@@ -246,3 +250,16 @@ go test -tags live ./internal/github
 It runs discovery, opens the selected view, pages items, and loads one item's
 detail. It does not submit mutations. Mutation verification belongs only on the
 disposable sandbox project documented in `docs/api-contract.md`.
+
+The saved-filter contract test is also read-only. It requires an existing project
+with populated closure dates and parent-linked child issues, checks membership
+against an unfiltered metadata baseline, and forces two-item pages to exercise
+cursor pagination:
+
+```sh
+GH_PROJECTS_TUI_LIVE_FILTERS=1 \
+GH_PROJECTS_TUI_LIVE_OWNER=OWNER \
+GH_PROJECTS_TUI_LIVE_OWNER_KIND=user \
+GH_PROJECTS_TUI_LIVE_PROJECT=PROJECT_NUMBER \
+go test -tags live ./internal/github -run '^TestLiveSavedFilterContract$' -count=1
+```
