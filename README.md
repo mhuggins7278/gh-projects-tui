@@ -8,13 +8,21 @@ evolving.
 
 ## Screenshots
 
-These captures show the current pre-alpha interface running locally against a
-disposable GitHub Projects sandbox. They are illustrative, not a published
-binary or a promise of visual/API parity with GitHub's web UI.
+Captured from the running TUI against a disposable GitHub Projects sandbox.
+The board and table show the same saved project with live issues and fields;
+the detail panel loads an issue on demand.
+
+### Board: saved Status lanes and issue cards
 
 ![Board view](docs/screenshots/board.png)
 
+### Table: grouped rows, saved columns, and sub-issue progress
+
 ![Table view](docs/screenshots/table.png)
+
+### Issue details: project fields and Markdown body
+
+![Issue detail overlay on a board](docs/screenshots/detail.png)
 
 ## Install the GitHub CLI extension
 
