@@ -38,6 +38,29 @@ func (m Model) renderTableContent(b *strings.Builder) {
 		b.WriteString("  " + statusStyle.Render(m.itemsLoadingSpinner()+" loading"))
 	}
 	b.WriteString("\n")
+	if m.tableMove != nil {
+		label := m.tableMove.itemID
+		if item, ok := m.selectedItem(); ok && item.Content != nil {
+			label = item.Content.Title
+		}
+		b.WriteString(sectionStyle.Render("Move "+truncateText(label, m.frameContentWidth()-10)+" to group:") + "\n")
+		start, end := m.tableWindow(len(m.tableMove.lanes), m.tableMove.index)
+		if start > 0 {
+			fmt.Fprintf(b, "... %d earlier\n", start)
+		}
+		for index := start; index < end; index++ {
+			lane := m.tableMove.lanes[index]
+			marker := "  "
+			if index == m.tableMove.index {
+				marker = "> "
+			}
+			b.WriteString(statusStyle.Render(truncateText(marker+lane.Name, m.frameContentWidth()-2)) + "\n")
+		}
+		if end < len(m.tableMove.lanes) {
+			fmt.Fprintf(b, "... %d more\n", len(m.tableMove.lanes)-end)
+		}
+		return
+	}
 
 	if m.itemsErr != nil && len(m.items) == 0 && !m.itemsLoading {
 		b.WriteString("\n" + errorStyle.Render("Items failed: "+m.itemsErr.Error()) + "\n")

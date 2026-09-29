@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -9,6 +10,54 @@ import (
 
 	"github.com/cli/go-gh/v2/pkg/api"
 )
+
+func TestProjectItemArchiveAndRemoveUseProjectMembershipIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		query   string
+		payload string
+		run     func(*Client) error
+	}{
+		{"archive", "archiveProjectV2Item", `{"archiveProjectV2Item":{"item":{"id":"item","isArchived":true}}}`, func(c *Client) error { return c.ArchiveProjectItem(context.Background(), "project", "item") }},
+		{"remove", "deleteProjectV2Item", `{"deleteProjectV2Item":{"deletedItemId":"item"}}`, func(c *Client) error { return c.RemoveProjectItem(context.Background(), "project", "item") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+				func(query string, variables map[string]interface{}, response interface{}) error {
+					if !strings.Contains(query, tc.query) || !reflect.DeepEqual(variables["input"], map[string]interface{}{"projectId": "project", "itemId": "item"}) {
+						t.Fatalf("mutation = %q, variables = %#v", query, variables)
+					}
+					return json.Unmarshal([]byte(tc.payload), response)
+				},
+			}}
+			if err := tc.run(newClient(graphql, &fakeREST{})); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestProjectItemActionsRejectMissingOrMismatchedPayloads(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload string
+		run     func(*Client) error
+	}{
+		{"archive not confirmed", `{"archiveProjectV2Item":{"item":{"id":"item","isArchived":false}}}`, func(c *Client) error { return c.ArchiveProjectItem(context.Background(), "project", "item") }},
+		{"remove wrong item", `{"deleteProjectV2Item":{"deletedItemId":"other"}}`, func(c *Client) error { return c.RemoveProjectItem(context.Background(), "project", "item") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+				func(_ string, _ map[string]interface{}, response interface{}) error {
+					return json.Unmarshal([]byte(tc.payload), response)
+				},
+			}}
+			if err := tc.run(newClient(graphql, &fakeREST{})); err == nil || !IsAmbiguousMutationError(err) {
+				t.Fatalf("unexpected outcome: %v", err)
+			}
+		})
+	}
+}
 
 func TestUpdateItemFieldValueBuildsSingleSelectInput(t *testing.T) {
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{

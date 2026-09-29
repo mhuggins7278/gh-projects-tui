@@ -38,27 +38,24 @@ func TestTableViewRendersSavedFieldsAndRows(t *testing.T) {
 	}
 }
 
-func TestTableViewRemainsReadOnly(t *testing.T) {
+func TestTableActionsRespectProjectPermissions(t *testing.T) {
 	model := newPickerModel(fakePickerSource{})
 	model.screen = screenBoard
-	model.view = &github.View{Layout: github.TableLayout, ViewerCanUpdate: true, ProjectID: "project"}
+	model.view = &github.View{Layout: github.TableLayout, ViewerCanUpdate: false, ProjectID: "project"}
+	model.selectedOwner = &github.Owner{Login: "owner"}
+	model.selectedProject = &github.Project{Number: 1}
 	model.items = []github.Item{{ID: "one", Content: &github.Content{Kind: "Issue", Title: "First item"}}}
 
 	updated, cmd := model.Update(keyPress("J"))
 	result := updated.(Model)
-	if cmd != nil || result.mutationLoading || result.status != "" {
+	if cmd != nil || result.mutationLoading || result.status != "This project is read-only" {
 		t.Fatalf("table mutation state = %#v, cmd nil = %v", result, cmd == nil)
 	}
-	for _, key := range []string{"H", "L", "K", "h", "l", "left", "right"} {
+	for _, key := range []string{"H", "L", "K", "a", "D", "h", "l", "left", "right"} {
 		updated, cmd = result.Update(keyPress(key))
 		result = updated.(Model)
-		if cmd != nil || result.mutationLoading || result.status != "" {
+		if cmd != nil || result.mutationLoading || result.tableAction != nil || (result.status != "This project is read-only" && result.status != "") {
 			t.Fatalf("table key %s triggered action", key)
-		}
-	}
-	for _, text := range []string{result.footerHints(), result.helpText()} {
-		if strings.Contains(text, "reorder") || strings.Contains(text, "lanes") || strings.Contains(text, "move cards") {
-			t.Fatalf("table advertises board action: %s", text)
 		}
 	}
 }

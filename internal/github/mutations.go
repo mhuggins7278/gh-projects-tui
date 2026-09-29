@@ -29,6 +29,59 @@ mutation UpdateProjectItemPosition($input: UpdateProjectV2ItemPositionInput!) {
   }
 }`
 
+const archiveProjectItemMutation = `mutation ArchiveProjectItem($input: ArchiveProjectV2ItemInput!) {
+  archiveProjectV2Item(input: $input) { item { id isArchived } }
+}`
+
+const removeProjectItemMutation = `mutation RemoveProjectItem($input: DeleteProjectV2ItemInput!) {
+  deleteProjectV2Item(input: $input) { deletedItemId }
+}`
+
+// ArchiveProjectItem removes an item from active views while retaining its
+// project history and allowing it to be restored from GitHub's archive.
+func (c *Client) ArchiveProjectItem(ctx context.Context, projectID, itemID string) error {
+	if err := validateMutationIDs(projectID, itemID); err != nil {
+		return err
+	}
+	var response struct {
+		Archive *struct {
+			Item *struct {
+				ID         string `json:"id"`
+				IsArchived bool   `json:"isArchived"`
+			} `json:"item"`
+		} `json:"archiveProjectV2Item"`
+	}
+	input := map[string]interface{}{"projectId": projectID, "itemId": itemID}
+	if err := c.graphql.DoWithContext(ctx, archiveProjectItemMutation, map[string]interface{}{"input": input}, &response); err != nil {
+		return classifyMutationError(err)
+	}
+	if response.Archive == nil || response.Archive.Item == nil || response.Archive.Item.ID != itemID || !response.Archive.Item.IsArchived {
+		return classifyMutationError(fmt.Errorf("archive item returned no matching archived item"))
+	}
+	return nil
+}
+
+// RemoveProjectItem removes an item from this project, not its source issue or PR.
+// For a project-only draft, GitHub deletes the draft itself.
+func (c *Client) RemoveProjectItem(ctx context.Context, projectID, itemID string) error {
+	if err := validateMutationIDs(projectID, itemID); err != nil {
+		return err
+	}
+	var response struct {
+		Remove *struct {
+			DeletedItemID string `json:"deletedItemId"`
+		} `json:"deleteProjectV2Item"`
+	}
+	input := map[string]interface{}{"projectId": projectID, "itemId": itemID}
+	if err := c.graphql.DoWithContext(ctx, removeProjectItemMutation, map[string]interface{}{"input": input}, &response); err != nil {
+		return classifyMutationError(err)
+	}
+	if response.Remove == nil || response.Remove.DeletedItemID != itemID {
+		return classifyMutationError(fmt.Errorf("remove item returned no matching deleted item"))
+	}
+	return nil
+}
+
 // FieldValueInput contains one Projects v2 field value variant. Pointer fields
 // distinguish an omitted value from an intentionally empty string or list.
 type FieldValueInput struct {

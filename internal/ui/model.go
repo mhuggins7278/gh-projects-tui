@@ -159,6 +159,8 @@ type Model struct {
 	boardFocusID          string
 	tableRow              int
 	tableFocusID          string
+	tableAction           *tableActionState
+	tableMove             *tableMoveState
 	width                 int
 	height                int
 	detailVisible         bool
@@ -331,6 +333,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.view = msg.view
 		m.tableRow = 0
 		m.tableFocusID = ""
+		m.tableAction = nil
+		m.tableMove = nil
 		m.err = nil
 		m.status = ""
 		m.screen = screenBoard
@@ -427,6 +431,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.detailRequestID++
 		return m, m.loadItemDetailCmd(m.detailItemID, m.detailRequestID, m.currentBoardReadScope())
+	case tableActionMsg:
+		return m.updateTableAction(msg)
 	}
 	return m, nil
 }
@@ -509,6 +515,8 @@ func (m *Model) enterBoardFromDiscovery() {
 	m.cursor = 0
 	m.tableRow = 0
 	m.tableFocusID = ""
+	m.tableAction = nil
+	m.tableMove = nil
 	m.setDiscoverySelection()
 }
 
@@ -771,6 +779,7 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 		m.itemsHasNext = false
 		if m.isTable() {
 			m.clampTableRow(true)
+			m.reconcileTableActionRead()
 		}
 		return m, nil
 	}
@@ -790,6 +799,7 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	m.itemsLoading = false
 	if m.isTable() {
 		m.clampTableRow(true)
+		m.reconcileTableActionRead()
 	} else {
 		m.clampBoardCursor()
 	}
@@ -1112,6 +1122,49 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.screen == screenBoard {
+		if m.isTable() && m.tableAction != nil {
+			switch m.tableAction.phase {
+			case "confirm":
+				switch key {
+				case "enter":
+					return m, m.confirmTableAction()
+				case "esc":
+					m.tableAction = nil
+					m.status = "Project item action cancelled"
+				}
+				return m, nil
+			case "saving", "reconciling":
+				return m, nil
+			case "blocked":
+				if key == "r" {
+					m.tableAction.phase = "reconciling"
+					return m, m.refresh()
+				}
+				if key == "esc" || key == "v" {
+					m.tableAction = nil
+				} else {
+					return m, nil
+				}
+			}
+		}
+		if m.isTable() && m.tableMove != nil {
+			switch key {
+			case "esc":
+				m.tableMove = nil
+				m.status = "Group move cancelled"
+			case "j", "down":
+				if m.tableMove.index+1 < len(m.tableMove.lanes) {
+					m.tableMove.index++
+				}
+			case "k", "up":
+				if m.tableMove.index > 0 {
+					m.tableMove.index--
+				}
+			case "enter":
+				return m, m.finishTableMove()
+			}
+			return m, nil
+		}
 		if m.detailVisible {
 			if m.mutationLoading {
 				return m, nil
@@ -1254,6 +1307,23 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.isTable() {
 			switch key {
+			case "m":
+				m.beginTableMove()
+				return m, nil
+			case "J", "K":
+				if !m.selectTableBoardCursor() {
+					return m, nil
+				}
+				if key == "J" {
+					return m, m.reorderBoardItem(1)
+				}
+				return m, m.reorderBoardItem(-1)
+			case "a":
+				m.beginTableAction(false)
+				return m, nil
+			case "D", "delete":
+				m.beginTableAction(true)
+				return m, nil
 			case "j", "down":
 				m.moveTableRow(1)
 				return m, nil
@@ -1264,7 +1334,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, m.openItemDetailCmd()
 			}
 			// Board lane and mutation keys have no table action.
-			if key == "h" || key == "l" || key == "left" || key == "right" || key == "H" || key == "L" || key == "J" || key == "K" {
+			if key == "h" || key == "l" || key == "left" || key == "right" || key == "H" || key == "L" {
 				return m, nil
 			}
 		}
@@ -1865,6 +1935,19 @@ func (m Model) filterLine() string {
 }
 
 func (m Model) footerHints() string {
+	if m.isTable() && m.tableMove != nil {
+		return "j/k choose group · enter move · esc cancel" + m.debugHint()
+	}
+	if m.isTable() && m.tableAction != nil {
+		switch m.tableAction.phase {
+		case "confirm":
+			return "enter confirm · esc cancel" + m.debugHint()
+		case "saving", "reconciling":
+			return "saving project item action... · q quit" + m.debugHint()
+		case "blocked":
+			return "r retry readback · v views · esc back · q quit" + m.debugHint()
+		}
+	}
 	if m.screen == screenBoard && m.detailVisible {
 		if m.commentEditing {
 			return "type comment · enter submit · esc cancel" + m.debugHint()
@@ -1887,7 +1970,7 @@ func (m Model) footerHints() string {
 		return "j/k move · enter open · / filter · esc projects · p projects · r refresh · ? help · q quit" + m.debugHint()
 	case screenBoard:
 		if m.isTable() {
-			return "j/k rows · / search · enter details · o open in browser · v views · p projects · r refresh · ? help · q quit" + m.debugHint()
+			return "j/k rows · enter details · a archive · D remove · m group · J/K reorder · / search · o browser · ? help · q quit" + m.debugHint()
 		}
 		return "h/l lanes · j/k cards · H/L move · J/K reorder · / search · enter details · v views · p projects · r refresh · o open in browser · ? help · q quit" + m.debugHint()
 	default:
@@ -1915,7 +1998,8 @@ func (m Model) helpText() string {
 
 func (m Model) layoutHelpText() string {
 	if m.isTable() {
-		return "In tables, j/k moves between rows, / searches loaded rows, and enter opens detail. Tables are read-only.\n" +
+		return "In tables, j/k moves rows, / searches, and enter opens detail. a archives; D removes from the project (confirm each).\n" +
+			"m changes the saved group; J/K reorders project-wide when position-sorted and fully loaded.\n" +
 			"In detail, j/k scrolls, f toggles all project fields, and esc returns to the table."
 	}
 	return "On the board, h/l changes lanes, j/k changes cards, / searches loaded cards, and enter opens detail.\n" +

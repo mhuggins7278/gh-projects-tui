@@ -476,9 +476,6 @@ func (m Model) boardMutationUnavailable() string {
 	if m.view == nil {
 		return "Mutations require a loaded board view"
 	}
-	if m.view.Layout == github.TableLayout {
-		return "Table views are read-only"
-	}
 	if m.mutationSession != nil {
 		session := m.mutationSession
 		if m.selectedOwner == nil || m.selectedProject == nil || !sameMutationProject(session, *m.selectedOwner, m.selectedProject.Number) || session.projectID != m.view.ProjectID || session.view.Number != m.view.Number {
@@ -504,7 +501,22 @@ func (m Model) boardMutationUnavailable() string {
 		return "Refresh before mutating an incomplete board"
 	}
 	if m.filtering || strings.TrimSpace(m.filter) != "" {
+		if m.isTable() {
+			return "Clear local search before changing project items"
+		}
 		return "Clear local search before mutating the board"
+	}
+	if m.tableAction != nil {
+		return "Finish or reconcile the project item action first"
+	}
+	if m.view.Layout == github.TableLayout && len(m.view.GroupByFields) == 0 && len(m.view.VerticalGroupBy) == 0 {
+		if _, ok := m.source.(ItemMutationSource); !ok {
+			return "Mutations are unavailable for this client"
+		}
+		if _, ok := m.source.(ItemsSource); !ok {
+			return "Mutations require project readback, which is unavailable for this client"
+		}
+		return ""
 	}
 	if len(m.view.GroupByFields) > 1 || len(m.view.VerticalGroupBy) > 1 {
 		return "Mutations require one grouping field"
@@ -663,14 +675,21 @@ func (m *Model) reorderBoardItem(delta int) tea.Cmd {
 	}
 	if target := m.boardCard + delta; target < 0 || target >= len(lane.Items) {
 		m.status = "No card in that direction"
+		if m.isTable() {
+			m.status = "No row in that direction"
+		}
 		return nil
 	}
 	item := lane.Items[m.boardCard]
+	description := "Reorder card"
+	if m.isTable() {
+		description = "Reorder table row"
+	}
 	return m.enqueueBoardMutation(boardMutationIntent{
 		kind:        boardMutationReorder,
 		itemID:      item.ID,
 		direction:   delta,
-		description: "Reorder card",
+		description: description,
 	})
 }
 

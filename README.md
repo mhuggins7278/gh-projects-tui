@@ -114,7 +114,7 @@ After pulling updates, rerun `go run` or rebuild your local binary.
 - Progressive board loading, with parallel Status-lane loading where supported.
 - Single-select and iteration grouping, including combined columns/swimlanes.
 - Saved visible fields, supported field sorting, and local card search.
-- Read-only table rendering using saved fields, single-field grouping, row navigation, local search, and issue sub-issue progress.
+- Table rendering using saved fields, single-field grouping, row navigation, local search, and issue sub-issue progress. Writable tables can archive or remove project items, change groups, and reorder position-sorted rows.
 - Issue, pull request, and draft details, including Markdown bodies and project
   fields. Details are cached in memory until refresh or view changes.
 - Optimistic card moves and reordering on supported writable boards.
@@ -139,6 +139,9 @@ reload from GitHub when you want to pick up external changes.
 | `enter` | Select a picker entry or open item details |
 | `H/L` (uppercase) | Move the selected card to an adjacent lane |
 | `J/K` (uppercase) | Reorder the selected card within its lane |
+| `m` (table) | Pick a saved group for the selected row; `j/k` choose and `enter` moves |
+| `J/K` (table) | Reorder the selected row within its group when project-position sorted |
+| `a` / `D` (table) | Archive / remove the selected item from this project (confirmation required) |
 | `/` | Filter picker entries or search loaded cards |
 | `enter` / `esc` while searching | Finish search / clear search |
 | `esc` or `backspace` | Go back |
@@ -150,7 +153,7 @@ reload from GitHub when you want to pick up external changes.
 | `q` or `ctrl+c` | Quit |
 
 In item details, `j/k` scrolls, `f` toggles all fields (including unset/unavailable
-values), and `esc` closes the panel. For GitHub issues, `c` opens a comment
+values), and `esc` closes the panel. For GitHub issues on boards, `c` opens a comment
 composer (`enter` submits, `esc` cancels), and `x` prompts to close or reopen the
 issue (`enter` confirms, `esc` cancels). Pull requests and draft issues do not
 offer these issue actions.
@@ -197,7 +200,12 @@ offer these issue actions.
   fields; recent views/metadata are cached briefly and `r` forces a refresh.
   API cooldowns pace writes and pause with a visible countdown.
 - Table support is an early preview; full parity with GitHub's table UI is not
-  implemented.
+  implemented. Table actions require update access, a complete item load, and
+  no local search. Group moves require one writable single-select or iteration
+  grouping field; reordering requires project-position sorting. Removing a
+  project-only draft deletes that draft, while removing an issue or PR leaves
+  its repository content intact. Archiving retains an item for restoration on
+  GitHub. Unknown outcomes block further table item actions until reconciled.
 
 Owner, project, and view selections are not saved between runs. Use the explicit
 flags above when you want to open a specific board directly.

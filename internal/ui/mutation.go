@@ -540,6 +540,10 @@ func (m *Model) projectPendingMutations() {
 	m.items = items
 	m.boardFocusID = session.intents[len(session.intents)-1].itemID
 	m.clampBoardCursor()
+	if m.isTable() {
+		m.tableFocusID = m.boardFocusID
+		m.clampTableRow(false)
+	}
 }
 
 func (m *Model) showReconciledItems(session *boardMutationSession) tea.Cmd {
@@ -547,7 +551,7 @@ func (m *Model) showReconciledItems(session *boardMutationSession) tea.Cmd {
 		return nil
 	}
 	if m.view != nil && strings.TrimSpace(m.view.Filter) != "" {
-		if session.lastSuccess != "" {
+		if session.lastSuccess != "" && !m.isTable() {
 			m.pendingFilteredMove = &session.filteredFocus
 		}
 		if m.itemsLoading {
@@ -596,6 +600,9 @@ func (m *Model) showCanonicalWithoutOptimism(session *boardMutationSession) {
 	m.itemsFailedLanes = nil
 	m.itemsLanePending = 0
 	m.clampBoardCursor()
+	if m.isTable() {
+		m.clampTableRow(true)
+	}
 }
 
 func (m *Model) setMutationStatus(session *boardMutationSession, status string) {
@@ -639,6 +646,9 @@ func resolveBoardMutationPlan(view github.View, items []github.Item, intent boar
 		viewItems = filtered
 	}
 	lanes := lanesForView(&view, viewItems)
+	if view.Layout == github.TableLayout {
+		lanes = tableMutationLanes(&view, viewItems)
+	}
 	switch intent.kind {
 	case boardMutationMoveLane:
 		field, grouped := mutationGroupingField(&view)
