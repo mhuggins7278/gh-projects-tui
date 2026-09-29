@@ -125,6 +125,10 @@ func validateSavedFilterTerm(term string, fields []github.Field) error {
 		if len(values) != 1 || !simpleFilterValue(values[0], true) {
 			return unverifiedFilterTerm(term, "issue types accept one unquoted word or double-quoted name")
 		}
+	case "parent-issue":
+		if negative || len(values) != 1 || !validParentIssueFilter(values[0]) {
+			return unverifiedFilterTerm(term, `use one quoted OWNER/REPO#NUMBER reference, for example parent-issue:"octocat/hello-world#123"`)
+		}
 	case "has", "no":
 		if negative && qualifier == "has" {
 			return unverifiedFilterTerm(term, "use no:FIELD instead of -has:FIELD")
@@ -250,6 +254,28 @@ func validIterationFilter(value string) bool {
 		}
 	}
 	return oneOf(value, "@previous", "@current") || (len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' && simpleFilterValue(value, true))
+}
+
+func validParentIssueFilter(value string) bool {
+	if len(value) < 2 || value[0] != '"' || value[len(value)-1] != '"' {
+		return false
+	}
+	reference := value[1 : len(value)-1]
+	ownerRepo, number, ok := strings.Cut(reference, "#")
+	if !ok || number == "" || strings.Contains(number, "#") {
+		return false
+	}
+	owner, repo, ok := strings.Cut(ownerRepo, "/")
+	if !ok || !identifier(owner, false) || !identifier(repo, true) {
+		return false
+	}
+	for _, digit := range number {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	issueNumber, err := strconv.ParseUint(number, 10, 64)
+	return err == nil && issueNumber > 0
 }
 
 func validDateFilter(value string) bool {

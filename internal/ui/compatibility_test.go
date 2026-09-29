@@ -36,6 +36,13 @@ func TestViewCompatibilityAcceptsIssueTypeFilteredBoard(t *testing.T) {
 	}
 }
 
+func TestViewCompatibilityAcceptsParentIssueFilteredBoard(t *testing.T) {
+	view := github.View{Layout: github.BoardLayout, Filter: `parent-issue:"glg/5mp#47" is:open`}
+	if compatibility := evaluateViewCompatibility(view); !compatibility.supported() {
+		t.Fatalf("parent-issue-filtered board rejected: %s", compatibility.summary())
+	}
+}
+
 func TestValidateSavedFilterAllowsProbedTermsAndConjunctions(t *testing.T) {
 	filters := []string{
 		"",
@@ -67,6 +74,8 @@ func TestValidateSavedFilterAllowsProbedTermsAndConjunctions(t *testing.T) {
 		"type:Epic",
 		`type:"Epic"`,
 		"-type:Epic",
+		`parent-issue:"octocat/hello-world#123"`,
+		`parent-issue:"glg/5mp#47" is:open`,
 		"created:2026-09-23", "created:>=2026-09-24", "created:2026-09-23..2026-09-24",
 		"updated:@today-1d", "updated:>@today-2d", "updated:@today-3d..@today-1d",
 		"updated:@today",
@@ -110,6 +119,12 @@ func TestValidateSavedFilterRejectsUnverifiedSyntax(t *testing.T) {
 		"is:review",
 		"is:open,closed",
 		"type:Epic,Bug",
+		"parent-issue:octocat/hello-world#123",
+		`parent-issue:"octocat/hello-world"`,
+		`parent-issue:"octocat/hello-world#0"`,
+		`parent-issue:"octocat/hello-world#1,2"`,
+		`parent-issue:"octocat/hello-world#1","octocat/hello-world#2"`,
+		`-parent-issue:"octocat/hello-world#123"`,
 		"iteration:@next",
 		"date:>=@today",
 		"created:2026-02-30", "created:2026-9-2", "created:>=", "updated:@today-",

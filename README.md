@@ -172,7 +172,8 @@ offer these issue actions.
 - Saved filters support `status:Todo`, `status:"In Progress"`, `assignee:@me`,
   `assignee:USERNAME`, `label:bug`, `repo:OWNER/REPO`, `is:open`, `is:closed`,
   `is:issue`, `is:pr`, `is:draft`, `is:merged`, `type:Epic` or
-  `type:"Epic"` for issue types, `has:`/`no:` for Status,
+  `type:"Epic"` for issue types, `parent-issue:"OWNER/REPO#123"`, and
+  `has:`/`no:` for Status,
   assignee, label, and verified single-select/number/iteration project fields,
   plus `iteration:@current`. Custom fields use their hyphenated names, for
   example `phase:"Phase I"`, `points:>=2`, or `sprint:@previous`. `created:` and
@@ -182,7 +183,8 @@ offer these issue actions.
   Values separated by commas in a single select, assignee, label, or numeric
   qualifier act as OR; whitespace-separated terms
   act as AND (including repeated qualifiers). A leading `-` negates supported
-  qualifiers except iteration and `has:`; `-no:` checks for a present value. Double-quote
+  qualifiers except iteration, `parent-issue`, and `has:`; `-no:` checks for a
+  present value. Double-quote
   Status or label names with spaces, for example `status:"In Progress"`.
   Examples: `label:bug,support assignee:@me` and `status:"Todo","Done" is:issue`.
   See [the filter grammar and evidence matrix](docs/api-contract.md#saved-filter-grammar-and-evidence)
