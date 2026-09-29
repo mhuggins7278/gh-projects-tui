@@ -280,3 +280,36 @@ func TestTableWidthsKeepTitleAndRowsInsideTerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestTableWidthsGiveTitleRoomWithManyFields(t *testing.T) {
+	columns := []github.Field{
+		{Name: "Title", DataType: "TITLE"},
+		{Name: "Assignees"},
+		{Name: "Status", DataType: "SINGLE_SELECT"},
+		{Name: "Priority", DataType: "SINGLE_SELECT"},
+		{Name: "Iteration", DataType: "ITERATION"},
+		{Name: "Due date", DataType: "DATE"},
+		{Name: "Repository"},
+		{Name: "Sub-issues progress"},
+	}
+	const terminalWidth = 120
+	widths := tableColumnWidths(columns, terminalWidth)
+	if widths[0] < 32 {
+		t.Fatalf("title column did not get the wider allocation: %#v", widths)
+	}
+	for index, width := range widths[1:] {
+		if width < 8 {
+			t.Fatalf("non-title column %q became too narrow: %#v", columns[index+1].Name, widths)
+		}
+	}
+
+	item := github.Item{Content: &github.Content{Kind: "Issue", Number: 123, Title: "A representative task title that stays visible"}}
+	row := tableDataRow(columns, item, widths, false)
+	plain := ansi.Strip(row)
+	if !strings.Contains(plain, "A representative task") {
+		t.Fatalf("title was truncated despite available title space: %s", plain)
+	}
+	if got := lipgloss.Width(row); got > terminalWidth {
+		t.Fatalf("row occupies %d cells in a %d-cell terminal: %s", got, terminalWidth, plain)
+	}
+}

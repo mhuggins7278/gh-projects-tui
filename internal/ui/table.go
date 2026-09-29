@@ -342,16 +342,23 @@ func tableColumnWidths(columns []github.Field, available int) []int {
 		}
 		otherTotal += widths[index]
 	}
-	// Preserve the title and issue number when many columns compete for a
-	// narrow terminal. Shrink the others evenly down to a small readable slot.
-	minTitle := 20
-	if budget < minTitle+len(columns)-1 {
-		minTitle = budget - len(columns) + 1
+	// Give the title a wider baseline while keeping each other column readable
+	// when the terminal has room. Fall back to the compact layout on very narrow
+	// terminals, where all saved columns cannot retain that minimum.
+	otherCount := len(columns) - 1
+	minTitle, minOther := 32, 8
+	if budget < 20+otherCount*minOther {
+		minTitle, minOther = 20, 1
+		if budget < minTitle+otherCount {
+			minTitle = budget - otherCount
+		}
+	} else if budget < minTitle+otherCount*minOther {
+		minTitle = budget - otherCount*minOther
 	}
 	for otherTotal > budget-minTitle {
 		changed := false
 		for index := range widths {
-			if index != titleIndex && widths[index] > 1 && otherTotal > budget-minTitle {
+			if index != titleIndex && widths[index] > minOther && otherTotal > budget-minTitle {
 				widths[index]--
 				otherTotal--
 				changed = true
