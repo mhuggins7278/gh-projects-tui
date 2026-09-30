@@ -1,8 +1,8 @@
 # Review repairs
 
 The eleven confirmed findings from the September 29 review are implemented on
-`codex/review-fixes`. Their GitHub issues remain open pending review and merge.
-The original report and text fixtures preserve the baseline evidence.
+`main` in commit `9e600f3`. The issue table records each repair and its regression
+coverage. The original report and text fixtures preserve the baseline evidence.
 
 | Issue | Repair | Regression coverage |
 | --- | --- | --- |
