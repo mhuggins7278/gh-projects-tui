@@ -26,7 +26,7 @@ func evaluateViewCompatibility(view github.View) viewCompatibility {
 	case github.BoardLayout:
 	case github.TableLayout:
 	case github.RoadmapLayout:
-		reasons = append(reasons, "roadmap views are not supported")
+		reasons = append(reasons, "roadmap views are not supported: saved start/target field mapping and timeline settings are not available through this client; open this view in GitHub")
 	default:
 		reasons = append(reasons, fmt.Sprintf("layout %q is not supported", view.Layout))
 	}

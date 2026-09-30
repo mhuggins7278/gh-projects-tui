@@ -263,3 +263,7 @@ GH_PROJECTS_TUI_LIVE_OWNER_KIND=user \
 GH_PROJECTS_TUI_LIVE_PROJECT=PROJECT_NUMBER \
 go test -tags live ./internal/github -run '^TestLiveSavedFilterContract$' -count=1
 ```
+
+The read-only [roadmap investigation probe](docs/api-contract.md#reproducible-read-only-probe)
+can inspect an existing saved roadmap's schema and aggregate date/iteration data.
+It does not enable roadmap rendering or change project data.

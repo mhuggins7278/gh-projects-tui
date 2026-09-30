@@ -370,6 +370,36 @@ func TestIncompatibleViewStaysInPicker(t *testing.T) {
 	}
 }
 
+func TestRoadmapDateAndIterationMetadataDoesNotEnableLoading(t *testing.T) {
+	for _, dataType := range []string{"DATE", "ITERATION"} {
+		t.Run(dataType, func(t *testing.T) {
+			field := github.Field{ID: "endpoint", Name: "Start", DataType: dataType}
+			if dataType == "ITERATION" {
+				field.Iterations = []github.Iteration{{ID: "current", Title: "Current", StartDate: "2026-09-01", Duration: 14}}
+			}
+			view := github.View{
+				Number: 2, Name: "Roadmap", Layout: github.RoadmapLayout, ViewerCanUpdate: true,
+				ProjectFields: []github.Field{field}, Fields: []github.Field{field},
+			}
+			model := NewModel(nil)
+			model.screen = screenViewPicker
+			model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+			model.selectedProject = &github.Project{Number: 1, Title: "Project"}
+			updated, cmd := model.Update(viewDetailMsg{generation: model.generation, view: &view})
+			result := updated.(Model)
+			if cmd != nil || result.screen != screenViewPicker || result.view != nil || result.itemsLoading {
+				t.Fatal("roadmap metadata enabled item loading or entered a writable view")
+			}
+			if !strings.Contains(result.status, "roadmap views are not supported") {
+				t.Fatalf("missing roadmap explanation: %q", result.status)
+			}
+			if !strings.Contains(result.status, "start/target field mapping") || !strings.Contains(result.status, "open this view in GitHub") {
+				t.Fatalf("missing actionable roadmap limitation: %q", result.status)
+			}
+		})
+	}
+}
+
 func TestUnverifiedSavedFiltersStayInPickerWithoutLoadingItems(t *testing.T) {
 	for _, layout := range []github.ViewLayout{github.BoardLayout, github.TableLayout} {
 		for _, filter := range []string{"reviewers:@me", "reason:reopened", "iteration:@next", `title:"quote\"value"`} {

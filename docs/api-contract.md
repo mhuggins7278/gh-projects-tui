@@ -142,6 +142,10 @@ These boundaries are deliberate: API acceptance with zero results is not evidenc
 
 Read-only GitHub.com probes used an existing accessible organization project with one saved roadmap. No project data was changed. The observations are sanitized: project and field names, item IDs/titles, field values, and exact dates are omitted.
 
+Schema-only probes were repeated on 2026-09-29 and confirmed the configuration still exposes only `visibleFields`. The prior organization-project observations below were not repeated: the current token's project lookup was blocked by organization SAML enforcement. Reauthorize the token for that organization before rerunning project-level probes; this failure is not evidence of changed roadmap semantics.
+
+An accessible public organization roadmap was subsequently probed on 2026-09-29 using `TestLiveRoadmapReadContract`. It returned 18 project field definitions (two DATE, no ITERATION), empty configured visible fields/grouping/vertical grouping/sorting, and an empty filter. Its unfiltered `POSITION ASC` baseline had 11 unique items on one page, with zero populated date/iteration values. The live test passed, independently confirming the current read path and metadata boundary without SAML access. Neither sampled roadmap establishes nonempty placement behavior. No project data was changed or copied into fixtures.
+
 ### Verified metadata and item data
 
 - The saved view reports `layout: ROADMAP_LAYOUT`. Its GraphQL `ProjectV2View` fields are `configuration`, `fields`, `filter`, `groupByFields`, `layout`, `name`, `number`, `sortByFields`, and `verticalGroupByFields` (plus identity/timestamps). The legacy `fields` connection contained three generic display fields (Title, Assignees, and one single-select); `configuration.visibleFields` was empty. Grouping, vertical grouping, sorting, and filter were also empty.
@@ -151,18 +155,42 @@ Read-only GitHub.com probes used an existing accessible organization project wit
 - Generic item metadata does expose date field values (`ProjectV2ItemFieldDateValue.date`) and iteration values (`iterationId`, `title`). The project iteration definition can expose `startDate` and `duration`. These data shapes do not resolve which values GitHub assigned to roadmap endpoints or how the web view maps them to a date range.
 - GitHub's roadmap documentation describes user-selected date/iteration start and target fields, Month/Quarter/Year zoom, markers, and field slicing. These settings have no corresponding fields in the introspected Projects GraphQL view schema, so their saved values and exact state cannot currently be recovered through this client API.
 
+The public [roadmap documentation](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-roadmap-layout) was checked on 2026-09-29. It also describes grouping, primary/secondary sorts, and field sums. Generic grouping/sort connections exist, but populated roadmap grouping/sort parity remains unverified; field-sum settings are not exposed by the introspected view configuration.
+
 ### Fixture-backed compatibility and proposed bounded timeline
 
-`TestViewCompatibilityRejectsUnsupportedSemantics` includes a roadmap carrying plausible visible DATE fields and confirms the layout is still rejected. `TestIncompatibleViewStaysInPicker` confirms opening a roadmap does not enter the board or start item loading. This intentionally prevents generic date fields from being guessed as start/target endpoints.
+`TestViewCompatibilityRejectsUnsupportedSemantics` includes a roadmap carrying plausible visible DATE fields and confirms the layout is still rejected. `TestIncompatibleViewStaysInPicker` confirms opening a roadmap does not enter the board or start item loading. `TestRoadmapDateAndIterationMetadataDoesNotEnableLoading` repeats that check with DATE/ITERATION metadata and write permission. This intentionally prevents generic date fields from being guessed as start/target endpoints.
+
+`TestOpenRoadmapPreservesMetadataWithoutInferringEndpoints` covers both user and organization adapters with a synthetic fixture matching the observed response shape: two project DATE definitions, empty configured visible fields/grouping/sorting, and legacy display fields that are not used as an endpoint fallback. Fixture IDs and names are invented. These tests verify safe decoding/rejection, not web placement parity.
+
+`TestRoadmapCandidateValuesPreserveDatesIterationsAndUnsetItems` exercises invented two-date, one-date, undated, and iteration values for both owner kinds, including nested field-value pagination and a second item page. Date strings and iteration identity survive decoding unchanged; missing dates are not synthesized. This does not prove how GitHub uses those values as timeline endpoints.
 
 Proposed first read-only timeline, for review after field-mapping semantics are verified:
 
 - Require explicit, verified start and target field identifiers from roadmap configuration. Until the API supplies them (or a separately verified supported configuration source does), keep the view blocked; never infer endpoints from visible DATE fields, names, or values.
-- Use a bounded three-month viewport with month columns, horizontal month navigation, and one item row per issue/PR/draft. A start and target date create an inclusive bar; one endpoint creates a point marker. Order rows by start date, then project position for stable ties.
+- Use a bounded three-month viewport with month headers, horizontal month navigation, and one item row per issue/PR/draft. A start and target date create an inclusive bar; one endpoint creates a point marker, subject to web verification. Preserve verified saved row sorts with project-position ties, or project position when no explicit sort exists; do not impose an invented start-date sort.
 - Keep items without usable endpoints in an explicit undated count/list rather than assigning invented dates. Report dates outside the visible range through clipped-bar markers and counts.
 - Defer iteration-to-date placement, markers, slicing, custom zoom restoration, and drag-to-reschedule. Iteration `startDate`/`duration` presence alone does not prove roadmap-specific placement rules.
 
 This is a proposal, not implemented support. Roadmaps remain explicitly unsupported and read-only until the endpoint mapping and representative nonempty date/iteration placements can be verified against GitHub.
+
+The [reviewable timeline proposal](roadmap-proposal.md) expands the compatibility gates, date/null/error cases, ordering rules, narrow-terminal fallback, and verification checklist. The picker now explains the missing endpoint/display configuration and directs users to open the view in GitHub.
+
+### Reproducible read-only probe
+
+Select an existing saved roadmap accessible to the authenticated `gh` account. Organization ownership is the default; use `GH_PROJECTS_TUI_LIVE_OWNER_KIND=user` for a personal project.
+
+```sh
+GH_PROJECTS_TUI_LIVE_ROADMAP=1 \
+GH_PROJECTS_TUI_LIVE_OWNER=OWNER \
+GH_PROJECTS_TUI_LIVE_PROJECT=PROJECT_NUMBER \
+GH_PROJECTS_TUI_LIVE_VIEW=ROADMAP_VIEW_NUMBER \
+go test -tags live ./internal/github -run '^TestLiveRoadmapReadContract$' -count=1 -v
+```
+
+The probe introspects the view/configuration schema, reads the selected view through the adapter, and paginates an **unfiltered** `POSITION ASC` item baseline, including nested field-value pages. Logs contain only schema field names and aggregate metadata/item/date/iteration counts; project/item content stays in memory. It submits no mutations and fails if the view or configuration schema fields change so the API boundary can be revisited. GitHub permits at most two `__Type.fields` occurrences per introspection query.
+
+An empty/populated date count alone does not verify start/target selection, inclusive/exclusive endpoints, one-endpoint behavior, undated placement, or iteration-to-date conversion. The proposed timeline rules above require separate nonempty web comparisons; a passing probe does not enable roadmap views.
 
 The current compatibility gate accepts the field-sort and iteration projections in the table despite their outstanding web-parity checks. Do not interpret fixture coverage or schema availability as a confirmed match to GitHub's display rules.
 
