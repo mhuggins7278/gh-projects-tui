@@ -47,6 +47,7 @@ type boardMutationPlan struct {
 }
 
 type boardMutationSession struct {
+	generation     uint64
 	id             uint64
 	owner          github.Owner
 	projectNumber  int
@@ -102,6 +103,7 @@ func (m *Model) enqueueBoardMutation(intent boardMutationIntent) tea.Cmd {
 		}
 		m.mutationSession = &boardMutationSession{
 			id:             m.nextMutationSession,
+			generation:     m.generation,
 			owner:          *m.selectedOwner,
 			projectNumber:  m.selectedProject.Number,
 			projectID:      m.view.ProjectID,
@@ -345,12 +347,13 @@ func (m *Model) updateBoardMutation(msg boardMutationMsg) (tea.Model, tea.Cmd) {
 	}
 	result := msg.result
 	// Terminal success with no queued dependents: trust the definitive write
-	// and skip the post-read. Optimistic state becomes canonical.
+	// and skip the post-read. Apply its plan to the session-owned baseline.
 	if result.err == nil && len(session.intents) == 1 {
 		intent := session.plan.intent
 		session.lastSuccess = intent.description + " saved"
 		delete(m.detailCache, intent.itemID)
-		session.canonicalItems = cloneItems(m.items)
+		session.canonicalItems = cloneItems(session.plan.beforeItems)
+		applyBoardMutationPlan(&session.canonicalItems, *session.plan)
 		session.intents = session.intents[1:]
 		session.plan = nil
 		session.attempt = nil
@@ -527,7 +530,7 @@ func (m *Model) applyMutationPlanCmd(sessionID, writeID uint64, plan boardMutati
 
 func (m *Model) projectPendingMutations() {
 	session := m.mutationSession
-	if session == nil || session.blocked || !sameMutationProjectByModel(session, m) || m.screen != screenBoard || m.view == nil || len(session.intents) == 0 {
+	if session == nil || session.blocked || !sameMutationViewByModel(session, m) || m.itemsLoading || session.generation != m.generation || m.screen != screenBoard || m.view == nil || len(session.intents) == 0 {
 		return
 	}
 	items := cloneItems(session.canonicalItems)
@@ -550,12 +553,17 @@ func (m *Model) showReconciledItems(session *boardMutationSession) tea.Cmd {
 	if !sameMutationProjectByModel(session, m) || m.screen != screenBoard {
 		return nil
 	}
+	if m.itemsLoading {
+		scope := m.currentBoardReadScope()
+		m.pendingMutationReload = &scope
+		return nil
+	}
+	if !sameMutationViewByModel(session, m) || session.generation != m.generation {
+		return m.startItemsLoadWithSpinner()
+	}
 	if m.view != nil && strings.TrimSpace(m.view.Filter) != "" {
 		if session.lastSuccess != "" && !m.isTable() {
 			m.pendingFilteredMove = &session.filteredFocus
-		}
-		if m.itemsLoading {
-			m.cancelItemsLoad()
 		}
 		return m.startItemsLoadWithSpinner()
 	}
@@ -586,11 +594,8 @@ func filteredMoveFocusFor(m *Model, itemID string) filteredMoveFocus {
 }
 
 func (m *Model) showCanonicalWithoutOptimism(session *boardMutationSession) {
-	if !sameMutationProjectByModel(session, m) || m.screen != screenBoard {
+	if !sameMutationViewByModel(session, m) || m.screen != screenBoard || m.itemsLoading || session.generation != m.generation {
 		return
-	}
-	if m.itemsLoading {
-		m.cancelItemsLoad()
 	}
 	m.items = cloneItems(session.canonicalItems)
 	m.itemsHasNext = false
@@ -995,4 +1000,8 @@ type mutationReadbackMsg struct {
 	readID    uint64
 	items     []github.Item
 	err       error
+}
+
+func sameMutationViewByModel(session *boardMutationSession, m *Model) bool {
+	return sameMutationProjectByModel(session, m) && m.view != nil && session.projectID == m.view.ProjectID && session.view.Number == m.view.Number
 }

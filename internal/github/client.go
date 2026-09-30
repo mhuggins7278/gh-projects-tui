@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/mhuggins7278/gh-projects-tui/internal/config"
 )
 
 const viewerProjectsQuery = `
@@ -100,13 +101,18 @@ func newClient(graphql graphQLClient, rest restClient) *Client {
 }
 
 func NewClient() (*Client, error) {
+	return NewClientWithHost(config.DefaultHost())
+}
+
+// NewClientWithHost uses the same resolved host for authentication and both APIs.
+func NewClientWithHost(host string) (*Client, error) {
 	// Resolve gh authentication and Unix-socket routing before wrapping transport.
-	httpClient, err := api.NewHTTPClient(api.ClientOptions{})
+	httpClient, err := api.NewHTTPClient(api.ClientOptions{Host: host})
 	if err != nil {
 		return nil, err
 	}
 	scheduler := newRequestScheduler(httpClient.Transport)
-	options := api.ClientOptions{Transport: scheduler}
+	options := api.ClientOptions{Host: host, Transport: scheduler}
 	graphql, err := api.NewGraphQLClient(options)
 	if err != nil {
 		return nil, err

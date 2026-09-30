@@ -24,7 +24,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	client, err := github.NewClient()
+	client, err := github.NewClientWithHost(host)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

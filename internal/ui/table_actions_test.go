@@ -92,7 +92,7 @@ func TestTableActionsCancelAndBlockUncertainRetries(t *testing.T) {
 	if m.tableAction == nil || m.tableAction.phase != "reconciling" {
 		t.Fatalf("ambiguous action = %#v", m.tableAction)
 	}
-	updated, _ = m.Update(itemsPageMsg{scope: m.currentBoardReadScope(), generation: m.generation, page: github.ItemsPage{Items: original}, reset: true})
+	updated, _ = m.Update(tableActionReadbackMsg{scope: m.tableAction.scope, readID: m.tableAction.readID, items: original})
 	m = updated.(Model)
 	if m.tableAction == nil || m.tableAction.phase != "blocked" {
 		t.Fatalf("uncertain result was not blocked: %#v", m.tableAction)
@@ -104,7 +104,7 @@ func TestTableActionsCancelAndBlockUncertainRetries(t *testing.T) {
 	}
 }
 
-func TestTableActionIgnoresStaleCompletion(t *testing.T) {
+func TestTableActionCompletionSurvivesReadGenerationChange(t *testing.T) {
 	source := &fakeTableActionSource{}
 	m := tableActionModel(source)
 	updated, _ := m.Update(keyPress("a"))
@@ -115,7 +115,7 @@ func TestTableActionIgnoresStaleCompletion(t *testing.T) {
 	m.generation++
 	updated, next := m.Update(result)
 	m = updated.(Model)
-	if next != nil || !strings.Contains(m.status, "Saving") || m.tableAction == nil || m.tableAction.phase != "saving" || m.itemsLoading {
+	if next == nil || m.tableAction != nil || !m.itemsLoading {
 		t.Fatalf("stale completion changed view: action=%#v status=%q", m.tableAction, m.status)
 	}
 }

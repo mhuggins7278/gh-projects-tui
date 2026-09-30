@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"strings"
+
+	"github.com/cli/go-gh/v2/pkg/auth"
 )
 
 // DefaultHost resolves the configured GitHub host the same way as gh.
@@ -12,7 +14,8 @@ func DefaultHost() string {
 			return normalizeHost(value)
 		}
 	}
-	return "github.com"
+	host, _ := auth.DefaultHost()
+	return normalizeHost(host)
 }
 
 func normalizeHost(host string) string {

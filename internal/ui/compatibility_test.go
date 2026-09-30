@@ -357,7 +357,7 @@ func TestIncompatibleViewStaysInPicker(t *testing.T) {
 	model.selectedProject = &github.Project{Number: 1, Title: "Project"}
 	model.views = []github.ViewSummary{{Number: 2, Name: "Roadmap", Layout: github.RoadmapLayout}}
 
-	updated, cmd := model.Update(viewDetailMsg{
+	updated, cmd := model.Update(viewDetailMsg{scope: model.currentPickerReadScope(),
 		generation: model.generation,
 		view:       &github.View{Number: 2, Name: "Roadmap", Layout: github.RoadmapLayout},
 	})
@@ -385,7 +385,7 @@ func TestRoadmapDateAndIterationMetadataDoesNotEnableLoading(t *testing.T) {
 			model.screen = screenViewPicker
 			model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
 			model.selectedProject = &github.Project{Number: 1, Title: "Project"}
-			updated, cmd := model.Update(viewDetailMsg{generation: model.generation, view: &view})
+			updated, cmd := model.Update(viewDetailMsg{scope: model.currentPickerReadScope(), generation: model.generation, view: &view})
 			result := updated.(Model)
 			if cmd != nil || result.screen != screenViewPicker || result.view != nil || result.itemsLoading {
 				t.Fatal("roadmap metadata enabled item loading or entered a writable view")
@@ -423,7 +423,7 @@ func TestRoadmapUnavailableEndpointMappingsStayBlocked(t *testing.T) {
 			model.screen = screenViewPicker
 			model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
 			model.selectedProject = &github.Project{Number: 1, Title: "Project"}
-			updated, cmd := model.Update(viewDetailMsg{generation: model.generation, view: &view})
+			updated, cmd := model.Update(viewDetailMsg{scope: model.currentPickerReadScope(), generation: model.generation, view: &view})
 			result := updated.(Model)
 			if cmd != nil || result.screen != screenViewPicker || result.view != nil || result.itemsLoading {
 				t.Fatal("unavailable endpoint mapping enabled a roadmap")
@@ -443,7 +443,7 @@ func TestUnverifiedSavedFiltersStayInPickerWithoutLoadingItems(t *testing.T) {
 				model.screen = screenViewPicker
 				model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
 				model.selectedProject = &github.Project{Number: 1, Title: "Project"}
-				updated, cmd := model.Update(viewDetailMsg{
+				updated, cmd := model.Update(viewDetailMsg{scope: model.currentPickerReadScope(),
 					generation: model.generation,
 					view:       &github.View{Number: 2, Name: "Gated view", Layout: layout, Filter: filter},
 				})

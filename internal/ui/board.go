@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
 
@@ -473,6 +474,9 @@ func itemFieldValue(field github.Field, item github.Item) (github.FieldValue, bo
 }
 
 func (m Model) boardMutationUnavailable() string {
+	if m.issueActionPending != nil {
+		return "Reconcile the pending issue action before changing project items"
+	}
 	if m.view == nil {
 		return "Mutations require a loaded board view"
 	}
@@ -931,7 +935,29 @@ func (m Model) renderBoardContent(b *strings.Builder) {
 	}
 
 	lanes := m.boardLanesForItems(visibleItems)
-	b.WriteString("\n" + m.renderLaneGrid(lanes) + "\n")
+	grid := ""
+	if len(lanes) > 0 && lanes[0].RowKey != "" && m.height > 0 {
+		// Measure the actual surrounding UI rather than assuming fixed header
+		// heights. Group labels, help, status, and telemetry consume real rows.
+		reserved := lipgloss.Height(m.renderHeader()) + lipgloss.Height(m.renderFooter()) + bodyFrameStyle.GetVerticalFrameSize()
+		reserved += lipgloss.Height(strings.TrimSuffix(b.String(), "\n")) + 3
+		if m.status != "" {
+			reserved += 1 + lipgloss.Height(statusStyle.Render(m.status))
+		}
+		if m.showHelp {
+			reserved += lipgloss.Height(helpStyle.Width(m.frameContentWidth() - 2).Render(m.helpText()))
+		}
+		if m.showAPI && m.debug {
+			reserved += lipgloss.Height(helpStyle.Width(m.frameContentWidth() - 2).Render(m.apiInspector()))
+		}
+		if m.itemsErr != nil {
+			reserved++
+		}
+		grid = m.renderSwimlaneViewport(lanes, max(4, m.height-reserved))
+	} else {
+		grid = m.renderLaneGrid(lanes)
+	}
+	b.WriteString("\n" + grid + "\n")
 	if m.itemsErr != nil {
 		b.WriteString(errorStyle.Render("Lane loading failed: "+m.itemsErr.Error()) + "\n")
 	}
@@ -966,49 +992,77 @@ func (m Model) renderLaneGrid(lanes []boardLane) string {
 }
 
 func (m Model) renderSwimlaneGrid(lanes []boardLane) string {
-	rowCount := 0
-	for start := 0; start < len(lanes); {
-		rowCount++
-		rowKey := lanes[start].RowKey
-		start++
-		for start < len(lanes) && lanes[start].RowKey == rowKey {
-			start++
-		}
-	}
-	rowHeight := m.swimlaneViewportHeight(rowCount)
+	return m.renderSwimlaneViewport(lanes, m.boardViewportHeight())
+}
 
-	rows := make([]string, 0, rowCount)
+func (m Model) renderSwimlaneViewport(lanes []boardLane, viewport int) string {
+	type rowRange struct{ start, end int }
+	var ranges []rowRange
+	activeRow := 0
 	for start := 0; start < len(lanes); {
 		end := start + 1
 		for end < len(lanes) && lanes[end].RowKey == lanes[start].RowKey {
 			end++
 		}
-
-		columns, laneWidth := m.boardGrid(end - start)
-		visibleStart := start
 		if m.boardLane >= start && m.boardLane < end {
-			visibleStart = start + ((m.boardLane-start)/columns)*columns
+			activeRow = len(ranges)
 		}
-		visibleEnd := visibleStart + columns
-		if visibleEnd > end {
-			visibleEnd = end
-		}
-		blocks := make([]string, 0, (visibleEnd-visibleStart)*2-1)
-		for laneIndex := visibleStart; laneIndex < visibleEnd; laneIndex++ {
-			blocks = append(blocks, m.renderLaneColumn(lanes[laneIndex], laneIndex, laneWidth, rowHeight))
-			if laneIndex+1 < visibleEnd {
-				blocks = append(blocks, "  ")
-			}
-		}
-		row := lipgloss.JoinHorizontal(lipgloss.Top, blocks...)
-		label := lanes[start].RowName
-		if label == "" {
-			label = "Unnamed swimlane"
-		}
-		rows = append(rows, lipgloss.JoinVertical(lipgloss.Left, statusStyle.Render("Swimlane: "+label), row))
+		ranges = append(ranges, rowRange{start, end})
 		start = end
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+	// A lane needs room for its header, borders, and a complete selected
+	// card. Reserve two lines for hidden-row indicators before dividing space.
+	visibleCount := len(ranges)
+	if m.height > 0 {
+		visibleCount = min(visibleCount, max(1, (viewport-2)/12))
+	}
+	for {
+		first := max(0, min(activeRow-visibleCount/2, len(ranges)-visibleCount))
+		last := first + visibleCount
+		rowHeight := max(1, (viewport-2)/max(1, visibleCount)-1)
+		if m.height == 0 {
+			rowHeight = m.swimlaneViewportHeight(visibleCount)
+		}
+		rowCount := visibleCount
+		rows := make([]string, 0, rowCount)
+		if first > 0 {
+			rows = append(rows, mutedStyle.Render(fmt.Sprintf("... %d earlier swimlanes", first)))
+		}
+		for rowIndex := first; rowIndex < last; rowIndex++ {
+			start, end := ranges[rowIndex].start, ranges[rowIndex].end
+
+			columns, laneWidth := m.boardGrid(end - start)
+			visibleStart := start
+			if m.boardLane >= start && m.boardLane < end {
+				visibleStart = start + ((m.boardLane-start)/columns)*columns
+			}
+			visibleEnd := visibleStart + columns
+			if visibleEnd > end {
+				visibleEnd = end
+			}
+			blocks := make([]string, 0, (visibleEnd-visibleStart)*2-1)
+			for laneIndex := visibleStart; laneIndex < visibleEnd; laneIndex++ {
+				blocks = append(blocks, m.renderLaneColumn(lanes[laneIndex], laneIndex, laneWidth, rowHeight))
+				if laneIndex+1 < visibleEnd {
+					blocks = append(blocks, "  ")
+				}
+			}
+			row := lipgloss.JoinHorizontal(lipgloss.Top, blocks...)
+			label := lanes[start].RowName
+			if label == "" {
+				label = "Unnamed swimlane"
+			}
+			rows = append(rows, lipgloss.JoinVertical(lipgloss.Left, statusStyle.Render(truncateText("Swimlane: "+label, m.frameContentWidth()-2)), row))
+		}
+		if last < len(ranges) {
+			rows = append(rows, mutedStyle.Render(fmt.Sprintf("... %d more swimlanes", len(ranges)-last)))
+		}
+		result := lipgloss.JoinVertical(lipgloss.Left, rows...)
+		if m.height <= 0 || lipgloss.Height(result) <= viewport || visibleCount <= 1 {
+			return result
+		}
+		visibleCount--
+	}
 }
 
 func (m Model) swimlaneViewportHeight(rowCount int) int {
@@ -1048,7 +1102,7 @@ func (m Model) boardGrid(laneCount int) (int, int) {
 
 func (m Model) renderLaneColumn(lane boardLane, laneIndex, width, viewportHeight int) string {
 	active := laneIndex == m.boardLane
-	header := m.renderLaneHeader(lane, laneIndex, active)
+	header := ansi.Truncate(m.renderLaneHeader(lane, laneIndex, active), max(1, width-2), "...")
 	lines := []string{header}
 	if len(lane.Items) == 0 {
 		if lane.Failed {
@@ -1058,7 +1112,12 @@ func (m Model) renderLaneColumn(lane boardLane, laneIndex, width, viewportHeight
 		} else {
 			lines = append(lines, mutedStyle.Render("No cards"))
 		}
-		return laneFrameStyle(laneIndex).Width(width).Render(strings.Join(lines, "\n"))
+		column := laneFrameStyle(laneIndex).Width(width).Render(strings.Join(lines, "\n"))
+		_, _, combined := boardCombinedFields(m.view)
+		if combined && m.height > 0 && lipgloss.Height(column) > viewportHeight {
+			return header
+		}
+		return column
 	}
 
 	start, end := m.boardWindowForLane(lane, m.boardCard, width, viewportHeight, active)
@@ -1081,11 +1140,32 @@ func (m Model) renderLaneColumn(lane boardLane, laneIndex, width, viewportHeight
 		}
 		column = m.renderLaneWindow(lane, laneIndex, width, start, end, showEarlier, showLater, active)
 	}
+	_, _, combined := boardCombinedFields(m.view)
+	if combined && m.height > 0 && lipgloss.Height(column) > viewportHeight {
+		index := 0
+		if active {
+			index = max(0, min(m.boardCard, len(lane.Items)-1))
+		}
+		item := lane.Items[index]
+		label := "content unavailable"
+		if item.Content != nil {
+			label = item.Content.Title
+		}
+		marker := "  "
+		if active {
+			marker = "> "
+		}
+		label = marker + truncateText(label, max(1, width-4))
+		if viewportHeight < 4 {
+			return titleStyle.Render(label)
+		}
+		return laneFrameStyle(laneIndex).Width(width).Render(header + "\n" + titleStyle.Render(label))
+	}
 	return column
 }
 
 func (m Model) renderLaneWindow(lane boardLane, laneIndex, width, start, end int, showEarlier, showLater, active bool) string {
-	lines := []string{m.renderLaneHeader(lane, laneIndex, active)}
+	lines := []string{ansi.Truncate(m.renderLaneHeader(lane, laneIndex, active), max(1, width-2), "...")}
 	if showEarlier {
 		lines = append(lines, mutedStyle.Render(fmt.Sprintf("... %d earlier", start)))
 	}

@@ -100,6 +100,41 @@ func (scope boardReadScope) matches(m Model) bool {
 		scope.viewNumber == m.view.Number
 }
 
+// pickerReadScope prevents a result from being installed under another project.
+type pickerReadScope struct {
+	host          string
+	owner         github.Owner
+	projectNumber int
+}
+
+func (m Model) currentPickerReadScope() pickerReadScope {
+	scope := pickerReadScope{host: m.host}
+	if m.selectedOwner != nil {
+		scope.owner = *m.selectedOwner
+	}
+	if m.selectedProject != nil {
+		scope.projectNumber = m.selectedProject.Number
+	}
+	return scope
+}
+func (scope pickerReadScope) matches(m Model) bool {
+	return m.screen == screenViewPicker && scope == m.currentPickerReadScope()
+}
+
+// abandonReads cancels navigation reads, never submitted writes.
+func (m *Model) abandonReads() {
+	if m.cancel != nil {
+		m.cancel()
+	}
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.generation++
+	m.loadingDetail, m.loadingViews, m.projectsLoading = false, false, false
+	m.itemsLoading = false
+	m.itemsLanePending = 0
+	m.itemsLoadingLanes = nil
+	m.pendingMutationReload = nil
+}
+
 type screen int
 
 const (
@@ -151,6 +186,7 @@ type Model struct {
 	itemsCursor           string
 	itemsErr              error
 	itemsLoadFrame        int
+	pendingMutationReload *boardReadScope
 	itemsLanePending      int
 	itemsLoadingLanes     map[string]bool
 	itemsFailedLanes      map[string]bool
@@ -169,6 +205,7 @@ type Model struct {
 	detailRequestID       uint64
 	detail                *github.ItemDetail
 	detailCache           map[string]github.ItemDetail
+	detailRenderCache     *detailLineCache
 	detailErr             error
 	detailOffset          int
 	detailShowAll         bool
@@ -177,6 +214,8 @@ type Model struct {
 	issueActionConfirm    bool
 	issueActionClosing    bool
 	issueActionRefreshing bool
+	issueActionPending    *issueActionState
+	nextIssueAction       uint64
 	mutationLoading       bool
 	mutationSession       *boardMutationSession
 	nextMutationSession   uint64
@@ -191,15 +230,16 @@ func NewModel(source DiscoverySource) Model {
 func NewModelWithSelection(source DiscoverySource, selection Selection) Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	return Model{
-		source:      source,
-		ctx:         ctx,
-		cancel:      cancel,
-		selection:   selection,
-		loading:     true,
-		screen:      screenLoading,
-		host:        config.DefaultHost(),
-		detailCache: make(map[string]github.ItemDetail),
-		openBrowser: openURLInBrowser,
+		source:            source,
+		ctx:               ctx,
+		cancel:            cancel,
+		selection:         selection,
+		loading:           true,
+		screen:            screenLoading,
+		host:              config.DefaultHost(),
+		detailCache:       make(map[string]github.ItemDetail),
+		detailRenderCache: &detailLineCache{},
+		openBrowser:       openURLInBrowser,
 	}
 }
 
@@ -243,6 +283,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, apiStatusTick()
+	case tea.PasteMsg:
+		m.appendInputText(msg.Content)
+		return m, nil
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
 	case tea.WindowSizeMsg:
@@ -261,7 +304,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.generation != m.generation {
 			return m, nil
 		}
-		if m.selectedOwner == nil || m.selectedOwner.Login != msg.owner.Login {
+		if m.screen != screenProjectPicker || m.selectedOwner == nil || *m.selectedOwner != msg.owner {
 			return m, nil
 		}
 		m.projectsLoading = false
@@ -275,7 +318,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case viewsMsg:
-		if msg.generation != m.generation {
+		if msg.generation != m.generation || !msg.scope.matches(m) {
 			return m, nil
 		}
 		m.loadingViews = false
@@ -306,7 +349,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case viewDetailMsg:
-		if msg.generation != m.generation {
+		if msg.generation != m.generation || !msg.scope.matches(m) {
 			return m, nil
 		}
 		m.loadingDetail = false
@@ -333,7 +376,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.view = msg.view
 		m.tableRow = 0
 		m.tableFocusID = ""
-		m.tableAction = nil
 		m.tableMove = nil
 		m.err = nil
 		m.status = ""
@@ -349,19 +391,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.detailLoading = false
-		if m.issueActionRefreshing {
-			m.issueActionRefreshing = false
-			m.mutationLoading = false
-			if msg.err != nil {
-				m.status = "Issue state could not be reconciled; refresh before making another issue change."
-			} else if msg.detail != nil && msg.detail.Content != nil {
-				for i := range m.items {
-					if m.items[i].ID == msg.itemID && m.items[i].Content != nil {
-						m.items[i].Content.State = msg.detail.Content.State
-					}
-				}
-			}
-		}
 		m.detailErr = msg.err
 		if msg.err == nil && msg.detail != nil {
 			m.detail = msg.detail
@@ -395,44 +424,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case issueActionMsg:
-		if msg.generation != m.generation || msg.itemID != m.detailItemID {
-			return m, nil
-		}
-		m.mutationLoading = false
-		if msg.err != nil {
-			if github.IsAmbiguousMutationError(msg.err) {
-				if msg.closed == nil {
-					m.status = msg.status
-					return m, nil
-				}
-				m.status = "Issue action outcome is uncertain; refreshing issue state. Do not retry until it finishes."
-				m.mutationLoading = true
-				m.issueActionRefreshing = true
-				m.detailRequestID++
-				return m, m.loadItemDetailCmd(m.detailItemID, m.detailRequestID, m.currentBoardReadScope())
-			}
-			m.status = "Issue action failed: " + msg.err.Error()
-			return m, nil
-		}
-		m.status = msg.status
-		if msg.closed != nil {
-			state := "OPEN"
-			if *msg.closed {
-				state = "CLOSED"
-			}
-			if m.detail != nil && m.detail.Content != nil {
-				m.detail.Content.State = state
-			}
-			for i := range m.items {
-				if m.items[i].ID == msg.itemID && m.items[i].Content != nil {
-					m.items[i].Content.State = state
-				}
-			}
-		}
-		m.detailRequestID++
-		return m, m.loadItemDetailCmd(m.detailItemID, m.detailRequestID, m.currentBoardReadScope())
+		return m.updateIssueAction(msg)
+	case issueReadbackMsg:
+		return m.updateIssueReadback(msg)
 	case tableActionMsg:
 		return m.updateTableAction(msg)
+	case tableActionReadbackMsg:
+		return m.updateTableActionReadback(msg)
 	}
 	return m, nil
 }
@@ -601,15 +599,7 @@ func (m *Model) startOwnerProjectsLoad() tea.Cmd {
 }
 
 func (m *Model) startViewsLoad() tea.Cmd {
-	if m.itemsLoading {
-		m.cancelItemsLoad()
-	} else {
-		if m.cancel != nil {
-			m.cancel()
-		}
-		m.ctx, m.cancel = context.WithCancel(context.Background())
-		m.generation++
-	}
+	m.abandonReads()
 	m.screen = screenViewPicker
 	m.view = nil
 	m.detailVisible = false
@@ -637,18 +627,19 @@ func (m *Model) startViewsLoad() tea.Cmd {
 	owner := *m.selectedOwner
 	project := m.selectedProject.Number
 	generation := m.generation
+	scope := m.currentPickerReadScope()
 	ctx := m.ctx
 	source := m.source
 	return func() tea.Msg {
 		lister, ok := source.(ViewsSource)
 		if !ok {
-			return viewsMsg{err: fmt.Errorf("view listing is not supported by this client"), generation: generation}
+			return viewsMsg{scope: scope, err: fmt.Errorf("view listing is not supported by this client"), generation: generation}
 		}
 		if ctx == nil {
 			ctx = context.Background()
 		}
 		views, err := lister.ListViews(ctx, owner, project)
-		return viewsMsg{views: views, err: err, generation: generation}
+		return viewsMsg{scope: scope, views: views, err: err, generation: generation}
 	}
 }
 
@@ -658,22 +649,25 @@ func (m *Model) loadViewsCmd() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) openViewCmd(owner github.Owner, projectNumber, viewNumber int) tea.Cmd {
+	m.abandonReads()
+	m.loadingDetail = true
 	generation := m.generation
+	scope := m.currentPickerReadScope()
 	ctx := m.ctx
 	source := m.source
 	return func() tea.Msg {
 		loader, ok := source.(ViewSource)
 		if !ok {
-			return viewDetailMsg{err: fmt.Errorf("view selection is not supported by this client"), generation: generation}
+			return viewDetailMsg{scope: scope, err: fmt.Errorf("view selection is not supported by this client"), generation: generation}
 		}
 		if ctx == nil {
 			ctx = context.Background()
 		}
 		view, err := loader.OpenView(ctx, owner, projectNumber, viewNumber)
 		if err != nil {
-			return viewDetailMsg{err: err, generation: generation}
+			return viewDetailMsg{scope: scope, err: err, generation: generation}
 		}
-		return viewDetailMsg{view: &view, generation: generation}
+		return viewDetailMsg{scope: scope, view: &view, generation: generation}
 	}
 }
 
@@ -686,6 +680,7 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.generation++
+	m.pendingMutationReload = nil
 	m.items = nil
 	m.itemsLoading = true
 	m.itemsHasNext = false
@@ -779,9 +774,8 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 		m.itemsHasNext = false
 		if m.isTable() {
 			m.clampTableRow(true)
-			m.reconcileTableActionRead()
 		}
-		return m, nil
+		return m, m.finishMutationReload()
 	}
 	m.items = append(m.items, msg.page.Items...)
 	m.itemsHasNext = msg.page.HasNext
@@ -799,12 +793,20 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	m.itemsLoading = false
 	if m.isTable() {
 		m.clampTableRow(true)
-		m.reconcileTableActionRead()
 	} else {
 		m.clampBoardCursor()
 	}
 	m.reconcileFilteredMoveFocus()
-	return m, nil
+	return m, m.finishMutationReload()
+}
+
+func (m *Model) finishMutationReload() tea.Cmd {
+	scope := m.pendingMutationReload
+	m.pendingMutationReload = nil
+	if scope != nil && scope.matches(*m) {
+		return m.startItemsLoadWithSpinner()
+	}
+	return nil
 }
 
 func (m *Model) reconcileFilteredMoveFocus() {
@@ -911,7 +913,7 @@ func (m Model) updateLaneItems(msg laneItemsMsg) (tea.Model, tea.Cmd) {
 	m.itemsHasNext = false
 	m.itemsLoadingLanes = nil
 	m.clampBoardCursor()
-	return m, nil
+	return m, m.finishMutationReload()
 }
 
 func (m *Model) cancelItemsLoad() {
@@ -1055,23 +1057,37 @@ func (m *Model) rememberBoardFocus() {
 
 func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+	// Text payloads belong to the focused editor before printable shortcuts.
+	if (m.filtering || m.commentEditing) && msg.Text != "" && key != "ctrl+c" {
+		m.appendInputText(msg.Text)
+		return m, nil
+	}
 	// Global keys.
 	switch key {
 	case "q", "ctrl+c":
+		if key == "q" && (m.filtering || m.commentEditing) {
+			return m, nil
+		}
 		if m.cancel != nil {
 			m.cancel()
 		}
 		return m, tea.Quit
 	case "?":
-		if !m.filtering {
+		if !m.filtering && !m.commentEditing {
 			m.showHelp = !m.showHelp
 			return m, nil
 		}
 	case "A":
-		if !m.filtering && m.debug {
+		if !m.filtering && !m.commentEditing && m.debug {
 			m.showAPI = !m.showAPI
 			return m, nil
 		}
+	}
+	if key == "r" && m.tableAction != nil && m.tableAction.phase == "blocked" {
+		return m, m.startTableActionReadback()
+	}
+	if key == "r" && m.issueActionPending != nil && m.issueActionPending.blocked {
+		return m, m.startIssueReadback()
 	}
 	if key == "r" && m.mutationSession != nil && m.mutationSession.blocked {
 		return m, m.retryMutationReadback()
@@ -1093,7 +1109,8 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "backspace":
 			if len(m.filter) > 0 {
-				m.filter = m.filter[:len(m.filter)-1]
+				runes := []rune(m.filter)
+				m.filter = string(runes[:len(runes)-1])
 				m.cursor = 0
 			}
 			return m, nil
@@ -1102,13 +1119,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 			return m, nil
 		default:
-			// Append printable single characters.
-			if len(key) == 1 {
-				m.filter += key
-				m.cursor = 0
-				return m, nil
-			}
-			// Multi-char keys (up/down) still navigate while filtering.
+			// Arrow keys still navigate while filtering.
 			switch key {
 			case "up", "k":
 				m.moveCursor(-1)
@@ -1133,18 +1144,8 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					m.status = "Project item action cancelled"
 				}
 				return m, nil
-			case "saving", "reconciling":
-				return m, nil
-			case "blocked":
-				if key == "r" {
-					m.tableAction.phase = "reconciling"
-					return m, m.refresh()
-				}
-				if key == "esc" || key == "v" {
-					m.tableAction = nil
-				} else {
-					return m, nil
-				}
+			case "saving", "reconciling", "blocked":
+				// Navigation does not discard a submitted action's write gate.
 			}
 		}
 		if m.isTable() && m.tableMove != nil {
@@ -1167,6 +1168,10 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.detailVisible {
 			if m.mutationLoading {
+				if key == "esc" && m.issueActionPending != nil && m.issueActionPending.blocked {
+					m.detailVisible, m.detailLoading = false, false
+					m.detailRequestID++
+				}
 				return m, nil
 			}
 			if m.issueActionConfirm {
@@ -1183,6 +1188,9 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 					closed := m.issueActionClosing
+					m.nextIssueAction++
+					pending := &issueActionState{id: m.nextIssueAction, itemID: m.detailItemID, issueID: m.detail.Content.ID, scope: m.currentBoardReadScope(), closed: closed}
+					m.issueActionPending = pending
 					id, itemID, gen := m.detail.Content.ID, m.detailItemID, m.generation
 					m.mutationLoading = true
 					label := "Issue reopened."
@@ -1190,8 +1198,10 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 						label = "Issue closed."
 					}
 					return m, func() tea.Msg {
-						err := source.SetIssueClosed(context.Background(), id, closed)
-						return issueActionMsg{generation: gen, itemID: itemID, err: err, status: label, closed: &closed}
+						ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
+						defer cancel()
+						err := source.SetIssueClosed(ctx, id, closed)
+						return issueActionMsg{actionID: pending.id, generation: gen, itemID: itemID, err: err, status: label, closed: &closed}
 					}
 				default:
 					return m, nil
@@ -1254,6 +1264,10 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			case "o":
 				return m, m.openBrowserCmd()
 			case "c":
+				if m.tableAction != nil || m.mutationSession != nil || m.issueActionPending != nil {
+					m.status = "Finish or reconcile the pending project change before another issue write"
+					return m, nil
+				}
 				if m.isTable() {
 					return m, nil
 				}
@@ -1266,6 +1280,10 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "x":
+				if m.tableAction != nil || m.mutationSession != nil || m.issueActionPending != nil {
+					m.status = "Finish or reconcile the pending project change before another issue write"
+					return m, nil
+				}
 				if m.isTable() {
 					return m, nil
 				}
@@ -1389,7 +1407,10 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m, m.selectCurrent()
 	case "p":
-		m.cancelItemsLoad()
+		if m.screen == screenProjectPicker || (m.selectedOwner == nil && m.screen != screenBoard && m.screen != screenViewPicker) {
+			return m, nil
+		}
+		m.abandonReads()
 		if m.selectedOwner != nil && m.screen != screenProjectPicker {
 			m.screen = screenProjectPicker
 			m.cursor = 0
@@ -1425,6 +1446,28 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// appendInputText consumes text and paste payloads without interpreting shortcuts.
+func (m *Model) appendInputText(text string) {
+	if m.commentEditing && !m.mutationLoading {
+		m.commentDraft += text
+		return
+	}
+	if !m.filtering {
+		return
+	}
+	// Search is a single line; pasted line breaks act as word separators.
+	text = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(text)
+	m.filter += text
+	m.cursor = 0
+	if m.screen == screenBoard {
+		if m.isTable() {
+			m.clampTableRow(true)
+		} else {
+			m.clampBoardCursor()
+		}
+	}
+}
+
 func (m *Model) updateBoardSearchKey(key string) (tea.Model, tea.Cmd) {
 	clamp := func() {
 		if m.isTable() {
@@ -1450,11 +1493,7 @@ func (m *Model) updateBoardSearchKey(key string) (tea.Model, tea.Cmd) {
 	case "ctrl+u":
 		m.filter = ""
 		clamp()
-	default:
-		if len([]rune(key)) == 1 {
-			m.filter += key
-			clamp()
-		}
+
 	}
 	return *m, nil
 }
@@ -1475,6 +1514,9 @@ func (m *Model) moveCursor(delta int) {
 }
 
 func (m *Model) goBack() tea.Cmd {
+	if m.screen == screenBoard || m.screen == screenViewPicker || m.screen == screenProjectPicker {
+		m.abandonReads()
+	}
 	m.filter = ""
 	m.filtering = false
 	m.cursor = 0
@@ -1517,6 +1559,7 @@ func (m *Model) selectCurrent() tea.Cmd {
 			return nil
 		}
 		selected := owners[m.cursor]
+		m.abandonReads()
 		m.selectedOwner = &selected
 		m.selectedProject = nil
 		m.screen = screenProjectPicker
@@ -1539,6 +1582,7 @@ func (m *Model) selectCurrent() tea.Cmd {
 			return nil
 		}
 		selected := projects[m.cursor]
+		m.abandonReads()
 		m.selectedProject = &selected
 		if cached, ok := m.cachedViews(*m.selectedOwner, selected.Number); ok {
 			m.views = cached
@@ -1614,15 +1658,16 @@ func (m *Model) refresh() tea.Cmd {
 			owner := *m.selectedOwner
 			project := m.selectedProject.Number
 			generation := m.generation
+			scope := m.currentPickerReadScope()
 			ctx := m.ctx
 			source := m.source
 			return func() tea.Msg {
 				lister, ok := source.(ViewsSource)
 				if !ok {
-					return viewsMsg{err: fmt.Errorf("view listing is not supported by this client"), generation: generation}
+					return viewsMsg{scope: scope, err: fmt.Errorf("view listing is not supported by this client"), generation: generation}
 				}
 				views, err := lister.ListViews(ctx, owner, project)
-				return viewsMsg{views: views, err: err, generation: generation}
+				return viewsMsg{scope: scope, views: views, err: err, generation: generation}
 			}
 		}
 		m.loading = true
@@ -1935,6 +1980,12 @@ func (m Model) filterLine() string {
 }
 
 func (m Model) footerHints() string {
+	if m.issueActionPending != nil && !m.filtering {
+		if m.issueActionPending.blocked {
+			return "issue outcome unknown · r check state · esc close/back · q quit" + m.debugHint()
+		}
+		return "saving issue action... · q quit" + m.debugHint()
+	}
 	if m.isTable() && m.tableMove != nil {
 		return "j/k choose group · enter move · esc cancel" + m.debugHint()
 	}
@@ -1943,7 +1994,7 @@ func (m Model) footerHints() string {
 		case "confirm":
 			return "enter confirm · esc cancel" + m.debugHint()
 		case "saving", "reconciling":
-			return "saving project item action... · q quit" + m.debugHint()
+			return "saving project item action... · v views · esc back · q quit" + m.debugHint()
 		case "blocked":
 			return "r retry readback · v views · esc back · q quit" + m.debugHint()
 		}
@@ -2122,12 +2173,14 @@ func (m *Model) storeViews(owner github.Owner, projectNumber int, views []github
 }
 
 type viewsMsg struct {
+	scope      pickerReadScope
 	views      []github.ViewSummary
 	err        error
 	generation uint64
 }
 
 type viewDetailMsg struct {
+	scope      pickerReadScope
 	view       *github.View
 	err        error
 	generation uint64
@@ -2178,6 +2231,7 @@ type browserOpenMsg struct {
 }
 
 type issueActionMsg struct {
+	actionID   uint64
 	generation uint64
 	itemID     string
 	err        error

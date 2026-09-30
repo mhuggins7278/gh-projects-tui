@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
 
@@ -271,14 +272,11 @@ func truncateText(value string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	runes := []rune(value)
-	if len(runes) <= width {
-		return value
+	tail := ""
+	if width > 3 {
+		tail = "..."
 	}
-	if width <= 3 {
-		return string(runes[:width])
-	}
-	return string(runes[:width-3]) + "..."
+	return ansi.Truncate(value, width, tail)
 }
 
 func itemCountLabel(count int) string {

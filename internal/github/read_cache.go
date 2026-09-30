@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -73,45 +74,58 @@ func (c *readCache) DoWithContext(ctx context.Context, query string, variables m
 		return err
 	}
 	key := query + string(encoded)
-	c.mu.Lock()
-	if entry, ok := c.entries[key]; ok && time.Since(entry.at) < 30*time.Second {
-		c.lastHit = entry.at
-		c.mu.Unlock()
-		return json.Unmarshal(entry.data, response)
-	}
-	if flight, ok := c.flights[key]; ok {
-		c.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-flight.done:
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if flight.err != nil {
-			return flight.err
+		c.mu.Lock()
+		if entry, ok := c.entries[key]; ok && time.Since(entry.at) < 30*time.Second {
+			c.lastHit = entry.at
+			c.mu.Unlock()
+			return json.Unmarshal(entry.data, response)
 		}
-		return json.Unmarshal(flight.data, response)
-	}
-	flight := &readFlight{done: make(chan struct{})}
-	c.flights[key] = flight
-	generation := c.generation
-	c.mu.Unlock()
-	err = c.base.DoWithContext(ctx, query, variables, response)
-	var data []byte
-	if err == nil {
-		data, err = json.Marshal(response)
-	}
-	c.mu.Lock()
-	flight.data, flight.err = data, err
-	if generation == c.generation {
-		delete(c.flights, key)
-		if err == nil {
-			if len(c.entries) >= 128 {
-				c.entries = map[string]cachedRead{}
+		if flight, ok := c.flights[key]; ok {
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-flight.done:
 			}
-			c.entries[key] = cachedRead{data: data, at: time.Now()}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if flight.err != nil {
+				// A joined caller owns a different cancellation lifetime. It may
+				// become the next leader after the cancelled flight is removed.
+				if ctx.Err() == nil && (errors.Is(flight.err, context.Canceled) || errors.Is(flight.err, context.DeadlineExceeded)) {
+					continue
+				}
+				return flight.err
+			}
+			return json.Unmarshal(flight.data, response)
 		}
+		flight := &readFlight{done: make(chan struct{})}
+		c.flights[key] = flight
+		generation := c.generation
+		c.mu.Unlock()
+		err = c.base.DoWithContext(ctx, query, variables, response)
+		var data []byte
+		if err == nil {
+			data, err = json.Marshal(response)
+		}
+		c.mu.Lock()
+		flight.data, flight.err = data, err
+		if generation == c.generation {
+			delete(c.flights, key)
+			if err == nil {
+				if len(c.entries) >= 128 {
+					c.entries = map[string]cachedRead{}
+				}
+				c.entries[key] = cachedRead{data: data, at: time.Now()}
+			}
+		}
+		close(flight.done)
+		c.mu.Unlock()
+		return err
 	}
-	close(flight.done)
-	c.mu.Unlock()
-	return err
 }

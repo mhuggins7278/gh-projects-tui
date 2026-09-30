@@ -119,7 +119,7 @@ After pulling updates, rerun `go run` or rebuild your local binary.
 ## Current features
 
 - Owner, project, and saved-view pickers with filtering.
-- Progressive board loading, with parallel Status-lane loading where supported.
+- Progressive board loading through one paginated stream with selective fields.
 - Single-select and iteration grouping, including combined columns/swimlanes.
 - Saved visible fields, supported field sorting, and local card search.
 - Table rendering using saved fields, single-field grouping, row navigation, local search, and issue sub-issue progress. Writable tables can archive or remove project items, change groups, and reorder position-sorted rows.
@@ -130,13 +130,16 @@ After pulling updates, rerun `go run` or rebuild your local binary.
 ### Card moves and saves
 
 Moves appear immediately. Additional moves can be queued while GitHub saves them
-one at a time, and card navigation stays responsive. Successful saves do not
-reload the board. If a save fails, that move and subsequent queued moves are
-rolled back; earlier successful saves are preserved. Partially completed saves
-trigger item reconciliation.
+one at a time, and card navigation stays responsive. A definitive final success
+on the same unfiltered board keeps the session's saved state without a reload.
+Failed or partially completed writes are reconciled before dependent moves
+continue; unknown outcomes block further writes, and `r` checks the outcome
+without resubmitting the write.
 
-View changes and manual refresh wait until the save queue finishes. Use `r` to
-reload from GitHub when you want to pick up external changes.
+View changes and manual refresh can continue during saves. Submitted writes stay
+attached to their original project and view. If a save overlaps an item refresh,
+the refresh finishes and a fresh read follows it so stale pages cannot replace
+the saved state. Use `r` to pick up external changes.
 
 ## Keys
 
@@ -198,13 +201,14 @@ offer these issue actions.
   picker explanation. Unsupported grouping/sorting semantics are also blocked.
 - If a project has no compatible saved board, unsupported views stay in the
   picker with an explanation; the TUI never substitutes an unfiltered board.
-- Card mutations require a writable, fully loaded, unfiltered board with
+- Card mutations require a writable, fully loaded board with
   single-select or iteration grouping. Combined boards require supported fields
   on both axes; `H/L` moves only between columns in the current swimlane.
   Clear local search before moving cards.
 - Manual reordering requires project-position sorting and is disabled for
-  combined-axis boards. Moving cards between swimlanes and saved-filtered views
-  remain read-only.
+  combined-axis boards. Moving cards between swimlanes remains read-only.
+  Supported saved-filtered boards use unfiltered project state to resolve writes;
+  moves can affect hidden items and other views because position is project-wide.
 - Writes are serialized and re-resolved against the latest project order.
   Rapid unsent moves of the same card collapse to the final placement.
   If a timeout leaves a save's outcome unknown, dependent writes pause until
@@ -212,14 +216,15 @@ offer these issue actions.
   Switching views does not cancel a submitted write.
 - Board loads use one paginated stream with only grouping, sort, and card
   fields; recent views/metadata are cached briefly and `r` forces a refresh.
-  API cooldowns pace writes and pause with a visible countdown.
+  API cooldowns pace writes; `--debug` shows their countdown and request telemetry.
 - Table support is an early preview; full parity with GitHub's table UI is not
   implemented. Table actions require update access, a complete item load, and
   no local search. Group moves require one writable single-select or iteration
   grouping field; reordering requires project-position sorting. Removing a
   project-only draft deletes that draft, while removing an issue or PR leaves
   its repository content intact. Archiving retains an item for restoration on
-  GitHub. Unknown outcomes block further table item actions until reconciled.
+  GitHub. Unknown outcomes keep a write gate across navigation; `r` checks
+  the originating project's unfiltered active items before unlocking further writes.
 
 Owner, project, and view selections are not saved between runs. Use the explicit
 flags above when you want to open a specific board directly.

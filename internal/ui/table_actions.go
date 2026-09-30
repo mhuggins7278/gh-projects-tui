@@ -15,6 +15,8 @@ type tableItemActionSource interface {
 }
 
 type tableActionState struct {
+	scope  boardReadScope
+	readID uint64
 	itemID string
 	label  string
 	remove bool
@@ -141,7 +143,7 @@ func (m *Model) beginTableAction(remove bool) {
 	if item.Content != nil {
 		label = contentCardIdentity(item.Content) + ": " + item.Content.Title
 	}
-	m.tableAction = &tableActionState{itemID: item.ID, label: label, remove: remove, phase: "confirm"}
+	m.tableAction = &tableActionState{scope: m.currentBoardReadScope(), itemID: item.ID, label: label, remove: remove, phase: "confirm"}
 	verb := "archive"
 	if remove {
 		verb = "remove from this project"
@@ -154,6 +156,9 @@ func (m *Model) beginTableAction(remove bool) {
 }
 
 func (m Model) tableActionUnavailable() string {
+	if m.issueActionPending != nil {
+		return "Reconcile the pending issue action first"
+	}
 	if !m.isTable() || m.view.ProjectID == "" || m.selectedOwner == nil || m.selectedProject == nil {
 		return "A loaded table and project identity are required"
 	}
@@ -186,7 +191,7 @@ func (m *Model) confirmTableAction() tea.Cmd {
 	projectID := m.view.ProjectID
 	itemID := state.itemID
 	remove := state.remove
-	scope := m.currentBoardReadScope()
+	scope := state.scope
 	source := m.source.(tableItemActionSource)
 	m.status = "Saving project item action..."
 	return func() tea.Msg {
@@ -204,7 +209,7 @@ func (m *Model) confirmTableAction() tea.Cmd {
 
 func (m Model) updateTableAction(msg tableActionMsg) (tea.Model, tea.Cmd) {
 	state := m.tableAction
-	if state == nil || state.phase != "saving" || !msg.scope.matches(m) || state.itemID != msg.itemID || state.remove != msg.remove {
+	if state == nil || state.phase != "saving" || msg.scope != state.scope || state.itemID != msg.itemID || state.remove != msg.remove {
 		return m, nil
 	}
 	verb := "Archived"
@@ -219,12 +224,16 @@ func (m Model) updateTableAction(msg tableActionMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		state.phase = "reconciling"
 		m.status = "Outcome uncertain; checking active project items before any retry..."
+		return m, m.startTableActionReadback()
 	} else {
 		m.tableAction = nil
 		m.status = verb + ": " + state.label
 	}
 	// Select the next surviving row (or the previous one), even if the saved
 	// view's grouping or sort places it elsewhere after the next read.
+	if !state.scope.sameProject(m) || m.screen != screenBoard {
+		return m, nil
+	}
 	items := m.tableItems()
 	index := m.selectedTableRow(items)
 	if index >= 0 && items[index].ID == msg.itemID {
@@ -239,26 +248,67 @@ func (m Model) updateTableAction(msg tableActionMsg) (tea.Model, tea.Cmd) {
 	if invalidator, ok := m.source.(interface{ InvalidateReads() }); ok {
 		invalidator.InvalidateReads()
 	}
+	if m.itemsLoading {
+		scope := m.currentBoardReadScope()
+		m.pendingMutationReload = &scope
+		return m, nil
+	}
 	return m, m.startItemsLoadWithSpinner()
 }
 
-func (m *Model) reconcileTableActionRead() {
+type tableActionReadbackMsg struct {
+	scope  boardReadScope
+	readID uint64
+	items  []github.Item
+	err    error
+}
+
+func (m *Model) startTableActionReadback() tea.Cmd {
 	state := m.tableAction
-	if state == nil || state.phase != "reconciling" {
-		return
+	if state == nil || (state.phase != "blocked" && state.phase != "reconciling") {
+		return nil
 	}
-	if m.itemsErr != nil {
-		state.phase = "blocked"
-		m.status = "Action outcome unknown; press r to retry readback before another item action"
-		return
+	state.phase = "reconciling"
+	state.readID++
+	scope, readID, source := state.scope, state.readID, m.source
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
+		defer cancel()
+		loader, ok := source.(ItemsSource)
+		if !ok {
+			return tableActionReadbackMsg{scope: scope, readID: readID, err: fmt.Errorf("project item readback unavailable")}
+		}
+		items, err := readCanonicalProjectItems(ctx, loader, scope.owner, scope.projectNumber)
+		return tableActionReadbackMsg{scope: scope, readID: readID, items: items, err: err}
 	}
-	for _, item := range m.items {
+}
+func (m Model) updateTableActionReadback(msg tableActionReadbackMsg) (tea.Model, tea.Cmd) {
+	state := m.tableAction
+	if state == nil || state.phase != "reconciling" || state.scope != msg.scope || state.readID != msg.readID {
+		return m, nil
+	}
+	present := false
+	for _, item := range msg.items {
 		if item.ID == state.itemID {
-			state.phase = "blocked"
-			m.status = "Action outcome unknown; item still appears in this view. Check GitHub before retrying."
-			return
+			present = true
+			break
 		}
 	}
+	if msg.err != nil || present {
+		state.phase = "blocked"
+		m.status = "Project item action outcome unknown; press r to check again. Further writes remain blocked."
+		return m, nil
+	}
 	m.tableAction = nil
-	m.status = "Item no longer appears in this view; verify the action in GitHub if needed."
+	delete(m.detailCache, state.itemID)
+	m.status = "Item no longer appears among the project's active items; action reconciled."
+	if state.scope.sameProject(m) && m.screen == screenBoard {
+		if m.itemsLoading {
+			scope := m.currentBoardReadScope()
+			m.pendingMutationReload = &scope
+			return m, nil
+		}
+		return m, m.startItemsLoadWithSpinner()
+	}
+	return m, nil
 }

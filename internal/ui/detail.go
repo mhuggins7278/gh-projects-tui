@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/glamour"
@@ -10,6 +11,39 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
+
+// Keep one rendered document per model. Scrolling only slices these lines;
+// new detail data, panel width, and the field toggle select a new document.
+type detailLineCache struct {
+	mu      sync.Mutex
+	detail  *github.ItemDetail
+	width   int
+	showAll bool
+	state   string
+	lines   []string
+}
+
+func (m Model) renderedDetailLines() []string {
+	if m.detail == nil {
+		return nil
+	}
+	cache := m.detailRenderCache
+	if cache == nil {
+		return detailLines(*m.detail, m.detailPanelWidth(), m.detailShowAll)
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	state := ""
+	if m.detail.Content != nil {
+		state = m.detail.Content.State
+	}
+	width := m.detailPanelWidth()
+	if cache.detail != m.detail || cache.width != width || cache.showAll != m.detailShowAll || cache.state != state {
+		cache.lines = detailLines(*m.detail, width, m.detailShowAll)
+		cache.detail, cache.width, cache.showAll, cache.state = m.detail, width, m.detailShowAll, state
+	}
+	return cache.lines
+}
 
 func (m Model) renderDetailPanel() string {
 	frame := detailFrameStyle.Width(m.detailPanelWidth())
@@ -41,7 +75,7 @@ func (m Model) renderDetailPanel() string {
 		return frame.Render(sectionStyle.Render(fmt.Sprintf("%s issue #%d?", action, m.detail.Content.Number)) + "\n" + truncateText(m.detail.Content.Title, m.detailPanelWidth()-4) + "\n\n" + mutedStyle.Render("enter confirm · esc cancel"))
 	}
 
-	lines := detailLines(*m.detail, m.detailPanelWidth(), m.detailShowAll)
+	lines := m.renderedDetailLines()
 	viewport := m.detailViewportLines()
 	start := 0
 	var end int
@@ -131,7 +165,7 @@ func (m Model) detailMaxOffset() int {
 	if m.detail == nil {
 		return 0
 	}
-	lineCount := len(detailLines(*m.detail, m.detailPanelWidth(), m.detailShowAll))
+	lineCount := len(m.renderedDetailLines())
 	viewport := m.detailViewportLines()
 	if lineCount <= viewport {
 		return 0
@@ -432,30 +466,11 @@ func wrapText(value string, width int) []string {
 	if width < 1 {
 		return []string{value}
 	}
-	words := strings.Fields(value)
-	lines := make([]string, 0, len(words))
-	line := ""
-	for _, word := range words {
-		for len([]rune(word)) > width {
-			part := string([]rune(word)[:width])
-			if line != "" {
-				lines = append(lines, line)
-				line = ""
-			}
-			lines = append(lines, part)
-			word = string([]rune(word)[width:])
-		}
-		if line == "" {
-			line = word
-		} else if len([]rune(line))+1+len([]rune(word)) <= width {
-			line += " " + word
-		} else {
-			lines = append(lines, line)
-			line = word
-		}
-	}
-	if line != "" {
-		lines = append(lines, line)
+	lines := strings.Split(ansi.Wrap(value, width, ""), "\n")
+	// A grapheme wider than the whole column cannot fit; clip it without
+	// splitting its combining marks or emitting an overflowing cell.
+	for i := range lines {
+		lines[i] = ansi.Truncate(lines[i], width, "")
 	}
 	return lines
 }
