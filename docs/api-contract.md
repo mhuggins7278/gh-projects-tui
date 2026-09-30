@@ -172,7 +172,7 @@ Proposed first read-only timeline, for review after field-mapping semantics are 
 - Keep items without usable endpoints in an explicit undated count/list rather than assigning invented dates. Report dates outside the visible range through clipped-bar markers and counts.
 - Defer iteration-to-date placement, markers, slicing, custom zoom restoration, and drag-to-reschedule. Iteration `startDate`/`duration` presence alone does not prove roadmap-specific placement rules.
 
-This is a proposal, not implemented support. Roadmaps remain explicitly unsupported and read-only until the endpoint mapping and representative nonempty date/iteration placements can be verified against GitHub.
+The pure DATE renderer in `internal/ui/date_timeline.go` is implemented with explicit synthetic endpoints (#27). Its three-month buckets, clipping, exact selected endpoint readout, ordered row window, and narrow date-list fallback have fixture coverage. Inclusive bars and one-endpoint points are provisional conventions, not verified GitHub semantics. It performs no API calls and is unreachable from saved view selection. Roadmaps remain explicitly unsupported and read-only until endpoint mapping and representative nonempty placements can be verified against GitHub.
 
 The [reviewable timeline proposal](roadmap-proposal.md) expands the compatibility gates, date/null/error cases, ordering rules, narrow-terminal fallback, and verification checklist. The picker now explains the missing endpoint/display configuration and directs users to open the view in GitHub.
 
@@ -208,7 +208,7 @@ The REST GET probes used `Accept: application/vnd.github+json` and `X-GitHub-Api
 
 `TestRoadmapUnavailableEndpointMappingsStayBlocked` covers absent definitions, a stale visible DATE definition, ambiguous endpoint-like names, two plausible DATE fields, and unsupported TEXT definitions. All remain in the picker with no item-loading command even with write permission. These are safe rejection fixtures, not a speculative mapping resolver: stale/ambiguous mapping resolution cannot be implemented or verified until an actual mapping source exists.
 
-Revisit this decision when a supported view read API exposes selected endpoint IDs. Require an existing saved-view comparison, unique field-ID resolution, and explicit missing/stale/ambiguous/type validation before relaxing the gate. #26/#28 remain blocked for enablement; #27 can still develop a pure renderer using synthetic inputs. A manually configured local timeline needs a separate product decision and must not masquerade as a saved roadmap.
+Revisit this decision when a supported view read API exposes selected endpoint IDs. Require an existing saved-view comparison, unique field-ID resolution, and explicit missing/stale/ambiguous/type validation before relaxing the gate. #26/#28 remain blocked for enablement; #27 implements only a pure renderer using synthetic inputs. A manually configured local timeline needs a separate product decision and must not masquerade as a saved roadmap.
 
 The current compatibility gate accepts the field-sort and iteration projections in the table despite their outstanding web-parity checks. Do not interpret fixture coverage or schema availability as a confirmed match to GitHub's display rules.
 

@@ -1,8 +1,9 @@
 # Read-only terminal roadmap proposal (#22)
 
-**Status: proposed, not implemented.** Saved roadmaps still stop in the view
-picker. This document proposes a deliberately limited timeline; it does not
-authorize enabling it or creating project data to obtain test samples.
+**Status: fixture-backed renderer implemented (#27); saved-roadmap integration
+blocked.** Saved roadmaps still stop in the view picker. The pure renderer uses
+explicit synthetic endpoints and provisional placement conventions. It does
+not authorize enabling live roadmaps or creating project data to obtain samples.
 
 ## Decision and evidence
 
@@ -43,8 +44,9 @@ for their saved values or date-boundary behavior.
 - Clip bars at viewport boundaries with directional indicators. Count items
   wholly outside the range separately; allow their selection without pretending
   they are undated or absent from the saved filter.
-- Show items with both endpoints unset in an undated section. Unavailable fields
-  or inaccessible content get an unavailable section, not an undated label.
+- Label rows with both endpoints unset as undated. Label unavailable fields or
+  inaccessible content as unavailable. Preserve the supplied order rather than
+  regrouping these rows and changing the saved sort.
 - Preserve verified saved row sorting, with project position as a stable tie
   breaker. With no explicit saved sort, preserve project position; do not
   silently replace it with start-date sorting.
@@ -54,7 +56,48 @@ for their saved values or date-boundary behavior.
   labeled date-list fallback rather than a misleading compressed chart.
 - Label zoom/range as local defaults when their saved state cannot be restored.
   Do not claim exact web parity. Read-only navigation, detail, refresh, and open
-  in GitHub are available; rescheduling/reordering controls are not.
+  in GitHub belong to the later integration; the pure renderer has no controls.
+
+## Implemented synthetic renderer (#27)
+
+`internal/ui/date_timeline.go` accepts ordered item rows, explicit start/target
+values with separate availability flags, a starting month, terminal dimensions,
+selection by item ID, and a loading flag. It does not inspect project fields,
+infer endpoint roles, read GitHub, or connect to `Model` or the view picker.
+Inclusive bars and one-endpoint points remain **provisional**, subject to #26.
+
+The renderer displays three calendar months with adaptive day buckets and a
+title gutter. Selection shows the original start/target values separately,
+including `unset` and `unavailable`; the coarse axis is not an exact-date readout.
+Clipped bars use `<`/`>` indicators. Rows wholly before or after the viewport
+remain in the supplied order, contribute to the outside count, and can be
+selected. Undated, unavailable, and invalid/reversed rows have distinct labels.
+
+Widths below 60 columns use a labeled date list. Every line fits the supplied
+width; long rows are truncated, with selected endpoint values shown below them.
+Short terminals prioritize the selected row, then endpoint lines, then headers.
+At extreme dimensions, text and endpoint details can also be truncated. Visible
+rows are bounded by height, while loaded counts describe all supplied rows.
+Paging can append rows without losing selection by ID. Classification scans the
+loaded rows; only the visible window is formatted, without allocating a date-span
+array for the full input.
+
+Fixtures cover leap days, month/year boundaries, year-one dates, partial values,
+unset/unavailable/invalid/reversed values, both clipping directions, wholly
+outside dates, mixed content kinds, input order, Unicode/control characters,
+zero/narrow/wide/short terminals, and 10,000 items. All data is invented; these
+tests do not establish GitHub web placement or saved sort parity.
+
+```sh
+go test ./internal/ui -run '^TestTimeline'
+GH_PROJECTS_TUI_TIMELINE_PREVIEW=1 go test ./internal/ui -run '^TestTimelineSyntheticPreview$' -count=1 -v
+go test ./internal/ui -run '^$' -bench '^BenchmarkDateTimelineLargeFixture$' -benchmem
+```
+
+The [recorded terminal preview](date-timeline-preview.txt) shows wide and narrow
+synthetic layouts. #28 still requires #25/#26 before connecting this component
+to live saved views. Iterations, grouping, markers, slicing, field sums, and
+mutation controls remain outside this component.
 
 ## Compatibility gates for a future implementation
 
@@ -95,7 +138,7 @@ configuration source requires a separate, explicit review.
 | --- | --- | --- |
 | [#25](https://github.com/mhuggins7278/gh-projects-tui/issues/25) | Resolve saved endpoint mapping or record a no-go decision | First enablement gate |
 | [#26](https://github.com/mhuggins7278/gh-projects-tui/issues/26) | Verify populated date placement, saved filtering, and row order | Mapping from #25 |
-| [#27](https://github.com/mhuggins7278/gh-projects-tui/issues/27) | Bounded renderer, clipping, date-list fallback, and fixtures | Synthetic work can proceed; live use requires #25/#26 |
+| [#27](https://github.com/mhuggins7278/gh-projects-tui/issues/27) | Bounded renderer, clipping, date-list fallback, and fixtures implemented | Fixture-only; live use requires #25/#26 |
 | [#28](https://github.com/mhuggins7278/gh-projects-tui/issues/28) | Safe read-only integration, navigation, and responsiveness | #25, #26, #27 |
 | [#30](https://github.com/mhuggins7278/gh-projects-tui/issues/30) | Iteration endpoints (deferred) | Initial verified timeline; independent of grouping |
 | [#29](https://github.com/mhuggins7278/gh-projects-tui/issues/29) | Single-select grouping (deferred) | Initial verified timeline; independent of iteration endpoints |

@@ -1,0 +1,29 @@
+Synthetic terminal preview for issue #27. No live GitHub data.
+Bars and points are provisional; saved roadmaps remain blocked.
+Reproduce: GH_PROJECTS_TUI_TIMELINE_PREVIEW=1 go test ./internal/ui -run '^TestTimelineSyntheticPreview$' -count=1 -v
+
+120-column synthetic preview:
+Local 3 months · proposed bars/points · 2024-01–2024-03
+Loaded 7 · outside 1 · undated 1 · unavailable 1 · invalid 1
+  Item                                     | Jan 2024                 |Feb 2024                |Mar 2024
+  Issue: crosses left boundary             | <━━━━━━━━━━━━●···········|························|························
+  PR: February leap-day point              | ·························|·······················●|························
+  Draft: spans whole viewport              | <━━━━━━━━━━━━━━━━━━━━━━━━|━━━━━━━━━━━━━━━━━━━━━━━━|━━━━━━━━━━━━━━━━━━━━━━━>
+> Outside viewport                         | After range
+  Undated work                             | Undated
+  Unavailable field                        | Unavailable
+  Invalid/reversed endpoints               | Invalid dates
+Start: 2025-01-01
+Target: 2025-03-01
+48-column synthetic preview:
+Date list (narrow terminal) · proposed placement
+Loaded 7 · outside 1 · undated 1 · unavailable …
+  Issue: crosses left boundary | Dated | 2023-1…
+  PR: February leap-day point | Dated | unset →…
+  Draft: spans whole viewport | Dated | 2023-12…
+> Outside viewport | After range | 2025-01-01 →…
+  Undated work | Undated | unset → unset
+  Unavailable field | Unavailable | unavailable…
+  Invalid/reversed endpoints | Invalid dates | …
+Start: 2025-01-01
+Target: 2025-03-01
