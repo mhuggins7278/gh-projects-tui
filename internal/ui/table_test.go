@@ -313,3 +313,65 @@ func TestTableWidthsGiveTitleRoomWithManyFields(t *testing.T) {
 		t.Fatalf("row occupies %d cells in a %d-cell terminal: %s", got, terminalWidth, plain)
 	}
 }
+
+func TestTableTitleWidthRespectsSavedOrderAndUnicode(t *testing.T) {
+	fields := []github.Field{
+		{Name: "Assignees"},
+		{Name: "Status", DataType: "SINGLE_SELECT"},
+		{Name: "Priority", DataType: "SINGLE_SELECT"},
+		{Name: "Iteration", DataType: "ITERATION"},
+		{Name: "Due date", DataType: "DATE"},
+		{Name: "Repository"},
+		{Name: "子任务进度"},
+	}
+	item := github.Item{Content: &github.Content{
+		Kind: "Issue", Number: 1234,
+		Title: "修复计划 👩🏽‍💻 e\u0301 — keep Unicode titles readable when several fields are visible",
+	}}
+	for _, titleIndex := range []int{0, 3, 7} {
+		columns := append([]github.Field(nil), fields[:titleIndex]...)
+		columns = append(columns, github.Field{Name: "Title", DataType: "TITLE"})
+		columns = append(columns, fields[titleIndex:]...)
+		for _, width := range []int{40, 80, 120, 240} {
+			t.Run(fmt.Sprintf("title_%d_width_%d", titleIndex, width), func(t *testing.T) {
+				view := &github.View{Fields: columns}
+				displayed := tableColumns(view)
+				for index, column := range displayed {
+					if column.Name != columns[index].Name || column.DataType != columns[index].DataType {
+						t.Fatalf("saved column order changed at %d", index)
+					}
+				}
+				widths := tableColumnWidths(displayed, width)
+				if width >= 120 && widths[titleIndex] < 32 {
+					t.Fatalf("title did not retain readable space: %v", widths)
+				}
+				for index, columnWidth := range widths {
+					if index != titleIndex && widths[titleIndex] <= columnWidth {
+						t.Fatalf("title not prioritized over column %d: %v", index, widths)
+					}
+					if width >= 120 && columnWidth < 8 {
+						t.Fatalf("column %d became unreadable: %v", index, widths)
+					}
+				}
+				for _, row := range []string{
+					tableHeaderRow(displayed, widths), tableRule(widths),
+					tableDataRow(displayed, item, widths, false),
+					tableDataRow(displayed, item, widths, true),
+				} {
+					if got := ansi.StringWidth(row); got > width {
+						t.Fatalf("row occupies %d cells in %d cells: %s", got, width, ansi.Strip(row))
+					}
+				}
+				if width >= 80 {
+					row := ansi.Strip(tableDataRow(displayed, item, widths, true))
+					if !strings.Contains(row, "修复计划") || !strings.Contains(row, "#1234") {
+						t.Fatalf("Unicode title or issue number lost: %s", row)
+					}
+					if width >= 120 && (!strings.Contains(row, "👩🏽‍💻") || !strings.Contains(row, "e\u0301")) {
+						t.Fatalf("title split an emoji or combining character: %s", row)
+					}
+				}
+			})
+		}
+	}
+}

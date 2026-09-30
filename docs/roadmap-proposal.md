@@ -20,7 +20,9 @@ silent workaround for missing saved-view metadata.
 
 The [#25 endpoint-source review](api-contract.md#saved-endpoint-mapping-decision-25)
 also checked the documented REST Projects APIs and records a no-go decision as
-of 2026-09-29. Saved-view enablement remains blocked; synthetic renderer work is
+of 2026-09-29, reconfirmed by schema and REST documentation checks on 2026-09-30.
+That investigation is complete, while the usable endpoint source remains
+unavailable. Saved-view enablement remains blocked; synthetic renderer work is
 independent of that decision.
 
 See [the investigation and live probe results](api-contract.md#roadmap-layout-investigation).
@@ -136,12 +138,14 @@ configuration source requires a separate, explicit review.
 
 | Issue | Scope | Dependencies |
 | --- | --- | --- |
-| [#25](https://github.com/mhuggins7278/gh-projects-tui/issues/25) | Resolve saved endpoint mapping or record a no-go decision | First enablement gate |
-| [#26](https://github.com/mhuggins7278/gh-projects-tui/issues/26) | Verify populated date placement, saved filtering, and row order | Mapping from #25 |
+| [#25](https://github.com/mhuggins7278/gh-projects-tui/issues/25) | Investigation complete: no-go decision recorded | A usable mapping source remains unavailable |
+| [#26](https://github.com/mhuggins7278/gh-projects-tui/issues/26) | Verify populated date placement, saved filtering, and row order | Blocked: usable mapping source and representative populated web/API comparisons |
 | [#27](https://github.com/mhuggins7278/gh-projects-tui/issues/27) | Bounded renderer, clipping, date-list fallback, and fixtures implemented | Fixture-only; live use requires #25/#26 |
-| [#28](https://github.com/mhuggins7278/gh-projects-tui/issues/28) | Safe read-only integration, navigation, and responsiveness | #25, #26, #27 |
-| [#30](https://github.com/mhuggins7278/gh-projects-tui/issues/30) | Iteration endpoints (deferred) | Initial verified timeline; independent of grouping |
-| [#29](https://github.com/mhuggins7278/gh-projects-tui/issues/29) | Single-select grouping (deferred) | Initial verified timeline; independent of iteration endpoints |
+| [#28](https://github.com/mhuggins7278/gh-projects-tui/issues/28) | Safe read-only integration, navigation, and responsiveness | Blocked: usable mapping source and #26; renderer #27 is complete |
+| [#30](https://github.com/mhuggins7278/gh-projects-tui/issues/30) | Iteration endpoints (deferred) | Blocked: initial verified timeline and iteration-placement comparisons; independent of grouping |
+| [#29](https://github.com/mhuggins7278/gh-projects-tui/issues/29) | Single-select grouping (deferred) | Blocked: initial verified timeline and grouping/order comparisons; independent of iteration endpoints |
 
-Investigation review/landing remains tracked by #22. Creating these follow-ups
-does not enable saved roadmap rendering or relax any compatibility gate.
+Investigation and proposal work in #22 is complete. Closing #22/#25 records the
+finished investigation and its no-go decision, without enabling saved roadmap
+rendering or relaxing any compatibility gate. #26/#28/#29/#30 remain open for the
+unfulfilled feature prerequisites above.

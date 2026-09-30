@@ -171,7 +171,8 @@ offer these issue actions.
 
 ## Pre-alpha limitations
 
-- Roadmap views are not supported.
+- Roadmap views remain blocked on saved endpoint mapping and verified placement.
+  See [the roadmap investigation and remaining gates](docs/roadmap-proposal.md).
 - Saved filters support `status:Todo`, `status:"In Progress"`, `assignee:@me`,
   `assignee:USERNAME`, `label:bug`, `repo:OWNER/REPO`, `is:open`, `is:closed`,
   `is:issue`, `is:pr`, `is:draft`, `is:merged`, `type:Epic` or
@@ -194,7 +195,7 @@ offer these issue actions.
   Double-quote Status or label names with spaces, for example `status:"In Progress"`.
   Examples: `label:bug,support assignee:@me` and `status:"Todo","Done" is:issue`.
   See [the filter grammar and evidence matrix](docs/api-contract.md#saved-filter-grammar-and-evidence)
-  for exact boundaries. Cross-field `OR`, unverified custom field types,
+  for exact boundaries. Cross-field `OR`, unquoted grouping parentheses, unverified custom field types,
   next-iteration offsets, reviewer `@me`/team references, `reason:reopened`,
   milestone filters, unverified text-field/wildcard forms, escaped/single quotes,
   and other unverified forms remain blocked with a
@@ -258,8 +259,12 @@ disposable sandbox project documented in `docs/api-contract.md`.
 
 The saved-filter contract test is also read-only. It requires an existing project
 with populated closure dates and parent-linked child issues, checks membership
-against an unfiltered metadata baseline, and forces two-item pages to exercise
-cursor pagination:
+against a complete unfiltered metadata baseline, and forces two-item pages to
+exercise cursor pagination. It also checks created/updated date forms and Status
+OR, repeated-qualifier AND, negation, and cross-field AND when two populated
+Status values exist. Missing optional samples are reported. The
+[latest filter audit](docs/filter-audit-2026-09-30.md) records the results and the
+distinction between project-item and issue update timestamps:
 
 ```sh
 GH_PROJECTS_TUI_LIVE_FILTERS=1 \

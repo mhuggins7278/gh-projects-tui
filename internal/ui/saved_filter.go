@@ -77,7 +77,7 @@ func validateSavedFilterTerm(term string, fields []github.Field) error {
 		if !negative && !strings.EqualFold(term, "and") && !strings.EqualFold(term, "or") && simpleFilterValue(term, false) {
 			return nil // General search is evaluated by GitHub across titles/text fields.
 		}
-		return unverifiedFilterTerm(term, "use a verified qualifier or an unquoted text search word; Boolean operators are unsupported")
+		return unverifiedFilterTerm(term, "use a verified qualifier or an unquoted text search word; Boolean operators and grouping parentheses are unsupported")
 	}
 	if qualifier == "" || value == "" {
 		return fmt.Errorf("filter term %q needs a qualifier and value (for example, status:\"Todo\")", term)
@@ -381,7 +381,7 @@ func simpleFilterValue(value string, quoted bool) bool {
 		value = value[1 : len(value)-1]
 		return strings.TrimSpace(value) != "" && !strings.ContainsAny(value, "\\\",")
 	}
-	if value == "" || strings.ContainsAny(value, "\"'\\,:*<>@") || strings.Contains(value, "..") {
+	if value == "" || strings.ContainsAny(value, "\"'\\,:*<>@()") || strings.Contains(value, "..") {
 		return false
 	}
 	for _, char := range value {

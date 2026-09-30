@@ -1,6 +1,6 @@
 # API Contract Gate
 
-Status: partial. This record covers the GitHub.com schema and read probes observed on 2026-09-17 and 2026-09-26, mutation schema introspection observed on 2026-09-21, and saved-view schema introspection observed on 2026-09-22.
+Status: partial. This record covers the GitHub.com schema and read probes observed on 2026-09-17 and 2026-09-26, mutation schema introspection observed on 2026-09-21, saved-view schema introspection observed on 2026-09-22, and the dated follow-up checks below through 2026-09-30.
 
 ## Environment
 
@@ -68,6 +68,8 @@ GitHub's [Projects filtering documentation](https://docs.github.com/en/issues/pl
 
 Read-only probes on 2026-09-26 used the disposable user-owned sandbox (#2) and public `github` organization projects on `github.com`; additional parent, closure-date, reviewer, reason, wildcard, and quoting probes were added on 2026-09-29. The sandbox had 17 issue items on one page at probe time. No item titles, IDs, or body data were retained in this document. The counts below are snapshots, not promised counts for future runs. Contrast queries with the unfiltered baseline and the documented item composition before treating a zero-result shape as semantically verified.
 
+The [2026-09-30 audit](filter-audit-2026-09-30.md) rechecked a complete 26-item sandbox baseline with 29 representative expression cases and forced two-item pages. All membership comparisons passed. For `updated:`, all four sampled date-group result sets matched `ProjectV2Item.updatedAt`; two differed from `Issue.updatedAt`, with no baseline changes during the comparison. This supports the project-item timestamp as the source on this snapshot. Earlier coincident issue-timestamp counts do not establish that source, and this is not a universal host/item-kind claim. Production continues to forward filters unchanged to GitHub.
+
 | Form | Accepted syntax and example | Probe evidence / boundary |
 | --- | --- | --- |
 | Status | `status:Todo`, `status:"In Progress"`, `status:"Todo","Done"`, leading `-` | `status:Todo` → 1, `status:"Done"` → 16, both values → 17, `-status:"Todo"` → 16, negated both → 0. No space after a comma: `status:"Todo", "Done"` returned 0. |
@@ -100,7 +102,7 @@ value         := unquoted-value | '"' quoted-value '"'
 qualifier     := verified lower-case built-in or unique hyphenated project-field name
 ```
 
-- A text-word is unquoted and unnegated. Standalone `AND`/`OR` words are never general search terms. Whitespace expresses AND; no explicit Boolean operators, parentheses for Boolean grouping, or cross-field OR are accepted. Duplicate/repeated terms are allowed, with GitHub determining membership.
+- A text-word is unquoted and unnegated. Standalone `AND`/`OR` words are never general search terms. Whitespace expresses AND; no explicit Boolean operators, unquoted grouping parentheses, or cross-field OR are accepted. Literal parentheses in double-quoted values remain accepted. Duplicate/repeated terms are allowed, with GitHub determining membership.
 - Multiple values are enabled only for single-select, assignee, reviewers, label, number, and verified reason values. There is no whitespace after a comma. Single-select and label values are nonempty words or double-quoted names; quotes group spaces. Commas inside quotes are enabled only for exact titles, not label/single-select names. Backslash escapes and single quotes remain gated.
 - Assignees are `@me` or unquoted usernames; reviewers are unquoted usernames only. Repo is one unquoted `OWNER/REPO`; `is:` is one verified keyword; `type:` is one word or double-quoted issue type. Parent is one `OWNER/REPO#NUMBER` reference with a positive issue number, optionally double-quoted. Close reason is `completed` (optionally quoted) or quoted `"not planned"`.
 - Title accepts an exact word, a double-quoted exact title, or leading/trailing `*` around one word. Label accepts the same edge-wildcard word shapes. Internal/repeated stars and other wildcard forms remain gated.
@@ -142,7 +144,7 @@ These boundaries are deliberate: API acceptance with zero results is not evidenc
 
 Read-only GitHub.com probes used an existing accessible organization project with one saved roadmap. No project data was changed. The observations are sanitized: project and field names, item IDs/titles, field values, and exact dates are omitted.
 
-Schema-only probes were repeated on 2026-09-29 and confirmed the configuration still exposes only `visibleFields`. The prior organization-project observations below were not repeated: the current token's project lookup was blocked by organization SAML enforcement. Reauthorize the token for that organization before rerunning project-level probes; this failure is not evidence of changed roadmap semantics.
+Schema-only probes were repeated on 2026-09-29 and 2026-09-30 and confirmed the configuration still exposes only `visibleFields`. The prior organization-project observations below were not repeated: the token's project lookup on 2026-09-29 was blocked by organization SAML enforcement. Reauthorize the token for that organization before rerunning project-level probes; this failure is not evidence of changed roadmap semantics. The 2026-09-30 check used existing authentication and retained only schema field names; it did not repeat project-level placement probes.
 
 An accessible public organization roadmap was subsequently probed on 2026-09-29 using `TestLiveRoadmapReadContract`. It returned 18 project field definitions (two DATE, no ITERATION), empty configured visible fields/grouping/vertical grouping/sorting, and an empty filter. Its unfiltered `POSITION ASC` baseline had 11 unique items on one page, with zero populated date/iteration values. The live test passed, independently confirming the current read path and metadata boundary without SAML access. Neither sampled roadmap establishes nonempty placement behavior. No project data was changed or copied into fixtures.
 
@@ -194,7 +196,7 @@ An empty/populated date count alone does not verify start/target selection, incl
 
 ### Saved endpoint mapping decision (#25)
 
-**Decision as of 2026-09-29: no-go for enabling saved roadmaps.** No supported endpoint-mapping source was found in the inspected GitHub.com GraphQL schema or the documented REST Projects APIs. This is a dated API availability finding, not a claim that an alternate source can never exist.
+**Decision as of 2026-09-29, reconfirmed on 2026-09-30: no-go for enabling saved roadmaps.** No supported endpoint-mapping source was found in the inspected GitHub.com GraphQL schema or the documented REST Projects APIs. The recheck repeated view/configuration introspection and reviewed the REST view documentation; project/field GET observations in the table remain the 2026-09-29 samples. This is a dated API availability finding, not a claim that an alternate source can never exist.
 
 | Supported surface reviewed | Evidence | Endpoint-mapping result |
 | --- | --- | --- |
@@ -209,6 +211,8 @@ The REST GET probes used `Accept: application/vnd.github+json` and `X-GitHub-Api
 `TestRoadmapUnavailableEndpointMappingsStayBlocked` covers absent definitions, a stale visible DATE definition, ambiguous endpoint-like names, two plausible DATE fields, and unsupported TEXT definitions. All remain in the picker with no item-loading command even with write permission. These are safe rejection fixtures, not a speculative mapping resolver: stale/ambiguous mapping resolution cannot be implemented or verified until an actual mapping source exists.
 
 Revisit this decision when a supported view read API exposes selected endpoint IDs. Require an existing saved-view comparison, unique field-ID resolution, and explicit missing/stale/ambiguous/type validation before relaxing the gate. #26/#28 remain blocked for enablement; #27 implements only a pure renderer using synthetic inputs. A manually configured local timeline needs a separate product decision and must not masquerade as a saved roadmap.
+
+The investigation in #22 and the go/no-go decision in #25 are complete. Completing those issues records the API limitation; it does not satisfy the missing-source prerequisite for #26 (date/filter/order verification) or #28 (live read-only integration). #29 (grouping) and #30 (iteration endpoints) additionally require the initial verified timeline. These four feature issues stay open until their prerequisites can be established.
 
 The current compatibility gate accepts the field-sort and iteration projections in the table despite their outstanding web-parity checks. Do not interpret fixture coverage or schema availability as a confirmed match to GitHub's display rules.
 

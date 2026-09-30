@@ -102,6 +102,25 @@ func TestSavedFilterRejectsUnverifiedOrAmbiguousProjectFields(t *testing.T) {
 	}
 }
 
+func TestSavedFilterRejectsUnquotedGroupingSyntax(t *testing.T) {
+	fields := []github.Field{{Name: "Phase", DataType: "SINGLE_SELECT"}}
+	for _, filter := range []string{
+		"(", ")", "(bug)", "bug (fix)", "(is:open)",
+		"status:Todo)", "status:(Todo)", "phase:Todo)",
+		"label:bug)", "title:(fix)", "title:*(fix)*",
+	} {
+		if err := validateSavedFilterWithFields(filter, fields); err == nil {
+			t.Errorf("unverified grouping syntax accepted: %q", filter)
+		}
+	}
+	// Literal punctuation in quoted values is not Boolean grouping.
+	for _, filter := range []string{`status:"Todo (later)"`, `phase:"Phase (next)"`, `title:"Fix (bug)"`, `label:"bug (urgent)"`} {
+		if err := validateSavedFilterWithFields(filter, fields); err != nil {
+			t.Errorf("quoted literal rejected: %q: %v", filter, err)
+		}
+	}
+}
+
 func FuzzSavedFilterParser(f *testing.F) {
 	for _, filter := range []string{
 		"", `reason:completed,"not planned"`, `title:"A title, with commas"`,
