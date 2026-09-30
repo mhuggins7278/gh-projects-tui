@@ -103,6 +103,11 @@ You can also pass only `--owner` to start at that owner's project picker.
 telemetry in the header and enable the `A` inspector overlay, including measured
 GraphQL points by operation.
 
+Explicit local roadmap date-field mappings can be supplied with
+`--roadmap-mappings ./roadmaps.json`. They are scoped to host/project/view node
+IDs and labeled as user-configured. The live timeline remains gated on placement
+verification. See [mapping setup and the current boundary](docs/local-roadmap-mappings.md).
+
 ### Build a local binary
 
 From the repository directory:

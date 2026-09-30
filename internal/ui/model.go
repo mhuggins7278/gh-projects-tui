@@ -156,8 +156,9 @@ type Model struct {
 	view       *github.View
 	err        error
 
-	host  string
-	debug bool
+	host            string
+	debug           bool
+	roadmapMappings config.RoadmapMappings
 
 	screen                screen
 	cursor                int
@@ -358,7 +359,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "View load returned no view"
 			return m, nil
 		}
-		if compatibility := evaluateViewCompatibility(*msg.view); !compatibility.supported() {
+		if compatibility := m.viewCompatibility(*msg.view); !compatibility.supported() {
 			if msg.view.Layout == github.BoardLayout {
 				if m.boardViewReasons == nil {
 					m.boardViewReasons = make(map[int]string)
@@ -450,7 +451,7 @@ func (m Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 	// Direct-selection path (explicit --owner/--project/--view).
 	if m.selection.OwnerLogin != "" {
 		if m.view != nil {
-			if compatibility := evaluateViewCompatibility(*m.view); !compatibility.supported() {
+			if compatibility := m.viewCompatibility(*m.view); !compatibility.supported() {
 				m.setDiscoverySelection()
 				rejected := *m.view
 				m.rejectView(rejected, compatibility)
@@ -551,7 +552,7 @@ func (m *Model) rejectView(view github.View, compatibility viewCompatibility) {
 			return
 		}
 	}
-	m.views = []github.ViewSummary{{Number: view.Number, Name: view.Name, Layout: view.Layout}}
+	m.views = []github.ViewSummary{{ID: view.ID, Number: view.Number, Name: view.Name, Layout: view.Layout}}
 }
 
 func (m *Model) ownerProjectsLoaded(owner github.Owner) bool {
@@ -1049,10 +1050,13 @@ func (m *Model) selectCurrent() tea.Cmd {
 			return nil
 		}
 		selected := views[m.cursor]
-		summaryView := github.View{Number: selected.Number, Name: selected.Name, Layout: selected.Layout}
-		if compatibility := evaluateViewCompatibility(summaryView); !compatibility.supported() {
-			m.status = unsupportedViewStatus(summaryView, compatibility)
-			return nil
+		summaryView := github.View{ProjectID: m.selectedProject.ID, ID: selected.ID, Number: selected.Number, Name: selected.Name, Layout: selected.Layout}
+		_, mapped := m.roadmapMappings.Find(m.host, summaryView.ProjectID, summaryView.ID)
+		if summaryView.Layout != github.RoadmapLayout || !mapped {
+			if compatibility := evaluateViewCompatibility(summaryView); !compatibility.supported() {
+				m.status = unsupportedViewStatus(summaryView, compatibility)
+				return nil
+			}
 		}
 		m.loadingDetail = true
 		m.loading = false
@@ -1389,6 +1393,9 @@ func (m Model) renderViewPicker(b *strings.Builder) {
 	}
 	for i, view := range views {
 		label := fmt.Sprintf("#%-4d %-24s", view.Number, view.Name)
+		if _, mapped := m.roadmapMappings.Find(m.host, m.selectedProject.ID, view.ID); mapped && view.Layout == github.RoadmapLayout {
+			label += "  (user-configured mapping)"
+		}
 		if reason := m.boardViewReasons[view.Number]; reason != "" {
 			label += "  (unsupported: " + reason + ")"
 		}

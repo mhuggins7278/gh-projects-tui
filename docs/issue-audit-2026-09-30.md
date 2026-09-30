@@ -39,3 +39,17 @@ passed. The live-tagged package compiles with its opt-in probes disabled. The
 expanded read-only filter contract passed all 29 cases; the parser fuzz run
 completed 32,877 executions without failures. The existing roadmap metadata,
 picker rejection, and timeline fixtures also pass. No release tag was created.
+
+## Subsequent endpoint-source decision
+
+The user subsequently approved [explicit local mappings](local-roadmap-mappings.md).
+They provide host/project/view-scoped, user-selected DATE field IDs without
+recovering GitHub's saved selections. The API no-go finding above remains valid.
+The mapping capability now exists; #26 still needs representative placement,
+filtering, and order comparisons, and #28 still needs verified read-only
+integration. #29/#30 continue to depend on that initial verified timeline.
+
+The [populated sample probe](roadmap-date-verification-2026-09-30.md) returned
+540 unique items over six pages and matched 21 visible web rows to project
+position order. Browser access ended before bar/point geometry comparisons;
+the evidence does not complete #26 or enable #28.

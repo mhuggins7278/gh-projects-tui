@@ -16,10 +16,16 @@ func main() {
 	owner := flag.String("owner", "", "owner login")
 	project := flag.Int("project", 0, "owner-scoped project number")
 	view := flag.Int("view", 0, "project-scoped view number")
+	roadmapMappingsPath := flag.String("roadmap-mappings", "", "JSON file with user-configured roadmap date-field mappings")
 	debug := flag.Bool("debug", false, "show API telemetry in the header and enable the A inspector overlay (or GH_PROJECTS_TUI_DEBUG=1)")
 	flag.Parse()
 	host := config.DefaultHost()
 	if err := validateFlags(*owner, *project, *view); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	roadmapMappings, err := config.LoadRoadmapMappings(*roadmapMappingsPath)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
@@ -31,6 +37,7 @@ func main() {
 	}
 	selection := ui.Selection{OwnerLogin: *owner, ProjectNumber: *project, ViewNumber: *view}
 	model := ui.NewModelWithHost(client, selection, host)
+	model.SetRoadmapMappings(roadmapMappings)
 	model.SetDebug(*debug || debugEnv())
 	if _, err := tea.NewProgram(model).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

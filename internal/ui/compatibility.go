@@ -21,12 +21,16 @@ func (c viewCompatibility) summary() string {
 }
 
 func evaluateViewCompatibility(view github.View) viewCompatibility {
+	return evaluateViewCompatibilityWithRoadmapReason(view, "roadmap views are not supported: saved start/target field mapping and timeline settings are not available through this client; open this view in GitHub")
+}
+
+func evaluateViewCompatibilityWithRoadmapReason(view github.View, roadmapReason string) viewCompatibility {
 	reasons := make([]string, 0, 4)
 	switch view.Layout {
 	case github.BoardLayout:
 	case github.TableLayout:
 	case github.RoadmapLayout:
-		reasons = append(reasons, "roadmap views are not supported: saved start/target field mapping and timeline settings are not available through this client; open this view in GitHub")
+		reasons = append(reasons, roadmapReason)
 	default:
 		reasons = append(reasons, fmt.Sprintf("layout %q is not supported", view.Layout))
 	}

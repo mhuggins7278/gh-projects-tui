@@ -428,12 +428,12 @@ func TestOpenViewPaginatesFieldMetadata(t *testing.T) {
 func TestListViewsPaginates(t *testing.T) {
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(query string, variables map[string]interface{}, response interface{}) error {
-			if variables["after"] != nil || !strings.Contains(query, "views(first:") {
+			if variables["after"] != nil || !strings.Contains(query, "views(first:") || !strings.Contains(query, "nodes { id number name layout }") {
 				t.Fatalf("initial views query invalid: %q %#v", query, variables)
 			}
 			result := response.(*viewsResponse)
 			result.Organization = &viewsOwner{Project: &viewsProject{Views: rawViewsPage{
-				Nodes:    []*ViewSummary{{Number: 1, Name: "Board", Layout: BoardLayout}, nil},
+				Nodes:    []*ViewSummary{{ID: "board-id", Number: 1, Name: "Board", Layout: BoardLayout}, nil},
 				PageInfo: pageInfo{HasNextPage: true, EndCursor: cursor("views-cursor")},
 			}}}
 			return nil
@@ -444,7 +444,7 @@ func TestListViewsPaginates(t *testing.T) {
 			}
 			result := response.(*viewsResponse)
 			result.Organization = &viewsOwner{Project: &viewsProject{Views: rawViewsPage{
-				Nodes: []*ViewSummary{{Number: 2, Name: "Table", Layout: TableLayout}},
+				Nodes: []*ViewSummary{{ID: "table-id", Number: 2, Name: "Table", Layout: TableLayout}},
 			}}}
 			return nil
 		},
@@ -454,7 +454,7 @@ func TestListViewsPaginates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListViews() error = %v", err)
 	}
-	if len(views) != 2 || views[0].Number != 1 || views[1].Layout != TableLayout {
+	if len(views) != 2 || views[0].ID != "board-id" || views[1].ID != "table-id" || views[0].Number != 1 || views[1].Layout != TableLayout {
 		t.Fatalf("views = %#v", views)
 	}
 }

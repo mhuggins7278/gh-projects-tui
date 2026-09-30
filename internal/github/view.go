@@ -81,7 +81,7 @@ query UserProjectViews($login: String!, $project: Int!, $after: String) {
   user(login: $login) {
     projectV2(number: $project) {
       views(first: 100, after: $after, orderBy: {field: POSITION, direction: ASC}) {
-        nodes { number name layout }
+        nodes { id number name layout }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -93,7 +93,7 @@ query OrganizationProjectViews($login: String!, $project: Int!, $after: String) 
   organization(login: $login) {
     projectV2(number: $project) {
       views(first: 100, after: $after, orderBy: {field: POSITION, direction: ASC}) {
-        nodes { number name layout }
+        nodes { id number name layout }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -525,6 +525,7 @@ func (f rawField) project() Field {
 
 // ViewSummary is the lightweight row used by the view picker.
 type ViewSummary struct {
+	ID     string
 	Number int
 	Name   string
 	Layout ViewLayout

@@ -13,19 +13,25 @@ date **or iteration** fields for each endpoint, but the introspected GitHub.com
 view/configuration schema exposes neither selection. It also lacks saved zoom,
 viewport range, markers, slicing, collapsed groups, and custom group order.
 
-Generic date/iteration values and project position are readable. That is enough
-for a future explicitly configured timeline, not enough to mirror a saved
-roadmap. Local endpoint overrides would be a separate product decision, not a
-silent workaround for missing saved-view metadata.
+Generic date/iteration values and project position are readable. An explicit
+local-mapping product decision was approved on 2026-09-30. The
+[local mapping configuration](local-roadmap-mappings.md) supplies user-selected
+DATE field IDs for a host/project/view and validates them against complete
+definitions. It does not mirror saved endpoint settings, remove the placement
+verification gate, or change the API no-go decision.
 
 The [#25 endpoint-source review](api-contract.md#saved-endpoint-mapping-decision-25)
 also checked the documented REST Projects APIs and records a no-go decision as
 of 2026-09-29, reconfirmed by schema and REST documentation checks on 2026-09-30.
-That investigation is complete, while the usable endpoint source remains
-unavailable. Saved-view enablement remains blocked; synthetic renderer work is
-independent of that decision.
+That investigation is complete, while an automatic saved-endpoint source remains
+unavailable. Explicit local roles are now configurable; live rendering remains
+blocked on verified placement. Synthetic renderer work is independent of that
+decision.
 
 See [the investigation and live probe results](api-contract.md#roadmap-layout-investigation).
+The [populated sample verification](roadmap-date-verification-2026-09-30.md)
+records explicit web-observed roles, complete pagination, and matching visible
+row order; bar/point geometry and nonempty saved-filter membership remain unverified.
 GitHub's [roadmap documentation](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-roadmap-layout)
 describes endpoint selection, Month/Quarter/Year zoom, markers, grouping, sorting,
 slicing, and field sums. Documentation describes the web UI, not an API contract
@@ -105,7 +111,7 @@ mutation controls remain outside this component.
 
 | Concern | Initial boundary | Today |
 | --- | --- | --- |
-| Endpoint identity | Explicit start/target field IDs from a verified supported source; both resolve uniquely to project DATE definitions | Blocked: mapping is not exposed |
+| Endpoint identity | Explicit start/target field IDs that resolve uniquely to project DATE definitions; source visibly disclosed | Automatic recovery unavailable; user-configured local IDs validated, with no claim of saved-selection recovery |
 | Date values | Complete nested pagination; calendar dates remain unchanged; populated, partial, unset, invalid, and unavailable cases checked against the web | Decoding fixture-backed; placement unverified |
 | Iteration endpoints | Defer, including mixed DATE/ITERATION endpoints and completed iterations | Definitions/values available; conversion unverified |
 | Saved filtering | Forward only supported expressions unchanged, as with boards/tables | Bounded grammar exists; roadmap membership still needs comparison |
@@ -118,8 +124,10 @@ mutation controls remain outside this component.
 
 ## Evidence required before enabling anything
 
-1. Identify a supported source for the saved endpoint field IDs and verify it on
-   the target host. If this remains unavailable, keep all saved roadmaps blocked.
+1. For a user-configured timeline, supply explicit local endpoint IDs and resolve
+   them uniquely against complete DATE definitions. Automatic restoration of
+   saved endpoint choices remains blocked until a supported API source exists.
+   Keep the user-configured source visibly distinct from recovered settings.
 2. Compare existing populated roadmaps with the web, without creating/editing
    project data: two endpoints, same-day endpoints, each one-endpoint case,
    unset/unavailable values, reversed dates, and month/year boundaries.
@@ -138,10 +146,10 @@ configuration source requires a separate, explicit review.
 
 | Issue | Scope | Dependencies |
 | --- | --- | --- |
-| [#25](https://github.com/mhuggins7278/gh-projects-tui/issues/25) | Investigation complete: no-go decision recorded | A usable mapping source remains unavailable |
-| [#26](https://github.com/mhuggins7278/gh-projects-tui/issues/26) | Verify populated date placement, saved filtering, and row order | Blocked: usable mapping source and representative populated web/API comparisons |
+| [#25](https://github.com/mhuggins7278/gh-projects-tui/issues/25) | Investigation complete: no-go decision recorded | Automatic saved-role recovery unavailable; subsequent local configuration approved |
+| [#26](https://github.com/mhuggins7278/gh-projects-tui/issues/26) | Verify populated date placement, saved filtering, and row order | Needs representative populated web/API comparisons with explicitly configured endpoint roles; automatic saved-role recovery remains unavailable |
 | [#27](https://github.com/mhuggins7278/gh-projects-tui/issues/27) | Bounded renderer, clipping, date-list fallback, and fixtures implemented | Fixture-only; live use requires #25/#26 |
-| [#28](https://github.com/mhuggins7278/gh-projects-tui/issues/28) | Safe read-only integration, navigation, and responsiveness | Blocked: usable mapping source and #26; renderer #27 is complete |
+| [#28](https://github.com/mhuggins7278/gh-projects-tui/issues/28) | Safe read-only integration, navigation, and responsiveness | Blocked on #26; explicit local mapping and renderer #27 are implemented |
 | [#30](https://github.com/mhuggins7278/gh-projects-tui/issues/30) | Iteration endpoints (deferred) | Blocked: initial verified timeline and iteration-placement comparisons; independent of grouping |
 | [#29](https://github.com/mhuggins7278/gh-projects-tui/issues/29) | Single-select grouping (deferred) | Blocked: initial verified timeline and grouping/order comparisons; independent of iteration endpoints |
 
