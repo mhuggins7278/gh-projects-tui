@@ -622,15 +622,9 @@ func TestCombinedMoveRefreshShowsCanonicalCell(t *testing.T) {
 	updated, refresh := model.Update(keyPress("r"))
 	model = updated.(Model)
 	if refresh == nil {
-		t.Fatal("board refresh did not start items reload")
+		t.Fatal("board refresh did not start")
 	}
-	batch, ok := refresh().(tea.BatchMsg)
-	if !ok || len(batch) < 2 {
-		t.Fatalf("refresh item commands = %#v", batch)
-	}
-	updated, next := model.Update(batch[len(batch)-1]())
-	model = updated.(Model)
-	model = runMutationCommands(t, model, next)
+	model = runMembershipReads(t, model, refresh)
 	var refreshed github.Item
 	for _, item := range model.items {
 		if item.ID == "item" {

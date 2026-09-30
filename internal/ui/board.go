@@ -773,6 +773,7 @@ func moveItemToTop(items []github.Item, itemID string) []github.Item {
 }
 
 func (m *Model) moveBoardLane(delta int) {
+	m.refreshFocusID = ""
 	lanes := m.boardLanes()
 	if len(lanes) == 0 {
 		return
@@ -795,6 +796,7 @@ func (m *Model) moveBoardLane(delta int) {
 }
 
 func (m *Model) moveBoardCard(delta int) {
+	m.refreshFocusID = ""
 	lanes := m.boardLanes()
 	if m.boardLane < 0 || m.boardLane >= len(lanes) || len(lanes[m.boardLane].Items) == 0 {
 		return
@@ -822,7 +824,7 @@ func (m Model) renderBoard(b *strings.Builder) {
 }
 
 func (m Model) renderBoardContent(b *strings.Builder) {
-	if m.loadingDetail {
+	if m.loadingDetail && m.view == nil {
 		b.WriteString("Loading view...\n")
 		return
 	}

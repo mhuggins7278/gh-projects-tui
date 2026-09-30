@@ -9,7 +9,7 @@ import (
 )
 
 func (m Model) renderTableContent(b *strings.Builder) {
-	if m.loadingDetail {
+	if m.loadingDetail && m.view == nil {
 		b.WriteString("Loading view...\n")
 		return
 	}
@@ -235,6 +235,7 @@ func (m Model) selectedItem() (github.Item, bool) {
 }
 
 func (m *Model) moveTableRow(delta int) {
+	m.refreshFocusID = ""
 	items := m.tableItems()
 	index := m.selectedTableRow(items)
 	if index < 0 {

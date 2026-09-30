@@ -132,6 +132,7 @@ func (m *Model) abandonReads() {
 	m.itemsLoading = false
 	m.pendingMutationReload = nil
 	m.pendingIssueReload = nil
+	m.refreshFocusID = ""
 }
 
 type screen int
@@ -188,6 +189,7 @@ type Model struct {
 	itemsLoadFrame        int
 	pendingMutationReload *boardReadScope
 	pendingIssueReload    *boardReadScope
+	refreshFocusID        string
 	boardLane             int
 	boardCard             int
 	boardFocusID          string
@@ -382,6 +384,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.startItemsLoadWithSpinner()
 	case itemsPageMsg:
 		return m.updateItems(msg)
+	case viewRefreshMsg:
+		return m.updateViewRefresh(msg)
 	case itemDetailMsg:
 		if msg.generation != m.generation || !msg.scope.matches(m) || !m.detailVisible || msg.itemID != m.detailItemID || msg.requestID != m.detailRequestID {
 			return m, nil
@@ -666,6 +670,7 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	m.generation++
 	m.pendingMutationReload = nil
 	m.pendingIssueReload = nil
+	m.refreshFocusID = ""
 	m.items = nil
 	m.itemsLoading = true
 	m.itemsHasNext = false
@@ -741,7 +746,7 @@ func boardReadFields(view github.View) []github.Field {
 }
 
 func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
-	if msg.generation != m.generation || !msg.scope.matches(m) {
+	if msg.generation != m.generation || !msg.scope.matches(m) || m.loadingDetail {
 		return m, nil
 	}
 	if msg.reset {
@@ -751,6 +756,7 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 		m.boardFocusID = ""
 	}
 	if msg.err != nil {
+		m.refreshFocusID = ""
 		m.itemsLoading = false
 		m.itemsErr = msg.err
 		m.itemsHasNext = false
@@ -763,6 +769,13 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	m.itemsHasNext = msg.page.HasNext
 	m.itemsCursor = msg.page.EndCursor
 	m.itemsErr = nil
+	if m.refreshFocusID != "" {
+		if m.isTable() {
+			m.tableFocusID = m.refreshFocusID
+		} else {
+			m.boardFocusID = m.refreshFocusID
+		}
+	}
 	if msg.page.HasNext {
 		m.itemsLoading = true
 		if m.isTable() {
@@ -779,6 +792,7 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 		m.clampBoardCursor()
 	}
 	m.reconcileFilteredMoveFocus()
+	m.refreshFocusID = ""
 	return m, m.finishMutationReload()
 }
 
@@ -845,7 +859,7 @@ func (m *Model) cancelItemsLoad() {
 }
 
 func (m *Model) openItemDetailCmd() tea.Cmd {
-	if m.detailLoading {
+	if m.detailLoading || m.loadingDetail {
 		return nil
 	}
 	item, ok := m.selectedItem()
@@ -1127,7 +1141,7 @@ func (m *Model) refresh() tea.Cmd {
 		return discover(m.source, m.ctx, m.generation)
 	case screenBoard:
 		if m.view != nil && m.selectedOwner != nil && m.selectedProject != nil {
-			return m.startItemsLoadWithSpinner()
+			return m.refreshSavedView()
 		}
 		m.loading = true
 		m.screen = screenLoading

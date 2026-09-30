@@ -124,7 +124,7 @@ func submittedReviewSave(t *testing.T) (Model, tea.Cmd, *[]github.Item) {
 	view := writableStatusView()
 	view.Layout = github.BoardLayout
 	canonical := []github.Item{{ID: "one", FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "a", Available: true}}}}
-	m := mutationModel(fakePickerSource{canonicalItems: &canonical}, view, canonical)
+	m := mutationModel(fakePickerSource{canonicalItems: &canonical, view: view}, view, canonical)
 	updated, settle := m.Update(keyPress("L"))
 	m = updated.(Model)
 	updated, read := m.Update(settle())
@@ -154,7 +154,10 @@ func TestSaveUsesOwnBaselineAfterNavigatingProjects(t *testing.T) {
 
 func TestSavePreservesOverlappingPagesAndRefreshesAfterwards(t *testing.T) {
 	m, save, _ := submittedReviewSave(t)
-	updated, _ := m.Update(keyPress("r"))
+	updated, refresh := m.Update(keyPress("r"))
+	m = updated.(Model)
+	// Let metadata finish so the save overlaps the item-page phase of refresh.
+	updated, _ = m.Update(refresh())
 	m = updated.(Model)
 	scope := m.currentBoardReadScope()
 	m.items = []github.Item{{ID: "partial"}}

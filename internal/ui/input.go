@@ -141,6 +141,7 @@ func deleteLastRune(text string) string {
 
 // resetSearchCursor keeps picker and board focus valid after an edit.
 func (m *Model) resetSearchCursor() {
+	m.refreshFocusID = ""
 	m.cursor = 0
 	if m.screen == screenBoard {
 		if m.isTable() {

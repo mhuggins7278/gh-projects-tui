@@ -163,7 +163,7 @@ the saved state. Use `r` to pick up external changes.
 | `esc` or `backspace` | Go back |
 | `v` | Pick a saved view |
 | `p` | Pick a project |
-| `r` | Refresh from GitHub; retry readback when a save outcome is unknown |
+| `r` | Refresh saved-view settings and items from GitHub; retry readback when a save outcome is unknown |
 | `o` | Open the selected item or project in a browser |
 | `?` | Toggle help |
 | `q` or `ctrl+c` | Quit |
