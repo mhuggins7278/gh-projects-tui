@@ -601,9 +601,6 @@ func (m *Model) showCanonicalWithoutOptimism(session *boardMutationSession) {
 	m.itemsHasNext = false
 	m.itemsCursor = ""
 	m.itemsErr = nil
-	m.itemsLoadingLanes = nil
-	m.itemsFailedLanes = nil
-	m.itemsLanePending = 0
 	m.clampBoardCursor()
 	if m.isTable() {
 		m.clampTableRow(true)

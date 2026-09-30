@@ -196,8 +196,8 @@ func TestIssueReadbackKeepsGateUntilDesiredStateConfirmed(t *testing.T) {
 	originalScope := m.issueActionPending.scope
 	for _, result := range []issueReadbackMsg{
 		{actionID: 7, readID: 1, err: errors.New("unavailable")},
-		{actionID: 7, readID: 1, detail: &github.ItemDetail{Content: &github.Content{ID: "issue", State: "OPEN"}}},
-		{actionID: 7, readID: 1, detail: &github.ItemDetail{Content: &github.Content{ID: "different", State: "CLOSED"}}},
+		{actionID: 7, readID: 1, state: github.IssueState{ID: "issue", State: "OPEN"}},
+		{actionID: 7, readID: 1, state: github.IssueState{ID: "different", State: "CLOSED"}},
 	} {
 		updated, cmd := m.Update(result)
 		m = updated.(Model)
@@ -216,7 +216,7 @@ func TestIssueReadbackKeepsGateUntilDesiredStateConfirmed(t *testing.T) {
 	if retry == nil || m.issueActionPending.scope != originalScope {
 		t.Fatal("retry lost originating project")
 	}
-	result := issueReadbackMsg{actionID: 7, readID: m.issueActionPending.readID, detail: &github.ItemDetail{Content: &github.Content{ID: "issue", State: "CLOSED"}}}
+	result := issueReadbackMsg{actionID: 7, readID: m.issueActionPending.readID, state: github.IssueState{ID: "issue", State: "CLOSED"}}
 	updated, _ = m.Update(result)
 	m = updated.(Model)
 	if m.issueActionPending != nil || m.mutationLoading {
@@ -353,6 +353,9 @@ type reviewIssueSource struct {
 }
 
 func (s *reviewIssueSource) IssueComment(_ context.Context, _ string, _ string) error { return nil }
+func (s *reviewIssueSource) ReadIssueState(_ context.Context, _ string) (github.IssueState, error) {
+	return github.IssueState{ID: s.detail.Content.ID, State: s.detail.Content.State}, nil
+}
 func (s *reviewIssueSource) SetIssueClosed(_ context.Context, id string, closed bool) error {
 	if id != "issue" {
 		return errors.New("wrong issue identity")

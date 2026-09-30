@@ -18,8 +18,12 @@ type issueActionState struct {
 }
 type issueReadbackMsg struct {
 	actionID, readID uint64
-	detail           *github.ItemDetail
+	state            github.IssueState
 	err              error
+}
+
+type IssueStateSource interface {
+	ReadIssueState(context.Context, string) (github.IssueState, error)
 }
 
 func (scope boardReadScope) sameProject(m Model) bool {
@@ -32,18 +36,18 @@ func (m *Model) startIssueReadback() tea.Cmd {
 		return nil
 	}
 	pending.readID++
-	actionID, readID, scope, itemID := pending.id, pending.readID, pending.scope, pending.itemID
+	actionID, readID, issueID := pending.id, pending.readID, pending.issueID
 	source := m.source
 	m.issueActionRefreshing = true
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
 		defer cancel()
-		loader, ok := source.(ItemDetailSource)
+		loader, ok := source.(IssueStateSource)
 		if !ok {
 			return issueReadbackMsg{actionID: actionID, readID: readID, err: fmt.Errorf("issue readback unavailable")}
 		}
-		detail, err := loader.LoadItemDetail(ctx, scope.owner, scope.projectNumber, itemID)
-		return issueReadbackMsg{actionID: actionID, readID: readID, detail: &detail, err: err}
+		state, err := loader.ReadIssueState(ctx, issueID)
+		return issueReadbackMsg{actionID: actionID, readID: readID, state: state, err: err}
 	}
 }
 func (m Model) updateIssueReadback(msg issueReadbackMsg) (tea.Model, tea.Cmd) {
@@ -56,8 +60,7 @@ func (m Model) updateIssueReadback(msg issueReadbackMsg) (tea.Model, tea.Cmd) {
 	if pending.closed {
 		wanted = "CLOSED"
 	}
-	confirmed := msg.err == nil && msg.detail != nil && msg.detail.Content != nil &&
-		msg.detail.Content.ID == pending.issueID && strings.EqualFold(msg.detail.Content.State, wanted)
+	confirmed := msg.err == nil && msg.state.ID == pending.issueID && strings.EqualFold(msg.state.State, wanted)
 	if !confirmed {
 		pending.blocked = true
 		m.mutationLoading = true
@@ -71,10 +74,8 @@ func (m Model) updateIssueReadback(msg issueReadbackMsg) (tea.Model, tea.Cmd) {
 				m.items[i].Content.State = wanted
 			}
 		}
-		if m.detailVisible && m.detailItemID == pending.itemID {
-			m.detail = msg.detail
-			m.detailErr = nil
-			m.detailLoading = false
+		if m.detailItemID == pending.itemID && m.detail != nil && m.detail.Content != nil && m.detail.Content.ID == pending.issueID {
+			m.detail.Content.State = wanted
 		}
 	}
 	m.issueActionPending = nil

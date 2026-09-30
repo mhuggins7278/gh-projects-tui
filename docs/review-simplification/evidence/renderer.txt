@@ -1,0 +1,24 @@
+=== RUN   TestReviewOpportunityDigest
+    opportunity_review_test.go:67: output digest: c80185f40f683e1254e8801be34ddce9f094fc6d87de827b2ea415c2480cdcc7
+--- PASS: TestReviewOpportunityDigest (0.03s)
+=== RUN   TestReviewOpportunityDigest
+    opportunity_review_test.go:67: output digest: c80185f40f683e1254e8801be34ddce9f094fc6d87de827b2ea415c2480cdcc7
+--- PASS: TestReviewOpportunityDigest (0.03s)
+=== RUN   TestReviewOpportunityDigest
+    opportunity_review_test.go:67: output digest: c80185f40f683e1254e8801be34ddce9f094fc6d87de827b2ea415c2480cdcc7
+--- PASS: TestReviewOpportunityDigest (0.03s)
+goos: linux
+goarch: amd64
+pkg: github.com/mhuggins7278/gh-projects-tui/internal/ui
+cpu: Intel(R) Core(TM) Ultra 9 185H
+BenchmarkReviewOpportunityColdDetail
+BenchmarkReviewOpportunityColdDetail/comments-20
+BenchmarkReviewOpportunityColdDetail/comments-20-22         	      10	  21252265 ns/op	 5409785 B/op	   95487 allocs/op
+BenchmarkReviewOpportunityColdDetail/comments-20-22         	      10	  22038688 ns/op	 5412078 B/op	   95497 allocs/op
+BenchmarkReviewOpportunityColdDetail/comments-20-22         	      10	  22628562 ns/op	 5410321 B/op	   95490 allocs/op
+BenchmarkReviewOpportunityColdDetail/comments-100
+BenchmarkReviewOpportunityColdDetail/comments-100-22        	      10	  99219708 ns/op	24948588 B/op	  442021 allocs/op
+BenchmarkReviewOpportunityColdDetail/comments-100-22        	      10	 102520397 ns/op	24947946 B/op	  442016 allocs/op
+BenchmarkReviewOpportunityColdDetail/comments-100-22        	      10	  99313528 ns/op	24949091 B/op	  442025 allocs/op
+PASS
+ok  	github.com/mhuggins7278/gh-projects-tui/internal/ui	4.166s

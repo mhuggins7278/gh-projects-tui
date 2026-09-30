@@ -1,0 +1,4 @@
+ok  	github.com/mhuggins7278/gh-projects-tui/cmd/gh-projects-tui	(cached)
+ok  	github.com/mhuggins7278/gh-projects-tui/internal/config	(cached)
+ok  	github.com/mhuggins7278/gh-projects-tui/internal/github	(cached)
+ok  	github.com/mhuggins7278/gh-projects-tui/internal/ui	2.203s

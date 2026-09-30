@@ -19,18 +19,11 @@ type boardLane struct {
 	RowName string
 	Items   []github.Item
 	Loading bool
-	Failed  bool
 }
 
 type laneDefinition struct {
 	key  string
 	name string
-}
-
-type laneItemsRequest struct {
-	key    string
-	name   string
-	filter string
 }
 
 var itemsLoadingFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -42,20 +35,15 @@ func (m Model) boardLanes() []boardLane {
 func (m Model) boardLanesForItems(items []github.Item) []boardLane {
 	lanes := lanesForView(m.view, items)
 	for index := range lanes {
-		if m.itemsLoading && len(m.itemsLoadingLanes) == 0 {
-			lanes[index].Loading = true
-		} else {
-			lanes[index].Loading = m.itemsLoadingLanes[lanes[index].Key]
-		}
-		lanes[index].Failed = m.itemsFailedLanes[lanes[index].Key]
+		lanes[index].Loading = m.itemsLoading
 	}
 	return lanes
 }
 
 func (m Model) boardItems() []github.Item {
-	items := sortedItemsForView(m.view, m.items)
+	items := m.items
 	if strings.TrimSpace(m.filter) == "" {
-		return items
+		return sortedItemsForView(m.view, items)
 	}
 	filtered := make([]github.Item, 0, len(items))
 	for _, item := range items {
@@ -63,7 +51,7 @@ func (m Model) boardItems() []github.Item {
 			filtered = append(filtered, item)
 		}
 	}
-	return filtered
+	return sortedItemsForView(m.view, filtered)
 }
 
 func itemMatchesBoardSearch(item github.Item, query string) bool {
@@ -100,19 +88,40 @@ type itemSortValue struct {
 
 func sortedItemsForView(view *github.View, items []github.Item) []github.Item {
 	ordered := append([]github.Item(nil), items...)
-	if view == nil || positionOnly(view) || !sortFieldsSupported(view) {
+	if len(items) < 2 || view == nil || positionOnly(view) || !sortFieldsSupported(view) {
 		return ordered
 	}
-	sort.SliceStable(ordered, func(left, right int) bool {
-		for _, field := range view.SortByFields {
-			comparison := compareSortField(field.Field, ordered[left], ordered[right], strings.EqualFold(field.Direction, "DESC"))
-			if comparison == 0 {
-				continue
+	// Keep expensive field extraction and normalization outside the comparator.
+	type sortRow struct {
+		index  int
+		values []itemSortValue
+	}
+	rows := make([]sortRow, len(items))
+	values := make([]itemSortValue, len(items)*len(view.SortByFields))
+	descending := make([]bool, len(view.SortByFields))
+	for f, field := range view.SortByFields {
+		descending[f] = strings.EqualFold(field.Direction, "DESC")
+	}
+	for i, item := range items {
+		rows[i] = sortRow{index: i, values: values[i*len(view.SortByFields) : (i+1)*len(view.SortByFields)]}
+		for f, field := range view.SortByFields {
+			value := itemSortValueFor(field.Field, item)
+			value.text = strings.ToLower(value.text)
+			rows[i].values[f] = value
+		}
+	}
+	sort.SliceStable(rows, func(left, right int) bool {
+		for f := range view.SortByFields {
+			comparison := compareNormalizedSortValues(rows[left].values[f], rows[right].values[f], descending[f])
+			if comparison != 0 {
+				return comparison < 0
 			}
-			return comparison < 0
 		}
 		return false
 	})
+	for i, row := range rows {
+		ordered[i] = items[row.index]
+	}
 	return ordered
 }
 
@@ -128,9 +137,7 @@ func sortFieldsSupported(view *github.View) bool {
 	return true
 }
 
-func compareSortField(field github.Field, left, right github.Item, descending bool) int {
-	leftValue := itemSortValueFor(field, left)
-	rightValue := itemSortValueFor(field, right)
+func compareNormalizedSortValues(leftValue, rightValue itemSortValue, descending bool) int {
 	if !leftValue.present && !rightValue.present {
 		return 0
 	}
@@ -144,7 +151,7 @@ func compareSortField(field github.Field, left, right github.Item, descending bo
 	}
 	comparison := 0
 	if leftValue.byText || rightValue.byText {
-		comparison = strings.Compare(strings.ToLower(leftValue.text), strings.ToLower(rightValue.text))
+		comparison = strings.Compare(leftValue.text, rightValue.text)
 	} else if leftValue.number < rightValue.number {
 		comparison = -1
 	} else if leftValue.number > rightValue.number {
@@ -224,38 +231,6 @@ func boardCombinedFields(view *github.View) (github.Field, github.Field, bool) {
 		return github.Field{}, github.Field{}, false
 	}
 	return view.GroupByFields[0], view.VerticalGroupBy[0], true
-}
-
-func parallelLaneItemsRequests(view *github.View) ([]laneItemsRequest, bool) {
-	// Combining a saved filter with lane filters can produce query expressions
-	// outside the verified filter subset. Page the saved query unchanged instead.
-	if view == nil || strings.TrimSpace(view.Filter) != "" {
-		return nil, false
-	}
-	field, _, grouped := boardGroupField(view)
-	if !grouped || !strings.EqualFold(field.Name, "Status") || (field.Kind != "ProjectV2SingleSelectField" && field.DataType != "SINGLE_SELECT") {
-		return nil, false
-	}
-	// Keep concurrency bounded to avoid trading latency for secondary-rate-limit
-	// failures on unusually large status configurations.
-	if len(field.Options) == 0 || len(field.Options)+2 > 8 {
-		return nil, false
-	}
-	requests := make([]laneItemsRequest, 0, len(field.Options)+2)
-	otherFilters := make([]string, 0, len(field.Options)+1)
-	for _, option := range field.Options {
-		statusFilter := "status:" + strconv.Quote(option.Name)
-		requests = append(requests, laneItemsRequest{
-			key:    "option:" + option.ID,
-			name:   option.Name,
-			filter: statusFilter,
-		})
-		otherFilters = append(otherFilters, "-"+statusFilter)
-	}
-	requests = append(requests, laneItemsRequest{key: "no-value", name: "No value", filter: "no:status"})
-	otherFilters = append(otherFilters, "-no:status")
-	requests = append(requests, laneItemsRequest{key: "other", name: "Other", filter: strings.Join(otherFilters, " ")})
-	return requests, true
 }
 
 func lanesForView(view *github.View, items []github.Item) []boardLane {
@@ -811,8 +786,9 @@ func (m *Model) moveBoardLane(delta int) {
 	}
 	m.boardCard = 0
 	if len(lanes[m.boardLane].Items) > 0 {
-		m.boardCard = minInt(m.boardCard, len(lanes[m.boardLane].Items)-1)
-		m.rememberBoardFocus()
+		if id := lanes[m.boardLane].Items[m.boardCard].ID; id != "" {
+			m.boardFocusID = id
+		}
 	} else {
 		m.boardFocusID = ""
 	}
@@ -830,14 +806,9 @@ func (m *Model) moveBoardCard(delta int) {
 	if m.boardCard >= len(lanes[m.boardLane].Items) {
 		m.boardCard = len(lanes[m.boardLane].Items) - 1
 	}
-	m.rememberBoardFocus()
-}
-
-func minInt(left, right int) int {
-	if left < right {
-		return left
+	if id := lanes[m.boardLane].Items[m.boardCard].ID; id != "" {
+		m.boardFocusID = id
 	}
-	return right
 }
 
 func (m Model) renderBoard(b *strings.Builder) {
@@ -1105,9 +1076,7 @@ func (m Model) renderLaneColumn(lane boardLane, laneIndex, width, viewportHeight
 	header := ansi.Truncate(m.renderLaneHeader(lane, laneIndex, active), max(1, width-2), "...")
 	lines := []string{header}
 	if len(lane.Items) == 0 {
-		if lane.Failed {
-			lines = append(lines, errorStyle.Render("Load failed; press r"))
-		} else if lane.Loading {
+		if lane.Loading {
 			lines = append(lines, mutedStyle.Render("Loading cards..."))
 		} else {
 			lines = append(lines, mutedStyle.Render("No cards"))
@@ -1175,9 +1144,6 @@ func (m Model) renderLaneWindow(lane boardLane, laneIndex, width, start, end int
 	if showLater {
 		lines = append(lines, mutedStyle.Render(fmt.Sprintf("... %d more", len(lane.Items)-end)))
 	}
-	if lane.Failed {
-		lines = append(lines, errorStyle.Render("... incomplete; press r"))
-	}
 	return laneFrameStyle(laneIndex).Width(width).Render(strings.Join(lines, "\n"))
 }
 
@@ -1191,9 +1157,6 @@ func (m Model) renderLaneHeader(lane boardLane, laneIndex int, active bool) stri
 		label += "  " + m.itemsLoadingSpinner()
 	} else {
 		label += "  " + itemCountLabel(len(lane.Items))
-	}
-	if lane.Failed {
-		label += " !"
 	}
 	return laneTitleStyle(laneIndex).Render(label)
 }

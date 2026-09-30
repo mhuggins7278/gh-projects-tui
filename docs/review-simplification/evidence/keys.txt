@@ -1,0 +1,32 @@
+=== RUN   TestReviewOpportunityDigest
+    opportunity_review_test.go:67: output digest: c80185f40f683e1254e8801be34ddce9f094fc6d87de827b2ea415c2480cdcc7
+--- PASS: TestReviewOpportunityDigest (0.02s)
+=== RUN   TestReviewOpportunityDigest
+    opportunity_review_test.go:67: output digest: c80185f40f683e1254e8801be34ddce9f094fc6d87de827b2ea415c2480cdcc7
+--- PASS: TestReviewOpportunityDigest (0.02s)
+=== RUN   TestReviewOpportunityDigest
+    opportunity_review_test.go:67: output digest: c80185f40f683e1254e8801be34ddce9f094fc6d87de827b2ea415c2480cdcc7
+--- PASS: TestReviewOpportunityDigest (0.02s)
+goos: linux
+goarch: amd64
+pkg: github.com/mhuggins7278/gh-projects-tui/internal/ui
+cpu: Intel(R) Core(TM) Ultra 9 185H
+BenchmarkReviewOpportunityNavigation
+BenchmarkReviewOpportunityNavigation/cards-1000/search-false
+BenchmarkReviewOpportunityNavigation/cards-1000/search-false-22         	      10	   7926931 ns/op	 1369336 B/op	   10619 allocs/op
+BenchmarkReviewOpportunityNavigation/cards-1000/search-false-22         	      10	   7165875 ns/op	 1346968 B/op	   10615 allocs/op
+BenchmarkReviewOpportunityNavigation/cards-1000/search-false-22         	      10	   7767811 ns/op	 1361076 B/op	   10617 allocs/op
+BenchmarkReviewOpportunityNavigation/cards-1000/search-true
+BenchmarkReviewOpportunityNavigation/cards-1000/search-true-22          	      10	   6845866 ns/op	 1406302 B/op	   22217 allocs/op
+BenchmarkReviewOpportunityNavigation/cards-1000/search-true-22          	      10	   7113209 ns/op	 1427412 B/op	   22219 allocs/op
+BenchmarkReviewOpportunityNavigation/cards-1000/search-true-22          	      10	   7201977 ns/op	 1427438 B/op	   22220 allocs/op
+BenchmarkReviewOpportunityNavigation/cards-10000/search-false
+BenchmarkReviewOpportunityNavigation/cards-10000/search-false-22        	      10	  33239010 ns/op	 5433251 B/op	   28618 allocs/op
+BenchmarkReviewOpportunityNavigation/cards-10000/search-false-22        	      10	  33409816 ns/op	 5482985 B/op	   28625 allocs/op
+BenchmarkReviewOpportunityNavigation/cards-10000/search-false-22        	      10	  35190608 ns/op	 5405030 B/op	   28614 allocs/op
+BenchmarkReviewOpportunityNavigation/cards-10000/search-true
+BenchmarkReviewOpportunityNavigation/cards-10000/search-true-22         	      10	  20385168 ns/op	 6168420 B/op	  149131 allocs/op
+BenchmarkReviewOpportunityNavigation/cards-10000/search-true-22         	      10	  20039452 ns/op	 6175432 B/op	  149131 allocs/op
+BenchmarkReviewOpportunityNavigation/cards-10000/search-true-22         	      10	  19899871 ns/op	 6189432 B/op	  149132 allocs/op
+PASS
+ok  	github.com/mhuggins7278/gh-projects-tui/internal/ui	2.486s

@@ -1,0 +1,9 @@
+=== RUN   TestReviewOpportunityMembershipRead
+    opportunity_review_test.go:34: membership lean=false: 101 requests for 100 IDs with paginated field values
+    opportunity_review_test.go:34: membership lean=true: 1 requests for 100 IDs with paginated field values
+--- PASS: TestReviewOpportunityMembershipRead (0.00s)
+=== RUN   TestReviewOpportunityIssueStateRead
+    opportunity_review_test.go:54: current state read: 4 requests including 3 comment pages for 250 comments
+--- PASS: TestReviewOpportunityIssueStateRead (0.00s)
+PASS
+ok  	github.com/mhuggins7278/gh-projects-tui/internal/github	0.008s

@@ -242,3 +242,16 @@ func BenchmarkCachedDetailScroll(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkColdDetailRender(b *testing.B) {
+	for _, n := range []int{20, 100} {
+		b.Run(fmt.Sprintf("comments-%d", n), func(b *testing.B) {
+			m := benchmarkDetailModel(n)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = detailLines(*m.detail, 80, false)
+			}
+		})
+	}
+}

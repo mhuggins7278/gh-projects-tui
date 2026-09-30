@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strings"
 	"testing"
@@ -341,6 +342,41 @@ func BenchmarkLargeBoardNavigation(b *testing.B) {
 						model.moveBoardCard(-1)
 					}
 					_ = model.View().Content
+				}
+			})
+		}
+	}
+}
+
+func benchmarkSortedBoardModel(n int, search bool) Model {
+	m := NewModel(nil)
+	m.screen = screenBoard
+	m.width, m.height = 123, 63
+	m.view = &github.View{Name: "Review fixture", Layout: github.BoardLayout, SortByFields: []github.SortField{{Field: github.Field{Name: "Title", DataType: "TITLE"}, Direction: "ASC"}}}
+	for i := 0; i < n; i++ {
+		title := fmt.Sprintf("Mixed CASE task %05d", i)
+		if i%20 == 0 {
+			title = "Needle " + title
+		}
+		m.items = append(m.items, github.Item{ID: fmt.Sprintf("item-%d", i), Content: &github.Content{Kind: "Issue", Title: title, Number: i + 1, Repository: "fixture/repo"}})
+	}
+	rand.New(rand.NewSource(17)).Shuffle(len(m.items), func(i, j int) { m.items[i], m.items[j] = m.items[j], m.items[i] })
+	if search {
+		m.filter = "needle"
+	}
+	return m
+}
+
+func BenchmarkSortedBoardNavigation(b *testing.B) {
+	for _, n := range []int{1000, 10000} {
+		for _, search := range []bool{false, true} {
+			b.Run(fmt.Sprintf("cards-%d/search-%v", n, search), func(b *testing.B) {
+				m := benchmarkSortedBoardModel(n, search)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					m.moveBoardCard(1 - 2*(i%2))
+					_ = m.View().Content
 				}
 			})
 		}

@@ -274,6 +274,10 @@ func (m *Model) startTableActionReadback() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
 		defer cancel()
+		if loader, ok := source.(MutationItemsSource); ok {
+			items, err := readMutationItems(ctx, loader, scope.owner, scope.projectNumber, nil)
+			return tableActionReadbackMsg{scope: scope, readID: readID, items: items, err: err}
+		}
 		loader, ok := source.(ItemsSource)
 		if !ok {
 			return tableActionReadbackMsg{scope: scope, readID: readID, err: fmt.Errorf("project item readback unavailable")}
@@ -311,4 +315,69 @@ func (m Model) updateTableActionReadback(msg tableActionReadbackMsg) (tea.Model,
 		return m, m.startItemsLoadWithSpinner()
 	}
 	return m, nil
+}
+
+func (m Model) updateTableConfirmationKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "enter":
+		return m, m.confirmTableAction()
+	case "esc":
+		m.tableAction = nil
+		m.status = "Project item action cancelled"
+	}
+	return m, nil
+}
+
+func (m Model) updateTableMoveKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.tableMove = nil
+		m.status = "Group move cancelled"
+	case "j", "down":
+		if m.tableMove.index+1 < len(m.tableMove.lanes) {
+			m.tableMove.index++
+		}
+	case "k", "up":
+		if m.tableMove.index > 0 {
+			m.tableMove.index--
+		}
+	case "enter":
+		return m, m.finishTableMove()
+	}
+	return m, nil
+}
+
+func (m *Model) handleTableNavigationKey(key string) (tea.Cmd, bool) {
+	switch key {
+	case "m":
+		m.beginTableMove()
+		return nil, true
+	case "J", "K":
+		if !m.selectTableBoardCursor() {
+			return nil, true
+		}
+		if key == "J" {
+			return m.reorderBoardItem(1), true
+		}
+		return m.reorderBoardItem(-1), true
+	case "a":
+		m.beginTableAction(false)
+		return nil, true
+	case "D", "delete":
+		m.beginTableAction(true)
+		return nil, true
+	case "j", "down":
+		m.moveTableRow(1)
+		return nil, true
+	case "k", "up":
+		m.moveTableRow(-1)
+		return nil, true
+	case "enter":
+		return m.openItemDetailCmd(), true
+	}
+	// Board lane and mutation keys have no table action.
+	if key == "h" || key == "l" || key == "left" || key == "right" || key == "H" || key == "L" {
+		return nil, true
+	}
+	return nil, false
 }

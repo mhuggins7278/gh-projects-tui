@@ -641,8 +641,8 @@ func TestSavedFilteredStatusBoardPagesUnchangedQuery(t *testing.T) {
 	model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
 	model.selectedProject = &github.Project{Number: 1}
 	batch := model.startItemsLoadWithSpinner()().(tea.BatchMsg)
-	if len(batch) != 2 || model.itemsLanePending != 0 || model.itemsLoadingLanes != nil {
-		t.Fatalf("saved filter used lane queries: commands=%d pending=%d", len(batch), model.itemsLanePending)
+	if len(batch) != 2 {
+		t.Fatalf("saved filter used lane queries: commands=%d", len(batch))
 	}
 	updated, next := model.Update(batch[1]())
 	model = updated.(Model)

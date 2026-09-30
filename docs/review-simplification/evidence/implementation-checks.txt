@@ -1,0 +1,5 @@
+go test -race ./...: passed (see implementation-race.txt)
+go vet ./...: passed
+Local CLI build: passed; output /tmp/gh-projects-tui-simplified
+Archived baseline/prototype reproduction: all variants, adapter tests, combined race tests, and vet passed
+Benchmarks: three samples, ten operations each (see implementation-bench.txt)

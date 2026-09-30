@@ -257,6 +257,7 @@ func detailLines(detail github.ItemDetail, width int, showAllFields bool) []stri
 		lines = append(lines, detailLabelStyle.Render("Content"), errorStyle.Render("Unavailable or deleted"))
 		return lines
 	}
+	markdown := newMarkdownRenderer(width - 4)
 	identity := contentKind(detail.Content)
 	if detail.Content.Number > 0 {
 		identity += fmt.Sprintf(" #%d", detail.Content.Number)
@@ -287,7 +288,7 @@ func detailLines(detail github.ItemDetail, width int, showAllFields bool) []stri
 	} else if strings.TrimSpace(detail.Content.Body) == "" {
 		lines = append(lines, mutedStyle.Render("(empty body)"))
 	} else {
-		lines = append(lines, renderMarkdown(detail.Content.Body, width-4)...)
+		lines = append(lines, markdown.render(detail.Content.Body)...)
 	}
 
 	if detail.Content.Kind == "Issue" {
@@ -308,7 +309,7 @@ func detailLines(detail github.ItemDetail, width int, showAllFields bool) []stri
 				if strings.TrimSpace(comment.Body) == "" {
 					lines = append(lines, mutedStyle.Render("(empty comment)"))
 				} else {
-					lines = append(lines, renderMarkdown(comment.Body, width-4)...)
+					lines = append(lines, markdown.render(comment.Body)...)
 				}
 			}
 		}
@@ -394,14 +395,33 @@ func detailFieldPillStyleFor(name string, populated, unavailable bool) lipgloss.
 }
 
 func renderMarkdown(body string, width int) []string {
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(width),
-		glamour.WithPreservedNewLines(),
-	)
-	if err == nil {
-		rendered, renderErr := renderer.Render(body)
-		_ = renderer.Close()
+	return newMarkdownRenderer(width).render(body)
+}
+
+// A renderer belongs to one document render; it is never shared across models
+// or goroutines. Render converts each body into its own output buffer.
+type markdownRenderer struct {
+	term        *glamour.TermRenderer
+	width       int
+	initialized bool
+}
+
+func newMarkdownRenderer(width int) *markdownRenderer {
+	return &markdownRenderer{width: width}
+}
+
+func (r *markdownRenderer) render(body string) []string {
+	// Empty/unavailable body and comment sections need no Markdown renderer.
+	if !r.initialized {
+		r.term, _ = glamour.NewTermRenderer(
+			glamour.WithStandardStyle("dark"),
+			glamour.WithWordWrap(r.width),
+			glamour.WithPreservedNewLines(),
+		)
+		r.initialized = true
+	}
+	if r.term != nil {
+		rendered, renderErr := r.term.Render(body)
 		if renderErr == nil {
 			rendered = strings.Trim(rendered, "\n")
 			if rendered == "" {
@@ -410,7 +430,7 @@ func renderMarkdown(body string, width int) []string {
 			return strings.Split(rendered, "\n")
 		}
 	}
-	return renderMarkdownFallback(body, width)
+	return renderMarkdownFallback(body, r.width)
 }
 
 func renderMarkdownFallback(body string, width int) []string {

@@ -130,8 +130,6 @@ func (m *Model) abandonReads() {
 	m.generation++
 	m.loadingDetail, m.loadingViews, m.projectsLoading = false, false, false
 	m.itemsLoading = false
-	m.itemsLanePending = 0
-	m.itemsLoadingLanes = nil
 	m.pendingMutationReload = nil
 }
 
@@ -187,9 +185,6 @@ type Model struct {
 	itemsErr              error
 	itemsLoadFrame        int
 	pendingMutationReload *boardReadScope
-	itemsLanePending      int
-	itemsLoadingLanes     map[string]bool
-	itemsFailedLanes      map[string]bool
 	boardLane             int
 	boardCard             int
 	boardFocusID          string
@@ -384,8 +379,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.startItemsLoadWithSpinner()
 	case itemsPageMsg:
 		return m.updateItems(msg)
-	case laneItemsMsg:
-		return m.updateLaneItems(msg)
 	case itemDetailMsg:
 		if msg.generation != m.generation || !msg.scope.matches(m) || !m.detailVisible || msg.itemID != m.detailItemID || msg.requestID != m.detailRequestID {
 			return m, nil
@@ -544,14 +537,8 @@ func (m *Model) rejectView(view github.View, compatibility viewCompatibility) {
 	m.itemsHasNext = false
 	m.itemsCursor = ""
 	m.itemsErr = nil
-	m.itemsLanePending = 0
-	m.itemsLoadingLanes = nil
-	m.itemsFailedLanes = nil
-	m.detailVisible = false
-	m.detailLoading = false
-	m.detail = nil
+	m.clearDetail()
 	m.detailCache = nil
-	m.detailErr = nil
 	m.screen = screenViewPicker
 	m.cursor = 0
 	m.viewsErr = nil
@@ -602,19 +589,13 @@ func (m *Model) startViewsLoad() tea.Cmd {
 	m.abandonReads()
 	m.screen = screenViewPicker
 	m.view = nil
-	m.detailVisible = false
-	m.detailLoading = false
-	m.detail = nil
+	m.clearDetail()
 	m.detailCache = nil
-	m.detailErr = nil
 	m.items = nil
 	m.itemsLoading = false
 	m.itemsHasNext = false
 	m.itemsCursor = ""
 	m.itemsErr = nil
-	m.itemsLanePending = 0
-	m.itemsLoadingLanes = nil
-	m.itemsFailedLanes = nil
 	m.loadingViews = true
 	m.views = nil
 	m.viewsErr = nil
@@ -687,9 +668,6 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	m.itemsCursor = ""
 	m.itemsErr = nil
 	m.itemsLoadFrame = 0
-	m.itemsLanePending = 0
-	m.itemsLoadingLanes = nil
-	m.itemsFailedLanes = nil
 	m.boardLane = 0
 	m.boardCard = 0
 	m.boardFocusID = ""
@@ -850,72 +828,6 @@ func (m *Model) reconcileFilteredMoveFocus() {
 	m.status = "Move saved; card no longer matches this saved filter. The lane is empty."
 }
 
-func (m *Model) laneItemsCmd(request laneItemsRequest) tea.Cmd {
-	owner := *m.selectedOwner
-	project := m.selectedProject.Number
-	fields := []github.Field{}
-	if m.view != nil {
-		fields = boardReadFields(*m.view)
-	}
-	generation := m.generation
-	scope := m.currentBoardReadScope()
-	ctx := m.ctx
-	source := m.source
-	return func() tea.Msg {
-		loader, ok := source.(ItemsSource)
-		if !ok {
-			return laneItemsMsg{request: request, err: fmt.Errorf("item loading is not supported by this client"), generation: generation, scope: scope}
-		}
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		selective, _ := source.(BoardItemsSource)
-		items := make([]github.Item, 0)
-		after := ""
-		for {
-			var page github.ItemsPage
-			var err error
-			if selective != nil {
-				page, err = selective.PageBoardItems(ctx, owner, project, request.filter, after, fields)
-			} else {
-				page, err = loader.PageItems(ctx, owner, project, request.filter, after)
-			}
-			if err != nil {
-				return laneItemsMsg{request: request, items: items, err: err, generation: generation, scope: scope}
-			}
-			items = append(items, page.Items...)
-			if !page.HasNext {
-				return laneItemsMsg{request: request, items: items, generation: generation, scope: scope}
-			}
-			after = page.EndCursor
-		}
-	}
-}
-
-func (m Model) updateLaneItems(msg laneItemsMsg) (tea.Model, tea.Cmd) {
-	if msg.generation != m.generation || !msg.scope.matches(m) || !m.itemsLoadingLanes[msg.request.key] {
-		return m, nil
-	}
-	m.items = appendUniqueItems(m.items, msg.items)
-	delete(m.itemsLoadingLanes, msg.request.key)
-	m.itemsLanePending--
-	if msg.err != nil && m.itemsErr == nil {
-		m.itemsErr = fmt.Errorf("%s: %w", msg.request.name, msg.err)
-	}
-	if msg.err != nil {
-		m.itemsFailedLanes[msg.request.key] = true
-	}
-	if m.itemsLanePending > 0 {
-		m.clampBoardCursor()
-		return m, nil
-	}
-	m.itemsLoading = false
-	m.itemsHasNext = false
-	m.itemsLoadingLanes = nil
-	m.clampBoardCursor()
-	return m, m.finishMutationReload()
-}
-
 func (m *Model) cancelItemsLoad() {
 	if !m.itemsLoading {
 		return
@@ -926,27 +838,6 @@ func (m *Model) cancelItemsLoad() {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.generation++
 	m.itemsLoading = false
-	m.itemsLanePending = 0
-	m.itemsLoadingLanes = nil
-}
-
-func appendUniqueItems(items, additions []github.Item) []github.Item {
-	seen := make(map[string]bool, len(items)+len(additions))
-	for _, item := range items {
-		if item.ID != "" {
-			seen[item.ID] = true
-		}
-	}
-	for _, item := range additions {
-		if item.ID != "" && seen[item.ID] {
-			continue
-		}
-		items = append(items, item)
-		if item.ID != "" {
-			seen[item.ID] = true
-		}
-	}
-	return items
 }
 
 func (m *Model) openItemDetailCmd() tea.Cmd {
@@ -1055,449 +946,6 @@ func (m *Model) rememberBoardFocus() {
 	}
 }
 
-func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-	// Text payloads belong to the focused editor before printable shortcuts.
-	if (m.filtering || m.commentEditing) && msg.Text != "" && key != "ctrl+c" {
-		m.appendInputText(msg.Text)
-		return m, nil
-	}
-	// Global keys.
-	switch key {
-	case "q", "ctrl+c":
-		if key == "q" && (m.filtering || m.commentEditing) {
-			return m, nil
-		}
-		if m.cancel != nil {
-			m.cancel()
-		}
-		return m, tea.Quit
-	case "?":
-		if !m.filtering && !m.commentEditing {
-			m.showHelp = !m.showHelp
-			return m, nil
-		}
-	case "A":
-		if !m.filtering && !m.commentEditing && m.debug {
-			m.showAPI = !m.showAPI
-			return m, nil
-		}
-	}
-	if key == "r" && m.tableAction != nil && m.tableAction.phase == "blocked" {
-		return m, m.startTableActionReadback()
-	}
-	if key == "r" && m.issueActionPending != nil && m.issueActionPending.blocked {
-		return m, m.startIssueReadback()
-	}
-	if key == "r" && m.mutationSession != nil && m.mutationSession.blocked {
-		return m, m.retryMutationReadback()
-	}
-
-	if m.filtering {
-		if m.screen == screenBoard {
-			return m.updateBoardSearchKey(key)
-		}
-		switch key {
-		case "enter":
-			m.filtering = false
-			m.cursor = 0
-			return m, nil
-		case "esc":
-			m.filtering = false
-			m.filter = ""
-			m.cursor = 0
-			return m, nil
-		case "backspace":
-			if len(m.filter) > 0 {
-				runes := []rune(m.filter)
-				m.filter = string(runes[:len(runes)-1])
-				m.cursor = 0
-			}
-			return m, nil
-		case "ctrl+u":
-			m.filter = ""
-			m.cursor = 0
-			return m, nil
-		default:
-			// Arrow keys still navigate while filtering.
-			switch key {
-			case "up", "k":
-				m.moveCursor(-1)
-				return m, nil
-			case "down", "j":
-				m.moveCursor(1)
-				return m, nil
-			}
-			return m, nil
-		}
-	}
-
-	if m.screen == screenBoard {
-		if m.isTable() && m.tableAction != nil {
-			switch m.tableAction.phase {
-			case "confirm":
-				switch key {
-				case "enter":
-					return m, m.confirmTableAction()
-				case "esc":
-					m.tableAction = nil
-					m.status = "Project item action cancelled"
-				}
-				return m, nil
-			case "saving", "reconciling", "blocked":
-				// Navigation does not discard a submitted action's write gate.
-			}
-		}
-		if m.isTable() && m.tableMove != nil {
-			switch key {
-			case "esc":
-				m.tableMove = nil
-				m.status = "Group move cancelled"
-			case "j", "down":
-				if m.tableMove.index+1 < len(m.tableMove.lanes) {
-					m.tableMove.index++
-				}
-			case "k", "up":
-				if m.tableMove.index > 0 {
-					m.tableMove.index--
-				}
-			case "enter":
-				return m, m.finishTableMove()
-			}
-			return m, nil
-		}
-		if m.detailVisible {
-			if m.mutationLoading {
-				if key == "esc" && m.issueActionPending != nil && m.issueActionPending.blocked {
-					m.detailVisible, m.detailLoading = false, false
-					m.detailRequestID++
-				}
-				return m, nil
-			}
-			if m.issueActionConfirm {
-				switch key {
-				case "esc":
-					m.issueActionConfirm = false
-					m.status = "Issue action cancelled"
-					return m, nil
-				case "enter":
-					m.issueActionConfirm = false
-					source, ok := m.source.(IssueActionSource)
-					if !ok {
-						m.status = "Issue actions are unavailable for this client"
-						return m, nil
-					}
-					closed := m.issueActionClosing
-					m.nextIssueAction++
-					pending := &issueActionState{id: m.nextIssueAction, itemID: m.detailItemID, issueID: m.detail.Content.ID, scope: m.currentBoardReadScope(), closed: closed}
-					m.issueActionPending = pending
-					id, itemID, gen := m.detail.Content.ID, m.detailItemID, m.generation
-					m.mutationLoading = true
-					label := "Issue reopened."
-					if closed {
-						label = "Issue closed."
-					}
-					return m, func() tea.Msg {
-						ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
-						defer cancel()
-						err := source.SetIssueClosed(ctx, id, closed)
-						return issueActionMsg{actionID: pending.id, generation: gen, itemID: itemID, err: err, status: label, closed: &closed}
-					}
-				default:
-					return m, nil
-				}
-			}
-			if m.commentEditing {
-				switch key {
-				case "esc":
-					m.commentEditing = false
-					m.commentDraft = ""
-					return m, nil
-				case "enter":
-					body := strings.TrimSpace(m.commentDraft)
-					if body == "" {
-						m.status = "Comment cannot be empty"
-						return m, nil
-					}
-					if m.detail == nil || m.detail.Content == nil || m.detail.Content.Kind != "Issue" {
-						m.status = "Comments are available for issues only"
-						return m, nil
-					}
-					source, ok := m.source.(IssueActionSource)
-					if !ok {
-						m.status = "Issue actions are unavailable for this client"
-						return m, nil
-					}
-					m.commentEditing = false
-					m.commentDraft = ""
-					m.mutationLoading = true
-					id, itemID, gen := m.detail.Content.ID, m.detailItemID, m.generation
-					return m, func() tea.Msg {
-						err := source.IssueComment(context.Background(), id, body)
-						status := "Comment added."
-						if github.IsAmbiguousMutationError(err) {
-							status = "Comment submission outcome is uncertain; check GitHub before retrying."
-						}
-						return issueActionMsg{generation: gen, itemID: itemID, err: err, status: status}
-					}
-				case "backspace":
-					comment := []rune(m.commentDraft)
-					if len(comment) > 0 {
-						m.commentDraft = string(comment[:len(comment)-1])
-					}
-					return m, nil
-				default:
-					if msg.Text != "" {
-						m.commentDraft += msg.Text
-					}
-					return m, nil
-				}
-			}
-			switch key {
-			case "esc":
-				m.detailVisible = false
-				m.detailLoading = false
-				m.detailRequestID++
-				m.detail = nil
-				m.detailErr = nil
-				return m, nil
-			case "o":
-				return m, m.openBrowserCmd()
-			case "c":
-				if m.tableAction != nil || m.mutationSession != nil || m.issueActionPending != nil {
-					m.status = "Finish or reconcile the pending project change before another issue write"
-					return m, nil
-				}
-				if m.isTable() {
-					return m, nil
-				}
-				if m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
-					m.commentEditing = true
-					m.commentDraft = ""
-					m.status = fmt.Sprintf("Comment on #%d: %s", m.detail.Content.Number, m.detail.Content.Title)
-				} else {
-					m.status = "Comments are available for issues only"
-				}
-				return m, nil
-			case "x":
-				if m.tableAction != nil || m.mutationSession != nil || m.issueActionPending != nil {
-					m.status = "Finish or reconcile the pending project change before another issue write"
-					return m, nil
-				}
-				if m.isTable() {
-					return m, nil
-				}
-				if m.detail == nil || m.detail.Content == nil || m.detail.Content.Kind != "Issue" {
-					m.status = "Close/reopen is available for issues only"
-					return m, nil
-				}
-				if !strings.EqualFold(m.detail.Content.State, "OPEN") && !strings.EqualFold(m.detail.Content.State, "CLOSED") {
-					m.status = "Issue state is unavailable; refresh details before changing it"
-					return m, nil
-				}
-				if _, ok := m.source.(IssueActionSource); !ok {
-					m.status = "Issue actions are unavailable for this client"
-					return m, nil
-				}
-				m.issueActionClosing = strings.EqualFold(m.detail.Content.State, "OPEN")
-				m.issueActionConfirm = true
-				verb := "reopen"
-				if m.issueActionClosing {
-					verb = "close"
-				}
-				m.status = fmt.Sprintf("Press enter to %s issue #%d: %s · esc cancels", verb, m.detail.Content.Number, m.detail.Content.Title)
-				return m, nil
-			case "j", "down", "J":
-				m.moveDetail(1)
-				return m, nil
-			case "k", "up", "K":
-				m.moveDetail(-1)
-				return m, nil
-			case "g":
-				m.detailOffset = 0
-				return m, nil
-			case "f", "F":
-				m.detailShowAll = !m.detailShowAll
-				m.detailOffset = 0
-				return m, nil
-			}
-			return m, nil
-		}
-		if m.isTable() {
-			switch key {
-			case "m":
-				m.beginTableMove()
-				return m, nil
-			case "J", "K":
-				if !m.selectTableBoardCursor() {
-					return m, nil
-				}
-				if key == "J" {
-					return m, m.reorderBoardItem(1)
-				}
-				return m, m.reorderBoardItem(-1)
-			case "a":
-				m.beginTableAction(false)
-				return m, nil
-			case "D", "delete":
-				m.beginTableAction(true)
-				return m, nil
-			case "j", "down":
-				m.moveTableRow(1)
-				return m, nil
-			case "k", "up":
-				m.moveTableRow(-1)
-				return m, nil
-			case "enter":
-				return m, m.openItemDetailCmd()
-			}
-			// Board lane and mutation keys have no table action.
-			if key == "h" || key == "l" || key == "left" || key == "right" || key == "H" || key == "L" {
-				return m, nil
-			}
-		}
-		switch key {
-		case "H":
-			return m, m.moveBoardLaneMutation(-1)
-		case "L":
-			return m, m.moveBoardLaneMutation(1)
-		case "J":
-			return m, m.reorderBoardItem(1)
-		case "K":
-			return m, m.reorderBoardItem(-1)
-		case "h", "left":
-			m.moveBoardLane(-1)
-			return m, nil
-		case "l", "right":
-			m.moveBoardLane(1)
-			return m, nil
-		case "j", "down":
-			m.moveBoardCard(1)
-			return m, nil
-		case "k", "up":
-			m.moveBoardCard(-1)
-			return m, nil
-		case "enter":
-			return m, m.openItemDetailCmd()
-		}
-	}
-
-	switch key {
-	case "/":
-		m.filtering = true
-		if m.screen == screenBoard {
-			m.filter = ""
-			if m.isTable() {
-				m.clampTableRow(true)
-			} else {
-				m.clampBoardCursor()
-			}
-		}
-		return m, nil
-	case "esc":
-		return m, m.goBack()
-	case "backspace":
-		return m, m.goBack()
-	case "up", "k":
-		m.moveCursor(-1)
-		return m, nil
-	case "down", "j":
-		m.moveCursor(1)
-		return m, nil
-	case "enter":
-		return m, m.selectCurrent()
-	case "p":
-		if m.screen == screenProjectPicker || (m.selectedOwner == nil && m.screen != screenBoard && m.screen != screenViewPicker) {
-			return m, nil
-		}
-		m.abandonReads()
-		if m.selectedOwner != nil && m.screen != screenProjectPicker {
-			m.screen = screenProjectPicker
-			m.cursor = 0
-			m.filter = ""
-			m.view = nil
-			m.detailVisible = false
-			m.detailLoading = false
-			m.detail = nil
-			m.detailErr = nil
-		} else if m.screen == screenBoard || m.screen == screenViewPicker {
-			m.screen = screenProjectPicker
-			m.cursor = 0
-			m.filter = ""
-			m.view = nil
-			m.detailVisible = false
-			m.detailLoading = false
-			m.detail = nil
-			m.detailErr = nil
-		}
-		return m, nil
-	case "v":
-		if m.selectedProject != nil && m.selectedOwner != nil {
-			cmd := (&m).startViewsLoad()
-			return m, cmd
-		}
-		return m, nil
-	case "r":
-		return m, m.refresh()
-	case "o":
-		return m, m.openBrowserCmd()
-	}
-	// Board navigation reserves h/l for lanes; ignore in pickers.
-	return m, nil
-}
-
-// appendInputText consumes text and paste payloads without interpreting shortcuts.
-func (m *Model) appendInputText(text string) {
-	if m.commentEditing && !m.mutationLoading {
-		m.commentDraft += text
-		return
-	}
-	if !m.filtering {
-		return
-	}
-	// Search is a single line; pasted line breaks act as word separators.
-	text = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(text)
-	m.filter += text
-	m.cursor = 0
-	if m.screen == screenBoard {
-		if m.isTable() {
-			m.clampTableRow(true)
-		} else {
-			m.clampBoardCursor()
-		}
-	}
-}
-
-func (m *Model) updateBoardSearchKey(key string) (tea.Model, tea.Cmd) {
-	clamp := func() {
-		if m.isTable() {
-			m.clampTableRow(true)
-		} else {
-			m.clampBoardCursor()
-		}
-	}
-	switch key {
-	case "enter":
-		m.filtering = false
-		clamp()
-	case "esc":
-		m.filtering = false
-		m.filter = ""
-		clamp()
-	case "backspace":
-		runes := []rune(m.filter)
-		if len(runes) > 0 {
-			m.filter = string(runes[:len(runes)-1])
-			clamp()
-		}
-	case "ctrl+u":
-		m.filter = ""
-		clamp()
-
-	}
-	return *m, nil
-}
-
 func (m *Model) moveCursor(delta int) {
 	n := m.currentListLen()
 	if n == 0 {
@@ -1534,10 +982,7 @@ func (m *Model) goBack() tea.Cmd {
 		if m.selectedProject != nil {
 			m.screen = screenViewPicker
 			m.view = nil
-			m.detailVisible = false
-			m.detailLoading = false
-			m.detail = nil
-			m.detailErr = nil
+			m.clearDetail()
 			if len(m.views) == 0 {
 				return m.loadViewsCmdFunc()
 			}
@@ -1635,9 +1080,6 @@ func (m *Model) refresh() tea.Cmd {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.generation++
 	m.itemsLoading = false
-	m.itemsLanePending = 0
-	m.itemsLoadingLanes = nil
-	m.itemsFailedLanes = nil
 	m.loading = m.screen == screenLoading
 	m.err = nil
 	m.viewsErr = nil
@@ -2199,14 +1641,6 @@ type itemsLoadingTickMsg struct {
 	generation uint64
 }
 
-type laneItemsMsg struct {
-	request    laneItemsRequest
-	items      []github.Item
-	err        error
-	generation uint64
-	scope      boardReadScope
-}
-
 type itemDetailMsg struct {
 	itemID     string
 	requestID  uint64
@@ -2302,4 +1736,11 @@ func resolveSelection(source DiscoverySource, ctx context.Context, selection Sel
 		}
 		return discoveryMsg{discovery: discovery, view: &view, generation: generation}
 	}
+}
+
+func (m *Model) clearDetail() {
+	m.detailVisible = false
+	m.detailLoading = false
+	m.detail = nil
+	m.detailErr = nil
 }
