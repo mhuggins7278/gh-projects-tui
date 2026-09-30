@@ -192,6 +192,24 @@ The probe introspects the view/configuration schema, reads the selected view thr
 
 An empty/populated date count alone does not verify start/target selection, inclusive/exclusive endpoints, one-endpoint behavior, undated placement, or iteration-to-date conversion. The proposed timeline rules above require separate nonempty web comparisons; a passing probe does not enable roadmap views.
 
+### Saved endpoint mapping decision (#25)
+
+**Decision as of 2026-09-29: no-go for enabling saved roadmaps.** No supported endpoint-mapping source was found in the inspected GitHub.com GraphQL schema or the documented REST Projects APIs. This is a dated API availability finding, not a claim that an alternate source can never exist.
+
+| Supported surface reviewed | Evidence | Endpoint-mapping result |
+| --- | --- | --- |
+| GraphQL `ProjectV2View` / `ProjectV2ViewConfiguration` | Live introspection of field names and return types; configuration contains only `visibleFields` | No saved start/target field IDs or alternate configuration object |
+| GraphQL `ProjectV2` / `ProjectV2Field` | Live introspection of project and field names/types | Generic field/view connections and definitions, not selected timeline roles; project status updates are not view configuration |
+| [REST Project views](https://docs.github.com/en/rest/projects/views) | Documentation reviewed for API version `2026-03-10`; documented view operations on that page are POST creation for user/org projects | No documented read operation for saved endpoint configuration, and creation parameters/response omit endpoint mapping. No POST was submitted |
+| [REST Projects](https://docs.github.com/en/rest/projects/projects) | Read-only GET of the public sampled project; retained only response key names | Project metadata, not view endpoint IDs. `latest_status_update` start/target dates, when present, describe a status update, not roadmap field selection |
+| [REST Project fields](https://docs.github.com/en/rest/projects/fields) | Read-only GET with `per_page=100`; 16 returned definitions including two DATE fields, no configuration keys in this sample | Definitions do not identify which fields a saved view selected. REST/GraphQL field counts differ (16/18); cross-API field-set parity is not established |
+
+The REST GET probes used `Accept: application/vnd.github+json` and `X-GitHub-Api-Version: 2026-03-10` with existing `gh` authentication. No additional permissions were requested, no authentication was changed, and no work-project data or browser credentials were used. Private projects still require appropriate project access/SSO authorization; missing schema configuration cannot be repaired by granting more token scopes.
+
+`TestRoadmapUnavailableEndpointMappingsStayBlocked` covers absent definitions, a stale visible DATE definition, ambiguous endpoint-like names, two plausible DATE fields, and unsupported TEXT definitions. All remain in the picker with no item-loading command even with write permission. These are safe rejection fixtures, not a speculative mapping resolver: stale/ambiguous mapping resolution cannot be implemented or verified until an actual mapping source exists.
+
+Revisit this decision when a supported view read API exposes selected endpoint IDs. Require an existing saved-view comparison, unique field-ID resolution, and explicit missing/stale/ambiguous/type validation before relaxing the gate. #26/#28 remain blocked for enablement; #27 can still develop a pure renderer using synthetic inputs. A manually configured local timeline needs a separate product decision and must not masquerade as a saved roadmap.
+
 The current compatibility gate accepts the field-sort and iteration projections in the table despite their outstanding web-parity checks. Do not interpret fixture coverage or schema availability as a confirmed match to GitHub's display rules.
 
 ## Mutation Reconciliation

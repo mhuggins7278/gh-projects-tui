@@ -400,6 +400,41 @@ func TestRoadmapDateAndIterationMetadataDoesNotEnableLoading(t *testing.T) {
 	}
 }
 
+func TestRoadmapUnavailableEndpointMappingsStayBlocked(t *testing.T) {
+	start := github.Field{ID: "start", Name: "Start", DataType: "DATE"}
+	target := github.Field{ID: "target", Name: "Target", DataType: "DATE"}
+	for _, test := range []struct {
+		name    string
+		project []github.Field
+		visible []github.Field
+	}{
+		{name: "missing definitions"},
+		{name: "stale visible definition", project: []github.Field{target}, visible: []github.Field{start, target}},
+		{name: "ambiguous names", project: []github.Field{start, {ID: "other-start", Name: "Start", DataType: "DATE"}, target}},
+		{name: "two plausible dates", project: []github.Field{start, target}, visible: []github.Field{start, target}},
+		{name: "unsupported definitions", project: []github.Field{{ID: "start", Name: "Start", DataType: "TEXT"}, {ID: "target", Name: "Target", DataType: "TEXT"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			view := github.View{
+				Number: 2, Name: "Roadmap", Layout: github.RoadmapLayout, ViewerCanUpdate: true,
+				ProjectFields: test.project, Fields: test.visible,
+			}
+			model := NewModel(nil)
+			model.screen = screenViewPicker
+			model.selectedOwner = &github.Owner{Login: "org", Kind: github.OrganizationOwner}
+			model.selectedProject = &github.Project{Number: 1, Title: "Project"}
+			updated, cmd := model.Update(viewDetailMsg{generation: model.generation, view: &view})
+			result := updated.(Model)
+			if cmd != nil || result.screen != screenViewPicker || result.view != nil || result.itemsLoading {
+				t.Fatal("unavailable endpoint mapping enabled a roadmap")
+			}
+			if !strings.Contains(result.status, "saved start/target field mapping") {
+				t.Fatalf("missing mapping explanation: %q", result.status)
+			}
+		})
+	}
+}
+
 func TestUnverifiedSavedFiltersStayInPickerWithoutLoadingItems(t *testing.T) {
 	for _, layout := range []github.ViewLayout{github.BoardLayout, github.TableLayout} {
 		for _, filter := range []string{"reviewers:@me", "reason:reopened", "iteration:@next", `title:"quote\"value"`} {

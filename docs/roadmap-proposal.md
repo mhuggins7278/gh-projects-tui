@@ -17,6 +17,11 @@ for a future explicitly configured timeline, not enough to mirror a saved
 roadmap. Local endpoint overrides would be a separate product decision, not a
 silent workaround for missing saved-view metadata.
 
+The [#25 endpoint-source review](api-contract.md#saved-endpoint-mapping-decision-25)
+also checked the documented REST Projects APIs and records a no-go decision as
+of 2026-09-29. Saved-view enablement remains blocked; synthetic renderer work is
+independent of that decision.
+
 See [the investigation and live probe results](api-contract.md#roadmap-layout-investigation).
 GitHub's [roadmap documentation](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-roadmap-layout)
 describes endpoint selection, Month/Quarter/Year zoom, markers, grouping, sorting,
