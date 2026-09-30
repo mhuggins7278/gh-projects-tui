@@ -12,8 +12,9 @@ import (
 
 // These inputs must come from explicit endpoint mappings. The renderer does not
 // inspect project field names/configuration or enable saved roadmap selection.
-// Inclusive bars and one-endpoint points are provisional display conventions;
-// #25/#26 must verify endpoint identity and placement before live integration.
+// A read-only web/API sample supports inclusive DATE bars and same-day/partial
+// points. This renderer remains synthetic: #26 still needs filter/sort evidence
+// and explicit policies for sample gaps before live integration in #28.
 type dateTimelineEndpoint struct {
 	Value     string
 	Available bool // available + empty means unset; unavailable is a separate state

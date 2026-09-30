@@ -31,6 +31,9 @@ func evaluateViewCompatibilityWithRoadmapReason(view github.View, roadmapReason 
 	case github.TableLayout:
 	case github.RoadmapLayout:
 		reasons = append(reasons, roadmapReason)
+		if len(view.GroupByFields) > 0 || len(view.VerticalGroupBy) > 0 {
+			reasons = append(reasons, "roadmap grouping is not supported; grouped views must not be flattened")
+		}
 	default:
 		reasons = append(reasons, fmt.Sprintf("layout %q is not supported", view.Layout))
 	}

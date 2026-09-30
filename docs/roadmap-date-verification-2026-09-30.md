@@ -1,6 +1,6 @@
 # Existing populated roadmap verification — 2026-09-30
 
-**Result: useful populated evidence, but #26 is not complete.** This read-only
+**Result: basic DATE placement verified on one populated sample; #26 is not complete.** This read-only
 probe used an existing public organization project. It did not create or edit
 project data, save view changes, change authentication, or use undocumented
 endpoints. This note retains aggregate counts and verification boundaries;
@@ -51,32 +51,67 @@ exact order. This supports the no-sort project-position order for that observed
 sample. It does not establish sorted null/tie behavior, grouped order, or the
 position of every virtualized web row.
 
-The initial web view exposed a navigation date matching the populated start of
-one two-endpoint row and the populated target of the target-only row. Those
-navigation labels provide a limited anchor check. They do not demonstrate an
-inclusive end boundary, the visual width of same-day or partial-date items, or
-the complete bar/point placement contract.
+The first attempt ended when the browser became unavailable. On resumption,
+browser navigation succeeded after one permitted retry of an automatic access
+check timeout. No authentication, permissions, or browser setup was changed.
+The API baseline and selected endpoint roles were checked again before the
+comparisons below.
 
-The browser became unavailable before further placement comparisons could be
-performed; its available-surface inventory then contained no browser. API
-pagination completed independently. No authentication or browser setup was
-changed to bypass that limitation.
+### Resumed placement comparisons
+
+The comparison used screenshots and the actual rendered DOM: calendar column
+`datetime` attributes, day widths, date-cell attributes, bar styles/rectangles,
+and displayed date tooltips. It did not read application state, script payloads,
+internal endpoints, or browser credentials. Quarter zoom used 16 pixels per day
+with weekly labels 112 pixels apart.
+
+| Existing case | Web/API comparison | Supported observation |
+| --- | --- | --- |
+| Two endpoints across a month boundary | API endpoints matched the rendered cell and tooltip; the start aligned with the calendar day, and an 11-day inclusive span measured 176 pixels | Both endpoint days are included in this range |
+| Two endpoints across a year boundary | API endpoints matched the rendered cell and tooltip; the start aligned with the calendar day, and a 72-day inclusive span measured 1,152 pixels | Calendar placement continues across the year boundary without dropping a day |
+| Longer range across multiple months/year | API endpoints matched the rendered cell; a 481-day inclusive span measured 7,696 pixels | Longer bars use the same inclusive daily scale; part of the bar was outside the viewport |
+| Same-day endpoints | Both API dates matched; the rendered start/end attributes were that date, the inline width was one day, and the tooltip showed one date | One-day placement, without an invented duration |
+| Target only | Start was absent in the API; the rendered start/end attributes both used the populated target, with a one-day inline width and single-date tooltip | Placement on the target date |
+| Start only | Target was absent in the API; the rendered start/end attributes both used the populated start, with a one-day inline width and single-date tooltip | Placement on the start date |
+| Neither endpoint populated | Both API values were absent; the title row remained, with no date cell, bar, or navigation button | No timeline placement |
+
+Single-day marks can have an 18-pixel outer rectangle despite a 16-pixel inline
+day width because of the rendered label styling. This is not evidence for a
+two-day duration. The terminal's point glyph is a coarse representation of the
+observed one-day placement, not a reproduction of GitHub's label geometry.
+
+Temporary title filters located virtualized samples. They were discarded, and
+the original URL, empty filter, and absence of a Discard button were confirmed.
+No saved filter/sort, endpoint role, item, or date was changed. These temporary
+searches do not establish parity for a nonempty **saved** filter.
+
+`TestTimelineObservedDatePlacementRules` encodes the inclusive month/year and
+same-day/partial rules with invented dates. Existing tests preserve separate
+undated, invalid, unavailable, and clipping policies. Fixture coverage does not
+convert the unobserved cases below into verified GitHub behavior.
 
 ## Remaining checks
 
-- Compare two-endpoint and same-day geometry with actual API dates, including
-  month/year boundaries and whether the target day is inclusive.
-- Compare each one-endpoint case and undated placement in the web. Date
-  population and a navigation anchor alone do not prove the proposed point rule.
+A bounded discovery of five published public projects found one other saved
+roadmap with a nonempty supported label filter. Its grouping and sort metadata
+were empty. An exact-filter GraphQL `POSITION ASC` query returned zero nodes in
+one complete page (`hasNextPage=false`, no continuation cursor); the documented
+REST saved-view item GET also returned zero items. The web showed that same
+saved filter, no unsaved-change control, and no item rows. This establishes one
+empty-result membership comparison, not populated filtered membership or
+multi-page parity. No suitable saved-sort roadmap emerged from this search.
+
 - Obtain existing unavailable/reversed cases, or preserve an explicit policy
   boundary for cases the sample does not cover; never manufacture project data
   to fill the gaps.
 - Verify any saved sorting/null/tie behavior before admitting sorted views.
-- For nonempty saved filters, retain the separate server-filter contract
-  evidence and compare a real saved roadmap's membership. This roadmap's empty
-  saved filter supplies no nonempty-filter parity evidence.
+- For populated nonempty saved filters, retain the separate server-filter
+  contract evidence and compare a real saved roadmap's membership. The first
+  sample's empty filter and the second sample's empty result do not establish
+  populated filtered membership or multi-page web parity.
 
-The synthetic renderer's bar/point conventions therefore remain provisional.
-Local endpoint mapping removes the field-selection ambiguity, but it does not
-complete #26 or authorize live integration in #28. Grouping and iteration
+The basic DATE bar/point rules now have populated web/API evidence. The complete
+live contract still lacks populated saved-filter/sort comparisons and sample-gap policies.
+Local endpoint mapping and this progress do not complete #26 or enable live
+integration in #28. Grouping and iteration
 placement remain separate verification work for #29 and #30.

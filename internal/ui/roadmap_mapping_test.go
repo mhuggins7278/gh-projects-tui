@@ -118,3 +118,28 @@ func TestLocalRoadmapMappingDirectSelectionKeepsPlacementGate(t *testing.T) {
 		t.Fatal("view listing discarded the remaining placement gate")
 	}
 }
+
+func TestRoadmapGroupingIsExplicitlyRejected(t *testing.T) {
+	field := github.Field{ID: "group-id", Name: "Group", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "option", Name: "Option"}}}
+	for _, axis := range []string{"horizontal", "vertical", "both"} {
+		t.Run(axis, func(t *testing.T) {
+			view, mappings := mappedRoadmapFixture()
+			if axis != "vertical" {
+				view.GroupByFields = []github.Field{field}
+			}
+			if axis != "horizontal" {
+				view.VerticalGroupBy = []github.Field{field}
+			}
+			model := NewModelWithHost(nil, Selection{}, "github.com")
+			for _, mapped := range []bool{false, true} {
+				if mapped {
+					model.SetRoadmapMappings(mappings)
+				}
+				compatibility := model.viewCompatibility(view)
+				if compatibility.supported() || !strings.Contains(compatibility.summary(), "roadmap grouping is not supported") {
+					t.Fatalf("%s grouping admitted or hidden (mapped=%t): %s", axis, mapped, compatibility.summary())
+				}
+			}
+		})
+	}
+}

@@ -2,7 +2,7 @@
 
 **Status: fixture-backed renderer implemented (#27); saved-roadmap integration
 blocked.** Saved roadmaps still stop in the view picker. The pure renderer uses
-explicit synthetic endpoints and provisional placement conventions. It does
+explicit synthetic endpoints and a partly verified DATE placement contract. It does
 not authorize enabling live roadmaps or creating project data to obtain samples.
 
 ## Decision and evidence
@@ -31,7 +31,8 @@ decision.
 See [the investigation and live probe results](api-contract.md#roadmap-layout-investigation).
 The [populated sample verification](roadmap-date-verification-2026-09-30.md)
 records explicit web-observed roles, complete pagination, and matching visible
-row order; bar/point geometry and nonempty saved-filter membership remain unverified.
+row order and basic inclusive bar/point geometry; nonempty saved-filter membership
+and saved-sort/null/tie behavior remain unverified.
 GitHub's [roadmap documentation](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-roadmap-layout)
 describes endpoint selection, Month/Quarter/Year zoom, markers, grouping, sorting,
 slicing, and field sums. Documentation describes the web UI, not an API contract
@@ -45,9 +46,9 @@ for their saved values or date-boundary behavior.
 - A title gutter and one row per issue, PR, or draft. Selection exposes exact
   endpoint dates and any unavailable values in detail; coarse buckets must not
   be presented as exact dates.
-- Two valid endpoints draw an inclusive bar. One endpoint draws a point. These
-  are **proposed conventions requiring web verification**, not confirmed GitHub
-  behavior. Reversed/invalid endpoints get an explicit invalid-date row; do not
+- Two valid endpoints draw an inclusive bar. One endpoint draws a point. Existing
+  populated web/API comparisons support these DATE rules, including same-day and
+  month/year boundaries. Reversed/invalid endpoints get an explicit invalid-date row; do not
   swap endpoints or invent a duration.
 - Clip bars at viewport boundaries with directional indicators. Count items
   wholly outside the range separately; allow their selection without pretending
@@ -72,7 +73,8 @@ for their saved values or date-boundary behavior.
 values with separate availability flags, a starting month, terminal dimensions,
 selection by item ID, and a loading flag. It does not inspect project fields,
 infer endpoint roles, read GitHub, or connect to `Model` or the view picker.
-Inclusive bars and one-endpoint points remain **provisional**, subject to #26.
+Inclusive DATE bars and same-day/one-endpoint points have populated web/API
+evidence. The complete live contract remains gated on the other #26 checks.
 
 The renderer displays three calendar months with adaptive day buckets and a
 title gutter. Selection shows the original start/target values separately,
@@ -112,7 +114,7 @@ mutation controls remain outside this component.
 | Concern | Initial boundary | Today |
 | --- | --- | --- |
 | Endpoint identity | Explicit start/target field IDs that resolve uniquely to project DATE definitions; source visibly disclosed | Automatic recovery unavailable; user-configured local IDs validated, with no claim of saved-selection recovery |
-| Date values | Complete nested pagination; calendar dates remain unchanged; populated, partial, unset, invalid, and unavailable cases checked against the web | Decoding fixture-backed; placement unverified |
+| Date values | Complete nested pagination; calendar dates remain unchanged; populated, partial, unset, invalid, and unavailable cases checked against the web | Basic DATE ranges, same-day, partial, and unset placement verified on one sample; reversed/unavailable cases absent, safe fixture policies retained |
 | Iteration endpoints | Defer, including mixed DATE/ITERATION endpoints and completed iterations | Definitions/values available; conversion unverified |
 | Saved filtering | Forward only supported expressions unchanged, as with boards/tables | Bounded grammar exists; roadmap membership still needs comparison |
 | Row ordering | Project position or a specifically verified saved roadmap sort; no invented date-axis coordinate | Position read verified; roadmap sort/null/tie parity unverified |

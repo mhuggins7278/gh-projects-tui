@@ -16,6 +16,42 @@ func syntheticTimelineRow(id, start, target string) dateTimelineRow {
 	return dateTimelineRow{Item: github.Item{ID: id, Content: &github.Content{Kind: "Issue", Title: id}}, Start: dateTimelineEndpoint{Value: start, Available: true}, Target: dateTimelineEndpoint{Value: target, Available: true}}
 }
 
+// These invented dates encode the observed inclusive DATE and one-day rules,
+// without retaining the public sample's dates or item metadata. They verify the
+// coarse terminal buckets, not pixel-for-pixel GitHub display parity.
+func TestTimelineObservedDatePlacementRules(t *testing.T) {
+	for _, tc := range []struct {
+		name, month, start, target, prefix string
+	}{
+		{"month boundary", "2028-01", "2028-01-28", "2028-02-07", strings.Repeat("·", 27) + "●━━━|━━━━━━●"},
+		{"year boundary", "2028-12", "2028-12-31", "2029-01-01", strings.Repeat("·", 30) + "●|●"},
+		{"same day", "2028-12", "2028-12-31", "2028-12-31", strings.Repeat("·", 30) + "●|"},
+		{"start only", "2028-12", "2028-12-31", "", strings.Repeat("·", 30) + "●|"},
+		{"target only", "2028-12", "", "2028-12-31", strings.Repeat("·", 30) + "●|"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calendar, err := newTimelineCalendar(tc.month, 95)
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := syntheticTimelineRow("invented", tc.start, tc.target)
+			bar := calendar.bar(timelineSpan(row, calendar))
+			if !strings.HasPrefix(bar, tc.prefix) {
+				t.Fatalf("placement=%s, want prefix=%s", bar, tc.prefix)
+			}
+			if tc.name == "same day" || tc.name == "start only" || tc.name == "target only" {
+				if strings.Count(bar, "●") != 1 || strings.Contains(bar, "━") {
+					t.Fatalf("one-day placement acquired a duration: %s", bar)
+				}
+			}
+		})
+	}
+	calendar, _ := newTimelineCalendar("2028-01", 95)
+	if got := calendar.bar(timelineSpan(syntheticTimelineRow("invented", "", ""), calendar)); got != "Undated" {
+		t.Fatalf("unset endpoints acquired placement: %s", got)
+	}
+}
+
 func TestTimelineDateClassificationAndClipping(t *testing.T) {
 	calendar, err := newTimelineCalendar("2024-01", 92)
 	if err != nil {
