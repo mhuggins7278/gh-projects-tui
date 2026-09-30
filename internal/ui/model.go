@@ -131,6 +131,7 @@ func (m *Model) abandonReads() {
 	m.loadingDetail, m.loadingViews, m.projectsLoading = false, false, false
 	m.itemsLoading = false
 	m.pendingMutationReload = nil
+	m.pendingIssueReload = nil
 }
 
 type screen int
@@ -186,6 +187,7 @@ type Model struct {
 	itemsErr              error
 	itemsLoadFrame        int
 	pendingMutationReload *boardReadScope
+	pendingIssueReload    *boardReadScope
 	boardLane             int
 	boardCard             int
 	boardFocusID          string
@@ -663,6 +665,7 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.generation++
 	m.pendingMutationReload = nil
+	m.pendingIssueReload = nil
 	m.items = nil
 	m.itemsLoading = true
 	m.itemsHasNext = false

@@ -81,7 +81,7 @@ func (m Model) updateIssueReadback(msg issueReadbackMsg) (tea.Model, tea.Cmd) {
 	m.issueActionPending = nil
 	m.mutationLoading = false
 	m.status = "Issue action reconciled: " + strings.ToLower(wanted)
-	return m, nil
+	return m, m.queueIssueViewReload(pending.scope)
 }
 
 func (m Model) updateIssueAction(msg issueActionMsg) (tea.Model, tea.Cmd) {
@@ -99,7 +99,13 @@ func (m Model) updateIssueAction(msg issueActionMsg) (tea.Model, tea.Cmd) {
 		m.issueActionRefreshing = false
 		m.mutationLoading = false
 		delete(m.detailCache, msg.itemID)
-		if !pending.scope.sameProject(m) || !m.detailVisible || m.detailItemID != msg.itemID {
+		if !pending.scope.sameProject(m) {
+			return m, nil
+		}
+		if !m.detailVisible || m.detailItemID != msg.itemID {
+			if msg.err == nil && msg.closed != nil {
+				return m, m.queueIssueViewReload(pending.scope)
+			}
 			return m, nil
 		}
 	} else if msg.actionID != 0 || msg.generation != m.generation || msg.itemID != m.detailItemID {
@@ -132,7 +138,40 @@ func (m Model) updateIssueAction(msg issueActionMsg) (tea.Model, tea.Cmd) {
 				m.items[i].Content.State = state
 			}
 		}
+		if reload := m.queueIssueViewReload(m.currentBoardReadScope()); reload != nil {
+			return m, reload
+		}
 	}
 	m.detailRequestID++
 	return m, m.loadItemDetailCmd(m.detailItemID, m.detailRequestID, m.currentBoardReadScope())
+}
+
+// Closing/reopening can change server-filter membership. Keep the detail open
+// while the user reads it, then re-run the saved filter on returning to the board.
+func (m *Model) queueIssueViewReload(origin boardReadScope) tea.Cmd {
+	if !origin.sameProject(*m) || m.screen != screenBoard || m.view == nil || strings.TrimSpace(m.view.Filter) == "" {
+		return nil
+	}
+	scope := m.currentBoardReadScope()
+	m.pendingIssueReload = &scope
+	return m.finishIssueViewReload()
+}
+
+func (m *Model) finishIssueViewReload() tea.Cmd {
+	if m.pendingIssueReload == nil || m.detailVisible {
+		return nil
+	}
+	scope := m.pendingIssueReload
+	m.pendingIssueReload = nil
+	if !scope.matches(*m) {
+		return nil
+	}
+	if invalidator, ok := m.source.(interface{ InvalidateReads() }); ok {
+		invalidator.InvalidateReads()
+	}
+	if m.itemsLoading {
+		m.pendingMutationReload = scope
+		return nil
+	}
+	return m.startItemsLoadWithSpinner()
 }

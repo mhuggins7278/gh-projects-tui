@@ -27,7 +27,7 @@ func (m Model) updateDetailKey(key string) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.detailRequestID++
 		m.clearDetail()
-		return m, nil
+		return m, m.finishIssueViewReload()
 	case "o":
 		return m, m.openBrowserCmd()
 	case "c":
