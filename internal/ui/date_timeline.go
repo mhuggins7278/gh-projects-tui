@@ -243,22 +243,25 @@ func renderDateTimeline(rows []dateTimelineRow, view dateTimelineViewport) strin
 		lines = append(lines, fit(header))
 	}
 	for i := start; i < end; i++ {
-		marker := "  "
-		if i == selected {
-			marker = "> "
-		}
-		title := timelineRowTitle(rows[i].Item)
-		span := timelineSpan(rows[i], calendar)
-		var line string
-		if view.Width < 60 {
-			line = marker + title + " | " + span.status + " | " + timelineEndpointText(rows[i].Start) + " → " + timelineEndpointText(rows[i].Target)
-		} else {
-			line = marker + padANSI(ansi.Truncate(title, gutter, "…"), gutter) + " | " + calendar.bar(span)
-		}
-		lines = append(lines, fit(line))
+		lines = append(lines, fit(timelineRowLine(rows[i], i == selected, calendar, view.Width, gutter)))
 	}
 	for _, line := range footer {
 		lines = append(lines, fit(line))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// Shared row geometry keeps fixture-only grouped rendering consistent with the
+// admitted ungrouped DATE timeline without coupling grouping to live metadata.
+func timelineRowLine(row dateTimelineRow, selected bool, calendar timelineCalendar, width, gutter int) string {
+	marker := "  "
+	if selected {
+		marker = "> "
+	}
+	title := timelineRowTitle(row.Item)
+	span := timelineSpan(row, calendar)
+	if width < 60 {
+		return marker + title + " | " + span.status + " | " + timelineEndpointText(row.Start) + " → " + timelineEndpointText(row.Target)
+	}
+	return marker + padANSI(ansi.Truncate(title, gutter, "…"), gutter) + " | " + calendar.bar(span)
 }

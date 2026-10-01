@@ -54,11 +54,11 @@ tables, without table mutation controls.
 | [#26](https://github.com/mhuggins7278/gh-projects-tui/issues/26) | Basic DATE placement plus populated is:issue / mapped start DATE ASC (null/ties) verified; other filters/sorts and live multi-page filtered comparisons remain gated |
 | [#27](https://github.com/mhuggins7278/gh-projects-tui/issues/27) | Bounded renderer complete |
 | [#28](https://github.com/mhuggins7278/gh-projects-tui/issues/28) | Read-only integration complete for the initial slice and verified is:issue / start DATE ASC extension; live smoke and large-fixture measurements recorded |
-| [#29](https://github.com/mhuggins7278/gh-projects-tui/issues/29) | Initial integration prerequisite satisfied; sample search found no grouped DATE roadmap; populated/unset/order verification remains gated |
+| [#29](https://github.com/mhuggins7278/gh-projects-tui/issues/29) | Synthetic grouped renderer and row-window/identity regressions complete; populated/unset/order verification and live integration remain gated |
 | [#30](https://github.com/mhuggins7278/gh-projects-tui/issues/30) | Iteration endpoints deferred pending active/completed/missing/mixed conversion verification |
 
-The [grouping sample search](roadmap-grouping-investigation-2026-10-01.md) records
-the remaining #29 verification prerequisite.
+The [grouping investigation](roadmap-grouping-investigation-2026-10-01.md) records
+the fixture renderer checkpoint, benchmark, and remaining #29 verification prerequisite.
 
 No existing project data is created or edited to manufacture verification cases.
 Do not use undocumented web endpoints, browser credentials, or authentication

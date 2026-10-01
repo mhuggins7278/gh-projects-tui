@@ -19,10 +19,35 @@ establish roadmap section order, unset placement, sorting within sections, or
 collapsed/custom group-order behavior. The fixture's ungrouped DATE sorting
 contract must not silently flatten a grouped view.
 
+## Fixture renderer checkpoint
+
+`internal/ui/grouped_date_timeline.go` now renders caller-supplied sections with
+loaded counts and explicit section/row order. It shares DATE row formatting with
+the ungrouped renderer, rejects missing/duplicate identities, and preserves
+selection by item ID. Heading lines consume the row-window budget; windows that
+start within a section carry its heading when terminal height permits.
+
+Synthetic tests cover populated, empty and unset sections, paging/search/section
+movement, date classifications and clipping, Unicode/control text, and narrow or
+short terminals. The preview labels groups synthetic and discloses unavailable
+collapsed/custom ordering. This renderer has no live adapter or compatibility
+change; fixtures do not establish GitHub grouping semantics.
+
+`go test -race ./...`, `go vet ./...`, `go vet -tags live ./...`, and the opt-in
+synthetic preview passed. A 100-section/10,000-row render benchmark at 120×30
+measured approximately 4.57 ms/op, 1,600,057 B/op and 301 allocs/op on Linux amd64
+(Intel Core Ultra 9 185H, 200 ms benchmark duration). This is renderer throughput,
+not live API latency or an end-to-end responsiveness measurement.
+
+```sh
+GH_PROJECTS_TUI_TIMELINE_PREVIEW=1 go test ./internal/ui -run '^TestGroupedTimelineSyntheticPreview$' -count=1 -v
+go test ./internal/ui -run '^$' -bench '^BenchmarkGroupedTimelineLargeFixture$' -benchmem
+```
+
 Resume #29 with an existing roadmap using explicitly observed DATE start/target
 roles and one single-select grouping field. Compare populated and unset sections,
 option order, membership, and supported sorting within each section; record which
-collapsed/custom display state is unavailable. Then build the grouped renderer
-and row-window/selection regressions for the verified subset. Multiple/vertical/
+collapsed/custom display state is unavailable. Then connect the fixture renderer
+to the verified grouping projection and live selection lifecycle. Multiple/vertical/
 iteration/multi-valued grouping, broader filters/sorts, and mutations stay outside
 that initial grouping slice.
