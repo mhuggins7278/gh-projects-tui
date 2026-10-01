@@ -1,9 +1,9 @@
 Synthetic terminal preview for issue #27. No live GitHub data.
-Bars and points are provisional; saved roadmaps remain blocked.
+Basic DATE bars/points are verified on one sample; explicitly mapped unfiltered, unsorted, ungrouped roadmaps can open read-only.
 Reproduce: GH_PROJECTS_TUI_TIMELINE_PREVIEW=1 go test ./internal/ui -run '^TestTimelineSyntheticPreview$' -count=1 -v
 
 120-column synthetic preview:
-Local 3 months · proposed bars/points · 2024-01–2024-03
+Local 3 months · read-only · 2024-01–2024-03
 Loaded 7 · outside 1 · undated 1 · unavailable 1 · invalid 1
   Item                                     | Jan 2024                 |Feb 2024                |Mar 2024
   Issue: crosses left boundary             | <━━━━━━━━━━━━●···········|························|························
@@ -16,7 +16,7 @@ Loaded 7 · outside 1 · undated 1 · unavailable 1 · invalid 1
 Start: 2025-01-01
 Target: 2025-03-01
 48-column synthetic preview:
-Date list (narrow terminal) · proposed placement
+Date list (narrow terminal) · read-only
 Loaded 7 · outside 1 · undated 1 · unavailable …
   Issue: crosses left boundary | Dated | 2023-1…
   PR: February leap-day point | Dated | unset →…

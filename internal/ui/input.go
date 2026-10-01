@@ -57,7 +57,11 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.detailVisible {
 			return m.updateDetailKey(key)
 		}
-		if m.isTable() {
+		if m.isTimeline() {
+			if cmd, handled := m.handleTimelineKey(key); handled {
+				return m, cmd
+			}
+		} else if m.isTable() {
 			if cmd, handled := m.handleTableNavigationKey(key); handled {
 				return m, cmd
 			}
@@ -144,7 +148,7 @@ func (m *Model) resetSearchCursor() {
 	m.refreshFocusID = ""
 	m.cursor = 0
 	if m.screen == screenBoard {
-		if m.isTable() {
+		if m.isRowLayout() {
 			m.clampTableRow(true)
 		} else {
 			m.clampBoardCursor()

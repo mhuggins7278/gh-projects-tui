@@ -449,6 +449,9 @@ func itemFieldValue(field github.Field, item github.Item) (github.FieldValue, bo
 }
 
 func (m Model) boardMutationUnavailable() string {
+	if m.isTimeline() {
+		return "Timelines are read-only"
+	}
 	if m.issueActionPending != nil {
 		return "Reconcile the pending issue action before changing project items"
 	}
@@ -830,6 +833,10 @@ func (m Model) renderBoardContent(b *strings.Builder) {
 	}
 	if m.view == nil {
 		b.WriteString("No view loaded. Press v to pick a view.\n")
+		return
+	}
+	if m.isTimeline() {
+		m.renderTimelineContent(b)
 		return
 	}
 	if m.view.Layout == github.TableLayout {

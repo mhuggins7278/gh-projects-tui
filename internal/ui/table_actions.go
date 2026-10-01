@@ -156,6 +156,9 @@ func (m *Model) beginTableAction(remove bool) {
 }
 
 func (m Model) tableActionUnavailable() string {
+	if m.isTimeline() {
+		return "Timelines are read-only"
+	}
 	if m.issueActionPending != nil {
 		return "Reconcile the pending issue action first"
 	}

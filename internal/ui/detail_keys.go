@@ -35,7 +35,7 @@ func (m Model) updateDetailKey(key string) (tea.Model, tea.Cmd) {
 			m.status = "Finish or reconcile the pending project change before another issue write"
 			return m, nil
 		}
-		if m.isTable() {
+		if m.isRowLayout() {
 			return m, nil
 		}
 		if m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
@@ -51,7 +51,7 @@ func (m Model) updateDetailKey(key string) (tea.Model, tea.Cmd) {
 			m.status = "Finish or reconcile the pending project change before another issue write"
 			return m, nil
 		}
-		if m.isTable() {
+		if m.isRowLayout() {
 			return m, nil
 		}
 		if m.detail == nil || m.detail.Content == nil || m.detail.Content.Kind != "Issue" {
@@ -92,6 +92,9 @@ func (m Model) updateDetailKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateIssueConfirmationKey(key string) (tea.Model, tea.Cmd) {
+	if m.isTimeline() {
+		return m, nil
+	}
 	switch key {
 	case "esc":
 		m.issueActionConfirm = false
@@ -126,6 +129,9 @@ func (m Model) updateIssueConfirmationKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateCommentKey(key string) (tea.Model, tea.Cmd) {
+	if m.isTimeline() {
+		return m, nil
+	}
 	switch key {
 	case "esc":
 		m.commentEditing = false

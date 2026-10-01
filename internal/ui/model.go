@@ -161,6 +161,7 @@ type Model struct {
 	host            string
 	debug           bool
 	roadmapMappings config.RoadmapMappings
+	timelineMonth   string
 
 	screen                screen
 	cursor                int
@@ -374,6 +375,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.view = msg.view
+		m.timelineMonth = time.Now().Format("2006-01")
 		m.tableRow = 0
 		m.tableFocusID = ""
 		m.tableMove = nil
@@ -510,6 +512,7 @@ func (m Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) enterBoardFromDiscovery() {
 	m.screen = screenBoard
+	m.timelineMonth = time.Now().Format("2006-01")
 	m.cursor = 0
 	m.tableRow = 0
 	m.tableFocusID = ""
@@ -680,7 +683,7 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	m.boardLane = 0
 	m.boardCard = 0
 	m.boardFocusID = ""
-	if m.view.Layout != github.TableLayout {
+	if !m.isRowLayout() {
 		m.tableRow = 0
 		m.tableFocusID = ""
 	}
@@ -716,6 +719,7 @@ func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
 	scope := m.currentBoardReadScope()
 	ctx := m.ctx
 	source := m.source
+	timeline := m.isTimeline()
 	return func() tea.Msg {
 		loader, ok := source.(ItemsSource)
 		if !ok {
@@ -726,7 +730,7 @@ func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
 		}
 		var page github.ItemsPage
 		var err error
-		if selective, ok := source.(BoardItemsSource); ok {
+		if selective, ok := source.(BoardItemsSource); ok && !timeline {
 			page, err = selective.PageBoardItems(ctx, owner, project, filter, after, fields)
 		} else {
 			page, err = loader.PageItems(ctx, owner, project, filter, after)
@@ -760,7 +764,7 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 		m.itemsLoading = false
 		m.itemsErr = msg.err
 		m.itemsHasNext = false
-		if m.isTable() {
+		if m.isRowLayout() {
 			m.clampTableRow(true)
 		}
 		return m, m.finishMutationReload()
@@ -770,7 +774,7 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	m.itemsCursor = msg.page.EndCursor
 	m.itemsErr = nil
 	if m.refreshFocusID != "" {
-		if m.isTable() {
+		if m.isRowLayout() {
 			m.tableFocusID = m.refreshFocusID
 		} else {
 			m.boardFocusID = m.refreshFocusID
@@ -778,7 +782,7 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.page.HasNext {
 		m.itemsLoading = true
-		if m.isTable() {
+		if m.isRowLayout() {
 			m.clampTableRow(false)
 		} else {
 			m.clampBoardCursor()
@@ -786,7 +790,7 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 		return m, m.itemsPageCmd(msg.page.EndCursor, false)
 	}
 	m.itemsLoading = false
-	if m.isTable() {
+	if m.isRowLayout() {
 		m.clampTableRow(true)
 	} else {
 		m.clampBoardCursor()
@@ -869,7 +873,7 @@ func (m *Model) openItemDetailCmd() tea.Cmd {
 	m.detailVisible = true
 	m.detailItemID = item.ID
 	m.detailRequestID++
-	if m.isTable() {
+	if m.isRowLayout() {
 		m.tableFocusID = item.ID
 	} else {
 		m.boardFocusID = item.ID
@@ -1473,7 +1477,7 @@ func (m Model) footerHints() string {
 			return "enter confirm · esc cancel" + m.debugHint()
 		}
 		hints := "j/k scroll · f fields · o browser · esc close · q quit"
-		if !m.isTable() && m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
+		if !m.isRowLayout() && m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
 			hints = "j/k scroll · f fields · c comment · x close/reopen · o browser · esc close · q quit"
 		}
 		return hints + m.debugHint()
@@ -1486,6 +1490,9 @@ func (m Model) footerHints() string {
 	case screenViewPicker:
 		return "j/k move · enter open · / filter · esc projects · p projects · r refresh · ? help · q quit" + m.debugHint()
 	case screenBoard:
+		if m.isTimeline() {
+			return "j/k rows · h/l months · g today · enter details · / search · r refresh · o browser · v views · ? help · q quit" + m.debugHint()
+		}
 		if m.isTable() {
 			return "j/k rows · enter details · a archive · D remove · m group · J/K reorder · / search · o browser · ? help · q quit" + m.debugHint()
 		}
@@ -1514,6 +1521,9 @@ func (m Model) helpText() string {
 }
 
 func (m Model) layoutHelpText() string {
+	if m.isTimeline() {
+		return "Timeline is read-only. j/k selects rows; h/l shifts the local three-month range; g returns to this month.\n/ searches loaded rows; enter opens detail; f toggles fields in detail. Saved display settings are unavailable."
+	}
 	if m.isTable() {
 		return "In tables, j/k moves rows, / searches, and enter opens detail. a archives; D removes from the project (confirm each).\n" +
 			"m changes the saved group; J/K reorders project-wide when position-sorted and fully loaded.\n" +

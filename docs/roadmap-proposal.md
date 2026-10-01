@@ -1,161 +1,86 @@
-# Read-only terminal roadmap proposal (#22)
+# Read-only terminal roadmap scope
 
-**Status: fixture-backed renderer implemented (#27); saved-roadmap integration
-blocked.** Saved roadmaps still stop in the view picker. The pure renderer uses
-explicit synthetic endpoints and a partly verified DATE placement contract. It does
-not authorize enabling live roadmaps or creating project data to obtain samples.
+**2026-10-01: the user approved the initial unfiltered, unsorted, ungrouped DATE
+slice.** This supersedes the broader enablement gate recorded on 2026-09-30.
+A subsequent populated comparison verified `is:issue` and one mapped start DATE
+ASC sort. Other filters/sorts remain blocked while #26's comparisons proceed.
 
-## Decision and evidence
+## Supported boundary
 
-Do not infer start/target fields from their names, visible-field order, the only
-two DATE fields in a project, or populated item values. GitHub lets users select
-date **or iteration** fields for each endpoint, but the introspected GitHub.com
-view/configuration schema exposes neither selection. It also lacks saved zoom,
-viewport range, markers, slicing, collapsed groups, and custom group order.
+- Explicit local host/project/view mappings select start and target IDs. Both
+  must resolve uniquely to complete project DATE definitions. No names, visible
+  field order, or populated values are used to guess endpoint roles.
+- Only saved roadmaps with an empty or `is:issue` filter and no grouping open.
+  Sorting is absent or one ASC sort on the mapped start DATE field. Both picker and direct startup enforce the boundary.
+- Complete item field connections and nested pagination preserve incoming project-position
+  order and date strings. A verified explicit start DATE ASC sort keeps unset
+  values last and POSITION ties; no sort is invented for unsorted views. No
+  unfiltered substitute is applied.
+- Inclusive bars, same-day/partial points, and undated nonplacement use the bounded
+  [populated web/API evidence](roadmap-date-verification-2026-09-30.md).
+- Reversed/invalid dates are labeled invalid without swapping endpoints; missing
+  content, unavailable values, and duplicate mapped value IDs are unavailable.
+  These are conservative client policies for sample gaps, not verified web geometry.
+- A local three-calendar-month window starts at the current month. `h/l` shifts
+  one month and `g` returns to the current month. Saved zoom/range, markers,
+  slicing, and field sums are unavailable and disclosed.
+- Clip bars with directional indicators; keep wholly out-of-range rows selectable
+  and counted. Widths below 60 columns use a date-list fallback. Exact selected
+  endpoint values remain visible within available terminal dimensions.
+- `j/k` selects rows, `/` searches loaded rows, `enter` opens lazy detail, `o`
+  opens the selected item/project, and `r` refreshes saved metadata and items.
+  Selection follows item ID across pages/search/refresh. Counts remain loaded
+  counts until pagination completes; search does not alter the saved filter.
+- Refresh rejects newly unsupported filters/sorts/groups/mappings; cancellation,
+  read scopes, generations, and detail request IDs reject obsolete results.
+- Timelines remain read-only even with write permission. Project moves/reorders,
+  archive/remove, rescheduling, and issue comment/close/reopen controls are gated.
 
-Generic date/iteration values and project position are readable. An explicit
-local-mapping product decision was approved on 2026-09-30. The
-[local mapping configuration](local-roadmap-mappings.md) supplies user-selected
-DATE field IDs for a host/project/view and validates them against complete
-definitions. It does not mirror saved endpoint settings, remove the placement
-verification gate, or change the API no-go decision.
+The [2026-10-01 filter/order evidence](roadmap-filter-order-verification-2026-10-01.md)
+records the 71-row membership, populated/null/tie order comparison, and remaining
+verification limits.
 
-The [#25 endpoint-source review](api-contract.md#saved-endpoint-mapping-decision-25)
-also checked the documented REST Projects APIs and records a no-go decision as
-of 2026-09-29, reconfirmed by schema and REST documentation checks on 2026-09-30.
-That investigation is complete, while an automatic saved-endpoint source remains
-unavailable. Explicit local roles are now configurable; live rendering remains
-blocked on verified placement. Synthetic renderer work is independent of that
-decision.
+Configuration and controls: [local mapping guide](local-roadmap-mappings.md).
+The pure renderer is in `internal/ui/date_timeline.go`; its live adapter is in
+`internal/ui/timeline.go`. Navigation reuses the row-selection lifecycle used by
+tables, without table mutation controls.
 
-See [the investigation and live probe results](api-contract.md#roadmap-layout-investigation).
-The [populated sample verification](roadmap-date-verification-2026-09-30.md)
-records explicit web-observed roles, complete pagination, and matching visible
-row order and basic inclusive bar/point geometry; nonempty saved-filter membership
-and saved-sort/null/tie behavior remain unverified.
-GitHub's [roadmap documentation](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-roadmap-layout)
-describes endpoint selection, Month/Quarter/Year zoom, markers, grouping, sorting,
-slicing, and field sums. Documentation describes the web UI, not an API contract
-for their saved values or date-boundary behavior.
+## Remaining work
 
-## Proposed first representation
+| Issue | Status |
+| --- | --- |
+| [#22](https://github.com/mhuggins7278/gh-projects-tui/issues/22) | Investigation complete |
+| [#25](https://github.com/mhuggins7278/gh-projects-tui/issues/25) | Automatic saved endpoint recovery unavailable; explicit local mappings approved |
+| [#26](https://github.com/mhuggins7278/gh-projects-tui/issues/26) | Basic DATE placement plus populated is:issue / mapped start DATE ASC (null/ties) verified; other filters/sorts and live multi-page filtered comparisons remain gated |
+| [#27](https://github.com/mhuggins7278/gh-projects-tui/issues/27) | Bounded renderer complete |
+| [#28](https://github.com/mhuggins7278/gh-projects-tui/issues/28) | Read-only integration complete for the initial slice and verified is:issue / start DATE ASC extension; live smoke and large-fixture measurements recorded |
+| [#29](https://github.com/mhuggins7278/gh-projects-tui/issues/29) | Initial integration prerequisite satisfied; sample search found no grouped DATE roadmap; populated/unset/order verification remains gated |
+| [#30](https://github.com/mhuggins7278/gh-projects-tui/issues/30) | Iteration endpoints deferred pending active/completed/missing/mixed conversion verification |
 
-- A fixed three-calendar-month viewport with month headers and daily buckets
-  within each month. Bucket width adapts to terminal width; dates do not acquire
-  time-of-day or local-time-zone offsets.
-- A title gutter and one row per issue, PR, or draft. Selection exposes exact
-  endpoint dates and any unavailable values in detail; coarse buckets must not
-  be presented as exact dates.
-- Two valid endpoints draw an inclusive bar. One endpoint draws a point. Existing
-  populated web/API comparisons support these DATE rules, including same-day and
-  month/year boundaries. Reversed/invalid endpoints get an explicit invalid-date row; do not
-  swap endpoints or invent a duration.
-- Clip bars at viewport boundaries with directional indicators. Count items
-  wholly outside the range separately; allow their selection without pretending
-  they are undated or absent from the saved filter.
-- Label rows with both endpoints unset as undated. Label unavailable fields or
-  inaccessible content as unavailable. Preserve the supplied order rather than
-  regrouping these rows and changing the saved sort.
-- Preserve verified saved row sorting, with project position as a stable tie
-  breaker. With no explicit saved sort, preserve project position; do not
-  silently replace it with start-date sorting.
-- Keep selection stable by item ID during paging. Counts are explicitly loaded
-  counts until pagination finishes. Local search must not alter saved filtering.
-- On terminals too narrow for the title gutter plus all three months, use a
-  labeled date-list fallback rather than a misleading compressed chart.
-- Label zoom/range as local defaults when their saved state cannot be restored.
-  Do not claim exact web parity. Read-only navigation, detail, refresh, and open
-  in GitHub belong to the later integration; the pure renderer has no controls.
+The [grouping sample search](roadmap-grouping-investigation-2026-10-01.md) records
+the remaining #29 verification prerequisite.
 
-## Implemented synthetic renderer (#27)
+No existing project data is created or edited to manufacture verification cases.
+Do not use undocumented web endpoints, browser credentials, or authentication
+changes to obtain missing saved settings. Local mapping does not imply saved-view
+parity. Historical API/sample results remain in the linked evidence notes.
 
-`internal/ui/date_timeline.go` accepts ordered item rows, explicit start/target
-values with separate availability flags, a starting month, terminal dimensions,
-selection by item ID, and a loading flag. It does not inspect project fields,
-infer endpoint roles, read GitHub, or connect to `Model` or the view picker.
-Inclusive DATE bars and same-day/one-endpoint points have populated web/API
-evidence. The complete live contract remains gated on the other #26 checks.
+## Verification
 
-The renderer displays three calendar months with adaptive day buckets and a
-title gutter. Selection shows the original start/target values separately,
-including `unset` and `unavailable`; the coarse axis is not an exact-date readout.
-Clipped bars use `<`/`>` indicators. Rows wholly before or after the viewport
-remain in the supplied order, contribute to the outside count, and can be
-selected. Undated, unavailable, and invalid/reversed rows have distinct labels.
+The [10,000-row integration measurement](roadmap-performance-2026-10-01.md)
+records progressive rendering, input latency, stable selection, and logical
+page/detail call counts in position and verified DATE-sort modes.
 
-Widths below 60 columns use a labeled date list. Every line fits the supplied
-width; long rows are truncated, with selected endpoint values shown below them.
-Short terminals prioritize the selected row, then endpoint lines, then headers.
-At extreme dimensions, text and endpoint details can also be truncated. Visible
-rows are bounded by height, while loaded counts describe all supplied rows.
-Paging can append rows without losing selection by ID. Classification scans the
-loaded rows; only the visible window is formatted, without allocating a date-span
-array for the full input.
-
-Fixtures cover leap days, month/year boundaries, year-one dates, partial values,
-unset/unavailable/invalid/reversed values, both clipping directions, wholly
-outside dates, mixed content kinds, input order, Unicode/control characters,
-zero/narrow/wide/short terminals, and 10,000 items. All data is invented; these
-tests do not establish GitHub web placement or saved sort parity.
+Model fixtures cover both owner kinds at startup, metadata/mapping compatibility,
+progressive pagination, full endpoint reads, project-position order, selected
+identity, local search, range movement, resizing, refresh rejection, obsolete
+responses, and read-only guards. Renderer fixtures cover inclusive date rules,
+leap days, month/year boundaries, partial/unset/invalid/unavailable cases,
+clipping, narrow/short terminals, Unicode, and 10,000 items.
 
 ```sh
-go test ./internal/ui -run '^TestTimeline'
+go test -race ./...
+go vet ./...
 GH_PROJECTS_TUI_TIMELINE_PREVIEW=1 go test ./internal/ui -run '^TestTimelineSyntheticPreview$' -count=1 -v
 go test ./internal/ui -run '^$' -bench '^BenchmarkDateTimelineLargeFixture$' -benchmem
 ```
-
-The [recorded terminal preview](date-timeline-preview.txt) shows wide and narrow
-synthetic layouts. #28 still requires #25/#26 before connecting this component
-to live saved views. Iterations, grouping, markers, slicing, field sums, and
-mutation controls remain outside this component.
-
-## Compatibility gates for a future implementation
-
-| Concern | Initial boundary | Today |
-| --- | --- | --- |
-| Endpoint identity | Explicit start/target field IDs that resolve uniquely to project DATE definitions; source visibly disclosed | Automatic recovery unavailable; user-configured local IDs validated, with no claim of saved-selection recovery |
-| Date values | Complete nested pagination; calendar dates remain unchanged; populated, partial, unset, invalid, and unavailable cases checked against the web | Basic DATE ranges, same-day, partial, and unset placement verified on one sample; reversed/unavailable cases absent, safe fixture policies retained |
-| Iteration endpoints | Defer, including mixed DATE/ITERATION endpoints and completed iterations | Definitions/values available; conversion unverified |
-| Saved filtering | Forward only supported expressions unchanged, as with boards/tables | Bounded grammar exists; roadmap membership still needs comparison |
-| Row ordering | Project position or a specifically verified saved roadmap sort; no invented date-axis coordinate | Position read verified; roadmap sort/null/tie parity unverified |
-| Grouping | Initially no grouping; reject grouped roadmaps rather than flattening them. Later single-select groups need populated/unset and order verification | Generic metadata available; sampled roadmaps ungrouped |
-| Vertical/multi-valued grouping | Defer | No roadmap projection contract |
-| Zoom/range | Explicitly disclosed local three-month viewport, subject to review of the parity limitation | Saved settings not exposed |
-| Markers/slicing/field sums | Defer and disclose that their saved state is unavailable | Not exposed in view configuration |
-| Writes | None, even with `viewerCanUpdate=true` | Picker blocks roadmap item loading |
-
-## Evidence required before enabling anything
-
-1. For a user-configured timeline, supply explicit local endpoint IDs and resolve
-   them uniquely against complete DATE definitions. Automatic restoration of
-   saved endpoint choices remains blocked until a supported API source exists.
-   Keep the user-configured source visibly distinct from recovered settings.
-2. Compare existing populated roadmaps with the web, without creating/editing
-   project data: two endpoints, same-day endpoints, each one-endpoint case,
-   unset/unavailable values, reversed dates, and month/year boundaries.
-3. Establish grouping and row-order semantics, including saved sorts, nulls,
-   ties, and filtered membership. An unfiltered baseline is not saved-view parity.
-4. Exercise multi-page item/nested-field reads, clipped/out-of-range dates, narrow
-   terminals, progressive selection, and refresh with synthetic fixtures.
-5. Review the local zoom/range and omitted-display-setting limitations. Approval
-   of this proposal alone does not verify the missing GitHub semantics.
-
-Do not use undocumented web endpoints, browser-session credentials, or changes
-to GitHub authentication as an implicit part of this investigation. Any alternate
-configuration source requires a separate, explicit review.
-
-## Tracked follow-up work
-
-| Issue | Scope | Dependencies |
-| --- | --- | --- |
-| [#25](https://github.com/mhuggins7278/gh-projects-tui/issues/25) | Investigation complete: no-go decision recorded | Automatic saved-role recovery unavailable; subsequent local configuration approved |
-| [#26](https://github.com/mhuggins7278/gh-projects-tui/issues/26) | Verify populated date placement, saved filtering, and row order | Needs representative populated web/API comparisons with explicitly configured endpoint roles; automatic saved-role recovery remains unavailable |
-| [#27](https://github.com/mhuggins7278/gh-projects-tui/issues/27) | Bounded renderer, clipping, date-list fallback, and fixtures implemented | Fixture-only; live use requires #25/#26 |
-| [#28](https://github.com/mhuggins7278/gh-projects-tui/issues/28) | Safe read-only integration, navigation, and responsiveness | Blocked on #26; explicit local mapping and renderer #27 are implemented |
-| [#30](https://github.com/mhuggins7278/gh-projects-tui/issues/30) | Iteration endpoints (deferred) | Blocked: initial verified timeline and iteration-placement comparisons; independent of grouping |
-| [#29](https://github.com/mhuggins7278/gh-projects-tui/issues/29) | Single-select grouping (deferred) | Blocked: initial verified timeline and grouping/order comparisons; independent of iteration endpoints |
-
-Investigation and proposal work in #22 is complete. Closing #22/#25 records the
-finished investigation and its no-go decision, without enabling saved roadmap
-rendering or relaxing any compatibility gate. #26/#28/#29/#30 remain open for the
-unfulfilled feature prerequisites above.

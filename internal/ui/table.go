@@ -223,7 +223,7 @@ func (m Model) selectedTableRow(items []github.Item) int {
 }
 
 func (m Model) selectedItem() (github.Item, bool) {
-	if !m.isTable() {
+	if !m.isRowLayout() {
 		return m.selectedBoardItem()
 	}
 	items := m.tableItems()

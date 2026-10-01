@@ -57,17 +57,43 @@ local resolver; this is not a claim about GitHub's endpoint-picker behavior.
 ## Current boundary
 
 The saved-view picker labels matching entries as **user-configured mapping**.
-Opening one reads its metadata and reports the resolved start/target names or an
-actionable validation error. Direct `--owner/--project/--view` startup uses the
-same validation. Saved API metadata and caches are not rewritten by the mapping.
+Opening one reads complete project definitions and validates both selected IDs.
+Direct `--owner/--project/--view` startup uses the same validation. Saved API
+metadata and caches are not rewritten by the mapping.
 
-**The live timeline is still gated on placement verification.** A valid mapping
-reports that remaining gate and stays in the picker. It starts no item load or
-mutation path, even with write permission. The synthetic three-month renderer
-remains fixture-only. These mappings provide an explicit local source for future
-verification/integration; they do not complete #26/#28 or imply saved-view parity.
+## Supported read-only slice — 2026-10-01
 
-The [API investigation](api-contract.md#saved-endpoint-mapping-decision-25)
-records the unavailable automatic source. The
-[roadmap proposal](roadmap-proposal.md) tracks placement, integration, grouping,
-and iteration prerequisites.
+A valid mapping opens a timeline when the saved filter is empty or exactly
+`is:issue`, grouping is absent, and sorting is absent or one ascending sort on
+the mapped start DATE field. Other roadmaps remain
+in the picker with an explanation. This scope was approved on 2026-10-01;
+the subsequent [populated comparison](roadmap-filter-order-verification-2026-10-01.md)
+verified the bounded `is:issue` / start DATE ASC extension. Other filters/sorts
+and live multi-page filtered comparisons remain deferred in #26.
+
+The initial local range starts at the current month and spans three calendar
+months. `j/k` or up/down selects rows; `h/l` or left/right shifts the range by one
+month; `g` returns to the current month. `/` searches loaded rows, `enter` opens
+detail, `o` opens the selected item (or project for drafts/unavailable URLs),
+`r` rereads saved metadata and reloads items, and `v` returns to saved views.
+Narrow terminals show a date list. Refresh preserves selected identity and the
+local range; newly unsupported metadata returns the view to the picker.
+
+Both endpoint days are included in valid bars. Same-day and single-endpoint
+values show a point. Unset endpoints stay undated; unavailable content/values
+stay unavailable; invalid or reversed dates get an invalid-date row without
+swapping dates. The latter cases are conservative client policies, not claims
+about GitHub's unobserved placement. All rows remain selectable, including dates
+outside the local range. Counts describe loaded rows while pagination runs.
+
+No timeline controls submit writes, including issue comments/close/reopen in
+detail, project moves/reordering, archive/remove, or date rescheduling, even when
+the viewer has write permission. Full item field connections are read by ID,
+including nested pagination; the name-based selective board projection is not
+used for endpoint resolution.
+
+Saved zoom/range, markers, slicing, and field sums are unavailable and are
+explicitly disclosed. Iteration endpoints and grouping remain deferred. These
+local mappings do not recover GitHub's saved endpoint choices or establish exact
+web parity. See [the API investigation](api-contract.md#saved-endpoint-mapping-decision-25)
+and [the current roadmap scope](roadmap-proposal.md).

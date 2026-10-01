@@ -118,5 +118,132 @@ func TestLiveRoadmapReadContract(t *testing.T) {
 		after = page.EndCursor
 	}
 	t.Logf("unfiltered POSITION baseline: %d unique items over %d pages, %d populated date values, %d populated iteration values", len(seen), pages, dateValues, iterationValues)
-	t.Log("endpoint mapping and web placement remain unverified; roadmap rendering stays disabled")
+	t.Log("this unfiltered baseline alone does not verify endpoint mapping, web placement, or saved-filter/sort parity")
+}
+
+// This optional probe verifies a populated exact is:issue saved filter against
+// the same project's complete POSITION baseline. Web ordering remains a separate
+// DOM comparison; success here does not admit other filters or sorts.
+func TestLiveRoadmapSavedIssueFilter(t *testing.T) {
+	if os.Getenv("GH_PROJECTS_TUI_LIVE_ROADMAP_FILTER") != "1" {
+		t.Skip("opt-in read-only saved roadmap filter comparison")
+	}
+	owner := Owner{Login: os.Getenv("GH_PROJECTS_TUI_LIVE_OWNER"), Kind: UserOwner}
+	if os.Getenv("GH_PROJECTS_TUI_LIVE_OWNER_KIND") == "organization" {
+		owner.Kind = OrganizationOwner
+	}
+	project, err := strconv.Atoi(os.Getenv("GH_PROJECTS_TUI_LIVE_PROJECT"))
+	if err != nil || project <= 0 || owner.Login == "" {
+		t.Fatal("supply an existing owner and positive project number")
+	}
+	viewNumber, err := strconv.Atoi(os.Getenv("GH_PROJECTS_TUI_LIVE_VIEW"))
+	if err != nil || viewNumber <= 0 {
+		t.Fatal("supply an existing saved roadmap number")
+	}
+	client, err := NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	// Visibility is checked before reading configuration or item content.
+	branch := "user"
+	if owner.Kind == OrganizationOwner {
+		branch = "organization"
+	}
+	var visibility struct {
+		User, Organization *struct {
+			Project *struct{ Public bool } `json:"projectV2"`
+		}
+	}
+	query := `query PublicRoadmap($login:String!,$project:Int!){` + branch + `(login:$login){projectV2(number:$project){public}}}`
+	if err := client.graphql.DoWithContext(ctx, query, map[string]interface{}{"login": owner.Login, "project": project}, &visibility); err != nil {
+		t.Fatal("public visibility check failed")
+	}
+	visible := visibility.User
+	if owner.Kind == OrganizationOwner {
+		visible = visibility.Organization
+	}
+	if visible == nil || visible.Project == nil || !visible.Project.Public {
+		t.Fatal("probe requires an existing public project")
+	}
+	view, err := client.OpenView(ctx, owner, project, viewNumber)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Layout != RoadmapLayout || view.Filter != "is:issue" || len(view.GroupByFields) != 0 || len(view.VerticalGroupBy) != 0 || len(view.SortByFields) != 1 || view.SortByFields[0].Field.DataType != "DATE" || view.SortByFields[0].Direction != "ASC" {
+		t.Fatal("sample must be an ungrouped saved is:issue roadmap with one DATE ASC sort")
+	}
+	read := func(filter string) ([]Item, int) {
+		var items []Item
+		seen := map[string]bool{}
+		cursors := map[string]bool{}
+		after := ""
+		pages := 0
+		for {
+			page, err := client.PageItems(ctx, owner, project, filter, after)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pages++
+			for _, item := range page.Items {
+				if seen[item.ID] {
+					t.Fatal("duplicate item ID")
+				}
+				seen[item.ID] = true
+				items = append(items, item)
+			}
+			if !page.HasNext {
+				break
+			}
+			if page.EndCursor == "" || cursors[page.EndCursor] || page.EndCursor == after {
+				t.Fatal("cursor did not advance")
+			}
+			after = page.EndCursor
+			cursors[after] = true
+		}
+		return items, pages
+	}
+	baseline, baselinePages := read("")
+	filtered, filteredPages := read(view.Filter)
+	expected := map[string]bool{}
+	excluded := 0
+	for _, item := range baseline {
+		if item.Content == nil {
+			t.Fatal("inaccessible baseline content prevents full membership comparison")
+		}
+		if item.Content.Kind == "Issue" {
+			expected[item.ID] = true
+		} else {
+			excluded++
+		}
+	}
+	if len(filtered) == 0 || excluded == 0 || len(filtered) != len(expected) {
+		t.Fatal("sample lacks populated inclusion/exclusion parity")
+	}
+	dates := map[string]int{}
+	unset := 0
+	for _, item := range filtered {
+		if !expected[item.ID] || item.Content == nil || item.Content.Kind != "Issue" {
+			t.Fatal("saved filter membership differs from baseline issue membership")
+		}
+		date := ""
+		for _, value := range item.FieldValues {
+			if value.FieldID == view.SortByFields[0].Field.ID && value.Available {
+				date = value.Value
+			}
+		}
+		if date == "" {
+			unset++
+		} else {
+			dates[date]++
+		}
+	}
+	ties := 0
+	for _, count := range dates {
+		if count > 1 {
+			ties++
+		}
+	}
+	t.Logf("baseline: %d unique items, %d pages; exact saved filter: %d issues, %d pages; excluded non-issues: %d; unset sort values: %d; tied date groups: %d", len(baseline), baselinePages, len(filtered), filteredPages, excluded, unset, ties)
 }

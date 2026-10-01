@@ -10,11 +10,9 @@ import (
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
 
-// These inputs must come from explicit endpoint mappings. The renderer does not
-// inspect project field names/configuration or enable saved roadmap selection.
-// A read-only web/API sample supports inclusive DATE bars and same-day/partial
-// points. This renderer remains synthetic: #26 still needs filter/sort evidence
-// and explicit policies for sample gaps before live integration in #28.
+// Inputs use explicit endpoint IDs validated against DATE definitions. Inclusive
+// bars and same-day/partial points have bounded web/API evidence. Invalid and
+// unavailable rows are conservative client policies, not verified web geometry.
 type dateTimelineEndpoint struct {
 	Value     string
 	Available bool // available + empty means unset; unavailable is a separate state
@@ -186,7 +184,7 @@ func timelineRowTitle(item github.Item) string {
 }
 
 // renderDateTimeline preserves caller order and selection by ID. It only formats
-// explicitly supplied data; it has no source, commands, mutations, or Model path.
+// explicitly supplied data; it has no source, commands, or mutations.
 func renderDateTimeline(rows []dateTimelineRow, view dateTimelineViewport) string {
 	if view.Width <= 0 || view.Height <= 0 {
 		return ""
@@ -214,9 +212,9 @@ func renderDateTimeline(rows []dateTimelineRow, view dateTimelineViewport) strin
 			invalid++
 		}
 	}
-	notice := "Local 3 months · proposed bars/points · " + calendar.start.Format("2006-01") + "–" + calendar.end.AddDate(0, 0, -1).Format("2006-01")
+	notice := "Local 3 months · read-only · " + calendar.start.Format("2006-01") + "–" + calendar.end.AddDate(0, 0, -1).Format("2006-01")
 	if view.Width < 60 {
-		notice = "Date list (narrow terminal) · proposed placement"
+		notice = "Date list (narrow terminal) · read-only"
 	}
 	counts := fmt.Sprintf("Loaded %d · outside %d · undated %d · unavailable %d · invalid %d", len(rows), outside, undated, unavailable, invalid)
 	if view.Loading {

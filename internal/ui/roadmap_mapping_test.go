@@ -16,8 +16,8 @@ func mappedRoadmapFixture() (github.View, config.RoadmapMappings) {
 	return view, mappings
 }
 
-func TestLocalRoadmapMappingValidatesThroughPickerWithoutItemsOrWrites(t *testing.T) {
-	for _, invalid := range []string{"", "stale", "non-date", "duplicate"} {
+func TestLocalRoadmapMappingValidatesThroughPicker(t *testing.T) {
+	for _, invalid := range []string{"stale", "non-date", "duplicate"} {
 		for _, kind := range []github.OwnerKind{github.UserOwner, github.OrganizationOwner} {
 			t.Run(invalid+string(kind), func(t *testing.T) {
 				view, mappings := mappedRoadmapFixture()
@@ -51,11 +51,7 @@ func TestLocalRoadmapMappingValidatesThroughPickerWithoutItemsOrWrites(t *testin
 				if cmd != nil || model.screen != screenViewPicker || model.view != nil || model.itemsLoading || viewCalls != 1 || itemCalls != 0 || len(mutations) != 0 {
 					t.Fatalf("mapping enabled live loading/writes: screen=%v status=%q", model.screen, model.status)
 				}
-				if invalid == "" {
-					if !strings.Contains(model.status, `start "Date A", target "Date B"`) || !strings.Contains(model.status, "placement remains unverified") {
-						t.Fatalf("missing resolved roles/remaining gate: %q", model.status)
-					}
-				} else if !strings.Contains(model.status, "invalid user-configured roadmap mapping") {
+				if !strings.Contains(model.status, "invalid user-configured roadmap mapping") {
 					t.Fatalf("invalid mapping had no explanation: %q", model.status)
 				}
 			})
@@ -69,7 +65,7 @@ func TestLocalRoadmapMappingsDoNotLeakAcrossScopesOrOtherLayouts(t *testing.T) {
 	model.SetRoadmapMappings(mappings)
 	// The setter owns its entries rather than observing caller mutations.
 	mappings.Roadmaps[0].TargetFieldID = "changed"
-	if got := model.viewCompatibility(view).summary(); !strings.Contains(got, "placement remains unverified") {
+	if got := model.viewCompatibility(view).summary(); got != "" {
 		t.Fatalf("caller changed an installed mapping: %q", got)
 	}
 	for _, scope := range []string{"host", "project", "view"} {
@@ -96,26 +92,18 @@ func TestLocalRoadmapMappingsDoNotLeakAcrossScopesOrOtherLayouts(t *testing.T) {
 	}
 }
 
-func TestLocalRoadmapMappingDirectSelectionKeepsPlacementGate(t *testing.T) {
+func TestLocalRoadmapMappingDirectSelectionLoadsTimeline(t *testing.T) {
 	view, mappings := mappedRoadmapFixture()
 	owner := github.Owner{Login: "owner", Kind: github.UserOwner}
-	source := fakePickerSource{views: []github.ViewSummary{{ID: view.ID, Number: view.Number, Layout: view.Layout}}}
+	source := fakePickerSource{}
 	model := NewModelWithHost(source, Selection{OwnerLogin: owner.Login, ProjectNumber: 7, ViewNumber: view.Number}, "github.com")
 	model.SetRoadmapMappings(mappings)
 	updated, cmd := model.Update(discoveryMsg{generation: model.generation, view: &view, discovery: github.Discovery{
 		Owners: []github.Owner{owner}, Projects: map[string][]github.Project{owner.Login: {{ID: view.ProjectID, Number: 7}}},
 	}})
 	model = updated.(Model)
-	if model.screen != screenViewPicker || model.view != nil || model.itemsLoading || !strings.Contains(model.viewPickerNotice, "user-configured") {
-		t.Fatalf("direct selection bypassed local-source gate: %q", model.viewPickerNotice)
-	}
-	if cmd == nil {
-		t.Fatal("direct selection did not list alternative saved views")
-	}
-	updated, next := model.Update(cmd())
-	model = updated.(Model)
-	if next != nil || model.screen != screenViewPicker || model.itemsLoading || !strings.Contains(model.viewPickerNotice, "placement remains unverified") {
-		t.Fatal("view listing discarded the remaining placement gate")
+	if cmd == nil || model.screen != screenBoard || !model.isTimeline() || !model.itemsLoading {
+		t.Fatal("valid direct selection did not load the timeline")
 	}
 }
 

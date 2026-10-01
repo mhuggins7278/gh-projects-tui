@@ -81,6 +81,10 @@ type mutationAttemptResult struct {
 }
 
 func (m *Model) enqueueBoardMutation(intent boardMutationIntent) tea.Cmd {
+	if m.isTimeline() {
+		m.status = "Timelines are read-only"
+		return nil
+	}
 	if _, ok := m.source.(ItemMutationSource); !ok {
 		m.status = "Mutations are unavailable for this client"
 		return nil
@@ -622,6 +626,9 @@ func sameMutationProjectByModel(session *boardMutationSession, m *Model) bool {
 }
 
 func resolveBoardMutationPlan(view github.View, items []github.Item, intent boardMutationIntent, visibleIDs ...map[string]bool) (boardMutationPlan, error) {
+	if view.Layout == github.RoadmapLayout {
+		return boardMutationPlan{}, fmt.Errorf("timelines are read-only")
+	}
 	plan := boardMutationPlan{intent: intent, projectID: view.ProjectID}
 	itemIndex := -1
 	for index, item := range items {

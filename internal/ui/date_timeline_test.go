@@ -161,7 +161,7 @@ func TestTimelinePreservesOrderAndSelectsEveryClassification(t *testing.T) {
 	original := append([]dateTimelineRow(nil), rows...)
 	view := dateTimelineViewport{Month: "2024-01", Width: 130, Height: 20, Loading: true}
 	content := renderDateTimeline(rows, view)
-	for _, text := range []string{"Jan 2024", "Feb 2024", "Mar 2024", "Loaded 6", "outside 1", "undated 1", "unavailable 1", "invalid 1", "loading", "proposed"} {
+	for _, text := range []string{"Jan 2024", "Feb 2024", "Mar 2024", "Loaded 6", "outside 1", "undated 1", "unavailable 1", "invalid 1", "loading", "read-only"} {
 		if !strings.Contains(content, text) {
 			t.Fatalf("missing %q:\n%s", text, content)
 		}
