@@ -251,8 +251,7 @@ func renderDateTimeline(rows []dateTimelineRow, view dateTimelineViewport) strin
 	return strings.Join(lines, "\n")
 }
 
-// Shared row geometry keeps fixture-only grouped rendering consistent with the
-// admitted ungrouped DATE timeline without coupling grouping to live metadata.
+// Shared row geometry keeps grouped and ungrouped DATE rendering consistent.
 func timelineRowLine(row dateTimelineRow, selected bool, calendar timelineCalendar, width, gutter int) string {
 	marker := "  "
 	if selected {

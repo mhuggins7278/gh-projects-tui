@@ -117,6 +117,24 @@ func (m Model) renderTimelineContent(b *strings.Builder) {
 	if m.showAPI && m.debug {
 		height -= lipgloss.Height(helpStyle.Width(width-2).Render(m.apiInspector())) + 1
 	}
-	b.WriteString(renderDateTimeline(rows, dateTimelineViewport{Month: month, Width: width, Height: max(1, height), SelectedID: selected, Loading: m.itemsLoading}))
+	viewport := dateTimelineViewport{Month: month, Width: width, Height: max(1, height), SelectedID: selected, Loading: m.itemsLoading}
+	if len(m.view.GroupByFields) > 0 {
+		groups, err := timelineGroups(m.view, items)
+		if err != nil {
+			b.WriteString(truncateText("Timeline grouping unavailable: "+err.Error(), width))
+			return
+		}
+		sections := make([]dateTimelineSection, 0, len(groups))
+		for _, group := range groups {
+			section := dateTimelineSection{ID: group.Key, Name: group.Name}
+			for _, item := range group.Items {
+				section.Rows = append(section.Rows, dateTimelineRow{Item: item, Start: timelineEndpoint(mapping.StartFieldID, item), Target: timelineEndpoint(mapping.TargetFieldID, item)})
+			}
+			sections = append(sections, section)
+		}
+		b.WriteString(renderGroupedDateTimelineWithNotice(sections, viewport, "Local groups: option order, unset last; all expanded; custom order unavailable"))
+	} else {
+		b.WriteString(renderDateTimeline(rows, viewport))
+	}
 	b.WriteString("\n")
 }

@@ -25,6 +25,10 @@ func evaluateViewCompatibility(view github.View) viewCompatibility {
 }
 
 func evaluateViewCompatibilityWithRoadmapReason(view github.View, roadmapReason string) viewCompatibility {
+	return evaluateViewCompatibilityWithRoadmapGrouping(view, roadmapReason, false)
+}
+
+func evaluateViewCompatibilityWithRoadmapGrouping(view github.View, roadmapReason string, allowGroups bool) viewCompatibility {
 	reasons := make([]string, 0, 4)
 	switch view.Layout {
 	case github.BoardLayout:
@@ -33,7 +37,7 @@ func evaluateViewCompatibilityWithRoadmapReason(view github.View, roadmapReason 
 		if roadmapReason != "" {
 			reasons = append(reasons, roadmapReason)
 		}
-		if len(view.GroupByFields) > 0 || len(view.VerticalGroupBy) > 0 {
+		if !allowGroups && (len(view.GroupByFields) > 0 || len(view.VerticalGroupBy) > 0) {
 			reasons = append(reasons, "roadmap grouping is not supported; grouped views must not be flattened")
 		}
 	default:

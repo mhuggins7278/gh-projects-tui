@@ -106,7 +106,7 @@ GraphQL points by operation.
 Explicit local roadmap date-field mappings can be supplied with
 `--roadmap-mappings ./roadmaps.json`. They are scoped to host/project/view node
 IDs and labeled as user-configured. Read-only DATE timelines open for views with
-an empty or `is:issue` saved filter, no grouping, and no sorting or one ascending
+an empty or `is:issue` saved filter, no grouping or one single-select group, and no sorting or one ascending
 sort on the mapped start DATE field.
 Use `j/k` for rows, `h/l` for months, and `g` for the current month. See [mapping setup and the current boundary](docs/local-roadmap-mappings.md).
 
@@ -178,10 +178,11 @@ offer these issue actions.
 
 ## Pre-alpha limitations
 
-- Roadmaps require explicit local DATE mappings and an ungrouped
-  saved view. Filters are empty or `is:issue`; sorting is absent or one ascending
-  mapped start DATE field. Grouping, iteration endpoints, other filters/sorts, and
-  restored web display settings remain unsupported.
+- Roadmaps require explicit local DATE mappings. One single-select group uses
+  local API option order, unset last, and all groups expanded. Filters are empty
+  or `is:issue`; sorting is absent or one ascending mapped start DATE field.
+  Vertical/multiple/iteration grouping, iteration endpoints, other filters/sorts,
+  and restored web display settings remain unsupported.
   See [the timeline boundary and remaining gates](docs/roadmap-proposal.md).
 - Saved filters support `status:Todo`, `status:"In Progress"`, `assignee:@me`,
   `assignee:USERNAME`, `label:bug`, `repo:OWNER/REPO`, `is:open`, `is:closed`,

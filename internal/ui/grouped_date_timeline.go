@@ -7,9 +7,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Explicit section and row order are supplied by the caller. This fixture-only
-// representation does not infer GitHub grouping order, unset placement, saved
-// sorts, or collapsed state, and is not connected to Model/view compatibility.
+// Explicit section and row order are supplied by the caller. This representation
+// does not infer GitHub's saved custom grouping order or collapsed state.
 type dateTimelineSection struct {
 	ID, Name string
 	Rows     []dateTimelineRow
@@ -67,6 +66,10 @@ func groupedTimelineWindow(entries []groupedTimelineEntry, selected, capacity in
 }
 
 func renderGroupedDateTimeline(sections []dateTimelineSection, view dateTimelineViewport) string {
+	return renderGroupedDateTimelineWithNotice(sections, view, "Synthetic groups · collapsed/custom order unavailable")
+}
+
+func renderGroupedDateTimelineWithNotice(sections []dateTimelineSection, view dateTimelineViewport, notice string) string {
 	if view.Width <= 0 || view.Height <= 0 {
 		return ""
 	}
@@ -102,9 +105,12 @@ func renderGroupedDateTimeline(sections []dateTimelineSection, view dateTimeline
 			invalid++
 		}
 	}
-	notice := "Synthetic groups · collapsed/custom order unavailable"
 	if view.Width < 60 {
-		notice = "Synthetic grouped date list (narrow terminal)"
+		if strings.HasPrefix(notice, "Synthetic") {
+			notice = "Synthetic grouped date list (narrow terminal)"
+		} else {
+			notice += " · date list"
+		}
 	}
 	counts := fmt.Sprintf("Loaded %d · groups %d · outside %d · undated %d · unavailable %d · invalid %d", loaded, len(sections), outside, undated, unavailable, invalid)
 	if view.Loading {

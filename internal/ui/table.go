@@ -273,6 +273,13 @@ func (m *Model) clampTableRow(finished bool) {
 }
 
 func (m Model) tableItems() []github.Item {
+	if m.isTimeline() && len(m.view.GroupByFields) > 0 {
+		groups, err := timelineGroups(m.view, m.boardItems())
+		if err == nil {
+			return tableGroupItems(groups)
+		}
+		return m.boardItems()
+	}
 	return tableGroupItems(tableGroups(m.view, m.boardItems()))
 }
 

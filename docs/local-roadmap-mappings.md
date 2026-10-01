@@ -64,7 +64,8 @@ metadata and caches are not rewritten by the mapping.
 ## Supported read-only slice — 2026-10-01
 
 A valid mapping opens a timeline when the saved filter is empty or exactly
-`is:issue`, grouping is absent, and sorting is absent or one ascending sort on
+`is:issue`, grouping is absent or one single-select field without vertical grouping,
+and sorting is absent or one ascending sort on
 the mapped start DATE field. Other roadmaps remain
 in the picker with an explanation. This scope was approved on 2026-10-01;
 the subsequent [populated comparison](roadmap-filter-order-verification-2026-10-01.md)
@@ -93,7 +94,35 @@ including nested pagination; the name-based selective board projection is not
 used for endpoint resolution.
 
 Saved zoom/range, markers, slicing, and field sums are unavailable and are
-explicitly disclosed. Iteration endpoints and grouping remain deferred. These
+explicitly disclosed. Iteration endpoints and multiple/vertical/iteration grouping
+remain deferred. These
 local mappings do not recover GitHub's saved endpoint choices or establish exact
 web parity. See [the API investigation](api-contract.md#saved-endpoint-mapping-decision-25)
 and [the current roadmap scope](roadmap-proposal.md).
+
+## Single-select grouped timelines
+
+The user requested general enablement on 2026-10-01 without requiring access to
+an existing work board from this computer. A mapped DATE timeline can now open
+with one saved single-select grouping field. Its field ID must resolve uniquely
+against complete project definitions with nonempty, unique option IDs.
+
+This uses a disclosed local display policy: API field-option order, a final
+“No value” section, and all groups expanded. Empty options remain visible with
+zero loaded items. Unknown, duplicate or unavailable group values remain in an
+“Unavailable group” section. Group membership matches option IDs, never names.
+Within each section, incoming project position or the supported mapped start
+DATE ASC order is retained. This policy is not a verified restoration of saved
+custom group order, collapsed state, or web unset-section placement.
+
+No extra grouping flag is needed. On your work computer, use its existing GitHub
+CLI authentication and create the DATE mapping there using the instructions
+above. Then select the roadmap or launch it directly:
+
+```sh
+go run ./cmd/gh-projects-tui --owner OWNER --project NUMBER --view NUMBER --roadmap-mappings ./roadmaps.json
+```
+
+Selection, search, progressive pages, lazy detail, refresh, range controls and
+read-only guards work for grouped and ungrouped timelines. Multiple, vertical,
+iteration and multi-valued grouping are rejected with an explanation.

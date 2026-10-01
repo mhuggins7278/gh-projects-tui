@@ -25,7 +25,11 @@ func (m Model) viewCompatibility(view github.View) viewCompatibility {
 	if err != nil {
 		return evaluateViewCompatibilityWithRoadmapReason(view, "invalid user-configured roadmap mapping: "+err.Error())
 	}
-	compatibility := evaluateViewCompatibilityWithRoadmapReason(view, "")
+	_, groupErr := timelineGroupField(&view)
+	compatibility := evaluateViewCompatibilityWithRoadmapGrouping(view, "", groupErr == nil)
+	if groupErr != nil && (len(view.GroupByFields) > 0 || len(view.VerticalGroupBy) > 0) {
+		compatibility.reasons = append(compatibility.reasons, groupErr.Error())
+	}
 	filter := strings.TrimSpace(view.Filter)
 	if filter != "" && filter != "is:issue" {
 		compatibility.reasons = append(compatibility.reasons, "roadmap saved filter remains unverified; supported filters are empty or is:issue")

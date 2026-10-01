@@ -51,3 +51,22 @@ collapsed/custom display state is unavailable. Then connect the fixture renderer
 to the verified grouping projection and live selection lifecycle. Multiple/vertical/
 iteration/multi-valued grouping, broader filters/sorts, and mutations stay outside
 that initial grouping slice.
+
+## Superseding enablement decision — 2026-10-01
+
+The user requested general timeline enablement and explained that the work board
+can only be authenticated on their work computer. The earlier populated-sample
+prerequisite is therefore retained for claims of web parity, rather than blocking
+all live grouping. Mapped DATE timelines now admit one single-select field with
+no vertical grouping using an explicitly disclosed local display policy: complete
+API option order, unset last, and all groups expanded. Unsupported group values
+remain visible as unavailable; empty options retain loaded counts. Saved custom
+order/collapse and web unset placement are not claimed to be restored.
+
+The renderer is connected to the full item-loading, selection, search, lazy-detail,
+refresh and read-only lifecycle. Membership uses field/option IDs; complete unique
+field definitions and option identities are required. Multiple/vertical/iteration
+and multi-valued grouping remain rejected. Model tests cover both owner kinds,
+picker/direct startup, group-order navigation, paging/search/refresh identity,
+fallback membership, and mutation guards. No work board access or data changes
+were needed to implement the general local policy.

@@ -4,13 +4,19 @@
 slice.** This supersedes the broader enablement gate recorded on 2026-09-30.
 A subsequent populated comparison verified `is:issue` and one mapped start DATE
 ASC sort. Other filters/sorts remain blocked while #26's comparisons proceed.
+The user subsequently requested general enablement: one single-select grouping
+field now uses a disclosed local option-order/unset-last/all-expanded policy.
+This supersedes the prior requirement to obtain a populated grouped sample before
+any live grouping can open; web grouping parity remains unverified.
 
 ## Supported boundary
 
 - Explicit local host/project/view mappings select start and target IDs. Both
   must resolve uniquely to complete project DATE definitions. No names, visible
   field order, or populated values are used to guess endpoint roles.
-- Only saved roadmaps with an empty or `is:issue` filter and no grouping open.
+- Saved roadmaps with an empty or `is:issue` filter open without grouping or with
+  one single-select field and no vertical grouping. Group order is local API option
+  order, unset last, all expanded; saved custom order/collapse cannot be recovered.
   Sorting is absent or one ASC sort on the mapped start DATE field. Both picker and direct startup enforce the boundary.
 - Complete item field connections and nested pagination preserve incoming project-position
   order and date strings. A verified explicit start DATE ASC sort keeps unset
@@ -54,11 +60,11 @@ tables, without table mutation controls.
 | [#26](https://github.com/mhuggins7278/gh-projects-tui/issues/26) | Basic DATE placement plus populated is:issue / mapped start DATE ASC (null/ties) verified; other filters/sorts and live multi-page filtered comparisons remain gated |
 | [#27](https://github.com/mhuggins7278/gh-projects-tui/issues/27) | Bounded renderer complete |
 | [#28](https://github.com/mhuggins7278/gh-projects-tui/issues/28) | Read-only integration complete for the initial slice and verified is:issue / start DATE ASC extension; live smoke and large-fixture measurements recorded |
-| [#29](https://github.com/mhuggins7278/gh-projects-tui/issues/29) | Synthetic grouped renderer and row-window/identity regressions complete; populated/unset/order verification and live integration remain gated |
+| [#29](https://github.com/mhuggins7278/gh-projects-tui/issues/29) | Grouped live integration enabled with disclosed local option-order/unset-last policy; web parity remains unverified |
 | [#30](https://github.com/mhuggins7278/gh-projects-tui/issues/30) | Iteration endpoints deferred pending active/completed/missing/mixed conversion verification |
 
 The [grouping investigation](roadmap-grouping-investigation-2026-10-01.md) records
-the fixture renderer checkpoint, benchmark, and remaining #29 verification prerequisite.
+the renderer checkpoint, benchmark, and superseding local grouping policy.
 
 No existing project data is created or edited to manufacture verification cases.
 Do not use undocumented web endpoints, browser credentials, or authentication
