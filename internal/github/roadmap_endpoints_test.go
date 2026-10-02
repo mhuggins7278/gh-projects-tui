@@ -47,3 +47,36 @@ func TestRoadmapDateFieldsRequireExplicitUniqueProjectIDs(t *testing.T) {
 		t.Fatalf("explicit shared field rejected: %#v, %v", got, err)
 	}
 }
+
+func TestRoadmapIterationDateRangesAndExplicitMixedMappings(t *testing.T) {
+	for _, tc := range []struct {
+		start    string
+		duration int
+		end      string
+	}{
+		{"2026-10-01", 7, "2026-10-07"}, {"2026-09-24", 7, "2026-09-30"}, {"2026-12-28", 7, "2027-01-03"}, {"2024-02-28", 3, "2024-03-01"}, {"2024-02-29", 1, "2024-02-29"},
+	} {
+		a, b, err := IterationDateRange(Iteration{StartDate: tc.start, Duration: tc.duration})
+		if err != nil || a != tc.start || b != tc.end {
+			t.Fatalf("range: %s/%s %v", a, b, err)
+		}
+	}
+	for _, iteration := range []Iteration{{StartDate: "bad", Duration: 7}, {StartDate: "0000-01-01", Duration: 7}, {StartDate: "2026-01-01", Duration: 0}, {StartDate: "2026-01-01", Duration: -1}, {StartDate: "9999-12-31", Duration: 2}, {StartDate: "2026-01-01", Duration: 3660001}} {
+		if _, _, err := IterationDateRange(iteration); err == nil {
+			t.Fatalf("invalid metadata accepted: %+v", iteration)
+		}
+	}
+	sprint := Field{ID: "sprint", DataType: "ITERATION", Iterations: []Iteration{{ID: "current", StartDate: "2026-10-01", Duration: 7}, {ID: "past", StartDate: "2026-09-24", Duration: 7, Completed: true}}}
+	date := Field{ID: "date", DataType: "DATE"}
+	for _, ids := range [][2]string{{"sprint", "sprint"}, {"sprint", "date"}, {"date", "sprint"}} {
+		if _, err := ResolveRoadmapFields([]Field{sprint, date}, ids[0], ids[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, iterations := range [][]Iteration{nil, {{ID: "", StartDate: "2026-10-01", Duration: 7}}, {sprint.Iterations[0], sprint.Iterations[0]}} {
+		sprint.Iterations = iterations
+		if _, err := ResolveRoadmapFields([]Field{sprint, date}, "sprint", "date"); err == nil {
+			t.Fatal("unresolved iteration metadata accepted")
+		}
+	}
+}

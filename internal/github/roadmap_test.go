@@ -134,3 +134,34 @@ func TestRoadmapCandidateValuesPreserveDatesIterationsAndUnsetItems(t *testing.T
 		})
 	}
 }
+
+func TestOpenViewHydratesNonVisibleIterationDefinitionsAcrossPages(t *testing.T) {
+	for _, kind := range []OwnerKind{UserOwner, OrganizationOwner} {
+		branch := "user"
+		if kind == OrganizationOwner {
+			branch = "organization"
+		}
+		graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+			func(query string, variables map[string]interface{}, response interface{}) error {
+				if !strings.Contains(query, "completedIterations") {
+					t.Fatal("endpoint iteration metadata not requested")
+				}
+				return json.Unmarshal([]byte(fmt.Sprintf(`{"%s":{"projectV2":{"id":"project","projectFields":{"nodes":[{"id":"date","dataType":"DATE"}],"pageInfo":{"hasNextPage":true,"endCursor":"fields-next"}},"view":{"id":"view","number":3,"layout":"ROADMAP_LAYOUT","filter":"","configuration":{"visibleFields":{"nodes":[]}},"groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},"sortByFields":{"nodes":[]}}}}}`, branch)), response)
+			},
+			func(query string, variables map[string]interface{}, response interface{}) error {
+				if variables["after"] != "fields-next" || !strings.Contains(query, "completedIterations") {
+					t.Fatal("iteration definitions missing on later project page")
+				}
+				return json.Unmarshal([]byte(fmt.Sprintf(`{"%s":{"projectV2":{"fields":{"nodes":[{"__typename":"ProjectV2IterationField","id":"sprint","name":"Sprint","dataType":"ITERATION","configuration":{"iterations":[{"id":"current","title":"Current","startDate":"2026-10-01","duration":7}],"completedIterations":[{"id":"past","title":"Past","startDate":"2026-09-24","duration":7}]}}],"pageInfo":{"hasNextPage":false}}}}}`, branch)), response)
+			},
+		}}
+		view, err := newClient(graphql, &fakeREST{}).OpenView(context.Background(), Owner{Login: "owner", Kind: kind}, 7, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields, err := ResolveRoadmapFields(view.ProjectFields, "sprint", "date")
+		if err != nil || len(fields.Start.Iterations) != 2 || !fields.Start.Iterations[1].Completed || len(view.Fields) != 0 {
+			t.Fatalf("non-visible definition unavailable: %+v, %v", fields, err)
+		}
+	}
+}

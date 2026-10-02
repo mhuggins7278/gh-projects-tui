@@ -3,6 +3,7 @@ package github
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // RoadmapDateFields identifies explicit endpoint roles. Resolving field IDs
@@ -15,6 +16,15 @@ type RoadmapDateFields struct {
 // supplied IDs. Display fields, names, order, and populated values are not
 // fallbacks. A source must supply both field roles before either is resolved.
 func ResolveRoadmapDateFields(fields []Field, startID, targetID string) (RoadmapDateFields, error) {
+	return resolveRoadmapFields(fields, startID, targetID, false)
+}
+
+// ResolveRoadmapFields accepts explicit DATE or validated ITERATION roles.
+func ResolveRoadmapFields(fields []Field, startID, targetID string) (RoadmapDateFields, error) {
+	return resolveRoadmapFields(fields, startID, targetID, true)
+}
+
+func resolveRoadmapFields(fields []Field, startID, targetID string, iterations bool) (RoadmapDateFields, error) {
 	if strings.TrimSpace(startID) == "" || strings.TrimSpace(targetID) == "" {
 		return RoadmapDateFields{}, fmt.Errorf("roadmap mapping requires explicit start and target field IDs")
 	}
@@ -33,7 +43,11 @@ func ResolveRoadmapDateFields(fields []Field, startID, targetID string) (Roadmap
 		if matches != 1 {
 			return Field{}, fmt.Errorf("roadmap %s field ID resolves to multiple definitions", role)
 		}
-		if result.DataType != "DATE" {
+		if iterations && result.DataType == "ITERATION" {
+			if err := ValidateRoadmapIterations(result.Iterations); err != nil {
+				return Field{}, fmt.Errorf("roadmap %s iteration field: %w", role, err)
+			}
+		} else if result.DataType != "DATE" {
 			return Field{}, fmt.Errorf("roadmap %s field must be DATE, got %q", role, result.DataType)
 		}
 		return result, nil
@@ -47,4 +61,34 @@ func ResolveRoadmapDateFields(fields []Field, startID, targetID string) (Roadmap
 		return RoadmapDateFields{}, err
 	}
 	return RoadmapDateFields{Start: start, Target: target}, nil
+}
+
+// IterationDateRange returns inclusive calendar dates; completed is display state.
+func IterationDateRange(iteration Iteration) (string, string, error) {
+	start, err := time.Parse("2006-01-02", iteration.StartDate)
+	if err != nil || start.Year() < 1 || iteration.Duration < 1 || iteration.Duration > 3660000 {
+		return "", "", fmt.Errorf("iteration has invalid start date or duration")
+	}
+	end := start.AddDate(0, 0, iteration.Duration-1)
+	if end.Year() > 9999 {
+		return "", "", fmt.Errorf("iteration end date exceeds supported calendar")
+	}
+	return start.Format("2006-01-02"), end.Format("2006-01-02"), nil
+}
+
+func ValidateRoadmapIterations(iterations []Iteration) error {
+	if len(iterations) == 0 {
+		return fmt.Errorf("iteration definitions are unavailable")
+	}
+	seen := map[string]bool{}
+	for _, iteration := range iterations {
+		if iteration.ID == "" || seen[iteration.ID] {
+			return fmt.Errorf("iteration IDs must be nonempty and unique")
+		}
+		seen[iteration.ID] = true
+		if _, _, err := IterationDateRange(iteration); err != nil {
+			return err
+		}
+	}
+	return nil
 }

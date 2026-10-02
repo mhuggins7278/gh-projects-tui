@@ -9,7 +9,7 @@ import (
 	"unicode"
 )
 
-// RoadmapMapping explicitly selects date fields for one project view on one host.
+// RoadmapMapping explicitly selects DATE or ITERATION fields for one project view on one host.
 // The IDs are opaque GitHub node IDs, not project numbers or field names.
 type RoadmapMapping struct {
 	Host          string `json:"host"`

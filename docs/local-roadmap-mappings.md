@@ -1,6 +1,6 @@
 # User-configured roadmap endpoint mappings
 
-Explicit local mappings were approved on 2026-09-30. They identify which DATE
+Explicit local mappings were approved on 2026-09-30. They identify which DATE or ITERATION
 fields the user wants to use for a specific project/view. They do not recover
 GitHub's saved endpoint selections or other timeline settings.
 
@@ -49,8 +49,10 @@ gh project field-list PROJECT_NUMBER --owner OWNER --limit 1000 --format json
 
 Choose the desired start and target fields explicitly. On each mapped view open,
 the app resolves each ID uniquely against its complete, paginated project field
-definitions and requires DATE types. Missing/stale/duplicate IDs and iteration,
-text, or other types are rejected. Visible columns and endpoint-like names never
+definitions and requires DATE or ITERATION types. Iteration definitions must have unique
+IDs, valid calendar start dates, and positive durations with supported end dates.
+Missing/stale/duplicate IDs, unresolved iteration definitions, text, or other
+types are rejected. Visible columns and endpoint-like names never
 substitute for an ID. Selecting one DATE field for both roles is allowed by the
 local resolver; this is not a claim about GitHub's endpoint-picker behavior.
 
@@ -61,16 +63,25 @@ Opening one reads complete project definitions and validates both selected IDs.
 Direct `--owner/--project/--view` startup uses the same validation. Saved API
 metadata and caches are not rewritten by the mapping.
 
-## Supported read-only slice — 2026-10-01
+## Supported read-only timeline — 2026-10-01
 
-A valid mapping opens a timeline when the saved filter is empty or exactly
-`is:issue`, grouping is absent or one single-select field without vertical grouping,
-and sorting is absent or one ascending sort on
-the mapped start DATE field. Other roadmaps remain
-in the picker with an explanation. This scope was approved on 2026-10-01;
-the subsequent [populated comparison](roadmap-filter-order-verification-2026-10-01.md)
-verified the bounded `is:issue` / start DATE ASC extension. Other filters/sorts
-and live multi-page filtered comparisons remain deferred in #26.
+A valid mapping opens DATE, ITERATION, or mixed endpoints with the same supported
+saved-filter grammar as boards/tables. The exact saved filter is forwarded to
+GitHub on every page. No filter substitution or local saved-filter evaluation is
+used. Sorting supports up to two distinct supported fields, ASC or DESC, with
+unset values last and stable project-position ties. Selection follows item ID.
+Grouping is absent or one single-select field without vertical grouping.
+Unsupported filter syntax, types, directions, definitions or grouping remain
+in the picker with an explanation.
+
+An iteration start role resolves to its configured start day; a target role
+resolves to start day plus duration minus one. Both current and completed
+iterations are resolved by ID against complete project definitions, even when
+not visible in the view. Missing membership stays unset; unknown, duplicate or
+unavailable values stay unavailable. No current-iteration guess is made.
+
+The authorized sandbox comparisons and regression coverage are recorded in
+[the completion note](roadmap-completion-2026-10-01.md).
 
 The initial local range starts at the current month and spans three calendar
 months. `j/k` or up/down selects rows; `h/l` or left/right shifts the range by one
@@ -94,8 +105,7 @@ including nested pagination; the name-based selective board projection is not
 used for endpoint resolution.
 
 Saved zoom/range, markers, slicing, and field sums are unavailable and are
-explicitly disclosed. Iteration endpoints and multiple/vertical/iteration grouping
-remain deferred. These
+explicitly disclosed. Multiple/vertical/iteration grouping remains unsupported. These
 local mappings do not recover GitHub's saved endpoint choices or establish exact
 web parity. See [the API investigation](api-contract.md#saved-endpoint-mapping-decision-25)
 and [the current roadmap scope](roadmap-proposal.md).
@@ -103,7 +113,7 @@ and [the current roadmap scope](roadmap-proposal.md).
 ## Single-select grouped timelines
 
 The user requested general enablement on 2026-10-01 without requiring access to
-an existing work board from this computer. A mapped DATE timeline can now open
+an existing work board from this computer. A mapped timeline can now open
 with one saved single-select grouping field. Its field ID must resolve uniquely
 against project definitions; the saved grouping connection must supply
 nonempty, unique option IDs.

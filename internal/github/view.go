@@ -23,13 +23,14 @@ fragment FieldConfiguration on ProjectV2FieldConfiguration {
   }
 }`
 
-// Filter validation needs field names and types, not options or iterations.
+// Project definitions support filter validation and explicit iteration endpoint
+// mappings. Single-select options remain on the saved grouping/sort connections.
 const filterFieldFragment = `
 fragment FilterFieldConfiguration on ProjectV2FieldConfiguration {
   __typename
   ... on ProjectV2Field { id name dataType }
   ... on ProjectV2SingleSelectField { id name dataType }
-  ... on ProjectV2IterationField { id name dataType }
+  ... on ProjectV2IterationField { id name dataType configuration { iterations { id title startDate duration } completedIterations { id title startDate duration } } }
   ... on ProjectV2MultiSelectField { id name dataType }
 }`
 

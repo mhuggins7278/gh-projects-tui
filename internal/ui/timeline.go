@@ -68,7 +68,7 @@ func (m Model) renderTimelineContent(b *strings.Builder) {
 		b.WriteString("Timeline mapping unavailable\n")
 		return
 	}
-	fields, err := github.ResolveRoadmapDateFields(m.view.ProjectFields, mapping.StartFieldID, mapping.TargetFieldID)
+	fields, err := github.ResolveRoadmapFields(m.view.ProjectFields, mapping.StartFieldID, mapping.TargetFieldID)
 	if err != nil {
 		b.WriteString("Timeline mapping unavailable: " + err.Error() + "\n")
 		return
@@ -83,8 +83,16 @@ func (m Model) renderTimelineContent(b *strings.Builder) {
 	if strings.TrimSpace(m.view.Filter) != "" {
 		lines = append(lines, "Saved filter: "+m.view.Filter)
 	}
-	if len(m.view.SortByFields) == 1 {
-		lines = append(lines, "Saved order: start date ascending; unset last; project-position ties")
+	if len(m.view.SortByFields) > 0 {
+		orders := make([]string, 0, len(m.view.SortByFields))
+		for _, sort := range m.view.SortByFields {
+			direction := "ascending"
+			if strings.EqualFold(sort.Direction, "DESC") {
+				direction = "descending"
+			}
+			orders = append(orders, sort.Field.Name+" "+direction)
+		}
+		lines = append(lines, "Saved order: "+strings.Join(orders, ", ")+"; unset last; position ties")
 	}
 	if m.filtering || strings.TrimSpace(m.filter) != "" {
 		lines = append(lines, fmt.Sprintf("Search loaded rows: %s (%d matches of %d loaded)", m.filter, len(items), len(m.items)))
@@ -97,7 +105,7 @@ func (m Model) renderTimelineContent(b *strings.Builder) {
 	}
 	rows := make([]dateTimelineRow, 0, len(items))
 	for _, item := range items {
-		rows = append(rows, dateTimelineRow{Item: item, Start: timelineEndpoint(mapping.StartFieldID, item), Target: timelineEndpoint(mapping.TargetFieldID, item)})
+		rows = append(rows, dateTimelineRow{Item: item, Start: timelineMappedEndpoint(fields.Start, item, false), Target: timelineMappedEndpoint(fields.Target, item, true)})
 	}
 	month := m.timelineMonth
 	if month == "" {
@@ -128,7 +136,7 @@ func (m Model) renderTimelineContent(b *strings.Builder) {
 		for _, group := range groups {
 			section := dateTimelineSection{ID: group.Key, Name: group.Name}
 			for _, item := range group.Items {
-				section.Rows = append(section.Rows, dateTimelineRow{Item: item, Start: timelineEndpoint(mapping.StartFieldID, item), Target: timelineEndpoint(mapping.TargetFieldID, item)})
+				section.Rows = append(section.Rows, dateTimelineRow{Item: item, Start: timelineMappedEndpoint(fields.Start, item, false), Target: timelineMappedEndpoint(fields.Target, item, true)})
 			}
 			sections = append(sections, section)
 		}
@@ -137,4 +145,50 @@ func (m Model) renderTimelineContent(b *strings.Builder) {
 		b.WriteString(renderDateTimeline(rows, viewport))
 	}
 	b.WriteString("\n")
+}
+
+// Resolve membership by iteration ID against current project definitions.
+func timelineMappedEndpoint(field github.Field, item github.Item, target bool) dateTimelineEndpoint {
+	if field.DataType != "ITERATION" {
+		return timelineEndpoint(field.ID, item)
+	}
+	endpoint := dateTimelineEndpoint{Available: true}
+	count := 0
+	for _, value := range item.FieldValues {
+		if value.FieldID != field.ID {
+			continue
+		}
+		count++
+		if count > 1 || !value.Available {
+			return dateTimelineEndpoint{}
+		}
+		if value.IterationID == "" {
+			if value.Value != "" {
+				return dateTimelineEndpoint{}
+			}
+			continue
+		}
+		found := false
+		for _, iteration := range field.Iterations {
+			if iteration.ID != value.IterationID {
+				continue
+			}
+			if found {
+				return dateTimelineEndpoint{}
+			}
+			found = true
+			start, end, err := github.IterationDateRange(iteration)
+			if err != nil {
+				return dateTimelineEndpoint{}
+			}
+			endpoint.Value = start
+			if target {
+				endpoint.Value = end
+			}
+		}
+		if !found {
+			return dateTimelineEndpoint{}
+		}
+	}
+	return endpoint
 }

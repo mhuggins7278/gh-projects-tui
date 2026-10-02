@@ -1,92 +1,60 @@
 # Read-only terminal roadmap scope
 
-**2026-10-01: the user approved the initial unfiltered, unsorted, ungrouped DATE
-slice.** This supersedes the broader enablement gate recorded on 2026-09-30.
-A subsequent populated comparison verified `is:issue` and one mapped start DATE
-ASC sort. Other filters/sorts remain blocked while #26's comparisons proceed.
-The user subsequently requested general enablement: one single-select grouping
-field now uses a disclosed local option-order/unset-last/all-expanded policy.
-This supersedes the prior requirement to obtain a populated grouped sample before
-any live grouping can open; web grouping parity remains unverified.
+The read-only timeline implementation is complete for the supported contract.
+The user approved general enablement and synthetic sandbox validation on
+2026-10-01. This supersedes the initial DATE-only/filter/order gates. Evidence,
+regressions, and remaining product boundaries are in the
+[completion note](roadmap-completion-2026-10-01.md).
 
 ## Supported boundary
 
-- Explicit local host/project/view mappings select start and target IDs. Both
-  must resolve uniquely to complete project DATE definitions. No names, visible
-  field order, or populated values are used to guess endpoint roles.
-- Saved roadmaps with an empty or `is:issue` filter open without grouping or with
-  one single-select field and no vertical grouping. Group order is local API option
-  order, unset last, all expanded; saved custom order/collapse cannot be recovered.
-  Sorting is absent or one ASC sort on the mapped start DATE field. Both picker and direct startup enforce the boundary.
-- Complete item field connections and nested pagination preserve incoming project-position
-  order and date strings. A verified explicit start DATE ASC sort keeps unset
-  values last and POSITION ties; no sort is invented for unsorted views. No
-  unfiltered substitute is applied.
-- Inclusive bars, same-day/partial points, and undated nonplacement use the bounded
-  [populated web/API evidence](roadmap-date-verification-2026-09-30.md).
-- Reversed/invalid dates are labeled invalid without swapping endpoints; missing
-  content, unavailable values, and duplicate mapped value IDs are unavailable.
-  These are conservative client policies for sample gaps, not verified web geometry.
-- A local three-calendar-month window starts at the current month. `h/l` shifts
-  one month and `g` returns to the current month. Saved zoom/range, markers,
-  slicing, and field sums are unavailable and disclosed.
-- Clip bars with directional indicators; keep wholly out-of-range rows selectable
-  and counted. Widths below 60 columns use a date-list fallback. Exact selected
-  endpoint values remain visible within available terminal dimensions.
-- `j/k` selects rows, `/` searches loaded rows, `enter` opens lazy detail, `o`
-  opens the selected item/project, and `r` refreshes saved metadata and items.
-  Selection follows item ID across pages/search/refresh. Counts remain loaded
-  counts until pagination completes; search does not alter the saved filter.
-- Refresh rejects newly unsupported filters/sorts/groups/mappings; cancellation,
-  read scopes, generations, and detail request IDs reject obsolete results.
-- Timelines remain read-only even with write permission. Project moves/reorders,
-  archive/remove, rescheduling, and issue comment/close/reopen controls are gated.
+- Explicit local host/project/view mappings supply start and target field IDs.
+  Both must resolve uniquely to DATE or valid ITERATION project definitions.
+  Names, visible columns, and populated values never substitute for endpoint IDs.
+- DATE and current/completed ITERATION endpoints can be mixed. Iteration roles
+  resolve by membership ID: first day for start, inclusive final day for target.
+  Unknown/duplicate/unavailable memberships remain unavailable; unset stays unset.
+- Saved filters use the board/table supported grammar, forwarded unchanged to
+  GitHub on every page. Local search only narrows loaded rows.
+- Up to two distinct supported ASC/DESC sort fields preserve unset-last and stable
+  project-position ties. Sorting does not redefine endpoint roles.
+- One single-select grouping field uses a disclosed local policy: API option
+  order, unset last, all expanded. Empty groups retain loaded counts; unsupported
+  memberships remain visible in an unavailable section.
+- Inclusive bars, same-day/partial points, clipped/outside rows, and exact selected
+  endpoint days use a local three-calendar-month viewport. `j/k` selects rows,
+  `h/l` moves months, `g` returns to the current month, `/` searches loaded rows,
+  `enter` opens lazy detail, `o` opens the item/project, and `r` refreshes metadata
+  and items. Selection follows item ID across pages/search/refresh.
+- Refresh rejects newly unsupported metadata. Cancellation, generations and
+  detail request identities reject stale results. Counts are loaded counts.
+- Timelines stay read-only, including project and issue-detail mutation controls,
+  even with write permission. No rescheduling is implemented.
 
-The [2026-10-01 filter/order evidence](roadmap-filter-order-verification-2026-10-01.md)
-records the 71-row membership, populated/null/tie order comparison, and remaining
-verification limits.
+Configuration and controls: [mapping guide](local-roadmap-mappings.md).
 
-Configuration and controls: [local mapping guide](local-roadmap-mappings.md).
-The pure renderer is in `internal/ui/date_timeline.go`; its live adapter is in
-`internal/ui/timeline.go`. Navigation reuses the row-selection lifecycle used by
-tables, without table mutation controls.
+## Completed tickets
 
-## Remaining work
-
-| Issue | Status |
+| Issue | Result |
 | --- | --- |
-| [#22](https://github.com/mhuggins7278/gh-projects-tui/issues/22) | Investigation complete |
-| [#25](https://github.com/mhuggins7278/gh-projects-tui/issues/25) | Automatic saved endpoint recovery unavailable; explicit local mappings approved |
-| [#26](https://github.com/mhuggins7278/gh-projects-tui/issues/26) | Basic DATE placement plus populated is:issue / mapped start DATE ASC (null/ties) verified; other filters/sorts and live multi-page filtered comparisons remain gated |
-| [#27](https://github.com/mhuggins7278/gh-projects-tui/issues/27) | Bounded renderer complete |
-| [#28](https://github.com/mhuggins7278/gh-projects-tui/issues/28) | Read-only integration complete for the initial slice and verified is:issue / start DATE ASC extension; live smoke and large-fixture measurements recorded |
-| [#29](https://github.com/mhuggins7278/gh-projects-tui/issues/29) | Grouped live integration enabled with disclosed local option-order/unset-last policy; web parity remains unverified |
-| [#30](https://github.com/mhuggins7278/gh-projects-tui/issues/30) | Iteration endpoints deferred pending active/completed/missing/mixed conversion verification |
+| #22 | Investigation complete |
+| #25 | Automatic saved endpoint recovery unavailable; explicit local mappings supply roles |
+| #26 | Shared saved filters and up to two supported ASC/DESC sorts enabled; populated sandbox membership/order and small-page API comparisons recorded |
+| #27 | Bounded calendar/date-list renderer complete |
+| #28 | Read-only lifecycle, live smoke, and 10,000-row performance checks complete |
+| #29 | Grouped live rendering and populated/unset/order comparison complete within the disclosed local policy |
+| #30 | DATE/ITERATION/mixed endpoints enabled with inclusive current/completed/boundary/missing conversion checks |
 
-The [grouping investigation](roadmap-grouping-investigation-2026-10-01.md) records
-the renderer checkpoint, benchmark, and superseding local grouping policy.
+## Deliberate limits
 
-No existing project data is created or edited to manufacture verification cases.
-Do not use undocumented web endpoints, browser credentials, or authentication
-changes to obtain missing saved settings. Local mapping does not imply saved-view
-parity. Historical API/sample results remain in the linked evidence notes.
+Saved zoom/range, markers, slicing, field sums, collapsed/custom group ordering
+and automatic saved endpoint selection are unavailable through the documented
+API. Multiple/vertical/iteration/multi-valued grouping and unsupported filter or
+sort types remain blocked. Invalid/reversed DATE values are labeled invalid
+without swapping endpoints. These conservative policies do not claim exact web
+pixel geometry or independent work-organization web parity.
 
-## Verification
-
-The [10,000-row integration measurement](roadmap-performance-2026-10-01.md)
-records progressive rendering, input latency, stable selection, and logical
-page/detail call counts in position and verified DATE-sort modes.
-
-Model fixtures cover both owner kinds at startup, metadata/mapping compatibility,
-progressive pagination, full endpoint reads, project-position order, selected
-identity, local search, range movement, resizing, refresh rejection, obsolete
-responses, and read-only guards. Renderer fixtures cover inclusive date rules,
-leap days, month/year boundaries, partial/unset/invalid/unavailable cases,
-clipping, narrow/short terminals, Unicode, and 10,000 items.
-
-```sh
-go test -race ./...
-go vet ./...
-GH_PROJECTS_TUI_TIMELINE_PREVIEW=1 go test ./internal/ui -run '^TestTimelineSyntheticPreview$' -count=1 -v
-go test ./internal/ui -run '^$' -bench '^BenchmarkDateTimelineLargeFixture$' -benchmem
-```
+Historical evidence is preserved in the DATE, filter/order, grouping, and
+[large-fixture performance](roadmap-performance-2026-10-01.md) notes. Their earlier
+no-mutation/sample gates are superseded only for the explicitly authorized
+synthetic sandbox work described in the completion note.

@@ -21,7 +21,7 @@ func (m Model) viewCompatibility(view github.View) viewCompatibility {
 	if !found {
 		return evaluateViewCompatibility(view)
 	}
-	_, err := github.ResolveRoadmapDateFields(view.ProjectFields, mapping.StartFieldID, mapping.TargetFieldID)
+	_, err := github.ResolveRoadmapFields(view.ProjectFields, mapping.StartFieldID, mapping.TargetFieldID)
 	if err != nil {
 		return evaluateViewCompatibilityWithRoadmapReason(view, "invalid user-configured roadmap mapping: "+err.Error())
 	}
@@ -30,25 +30,41 @@ func (m Model) viewCompatibility(view github.View) viewCompatibility {
 	if groupErr != nil && (len(view.GroupByFields) > 0 || len(view.VerticalGroupBy) > 0) {
 		compatibility.reasons = append(compatibility.reasons, groupErr.Error())
 	}
-	filter := strings.TrimSpace(view.Filter)
-	if filter != "" && filter != "is:issue" {
-		compatibility.reasons = append(compatibility.reasons, "roadmap saved filter remains unverified; supported filters are empty or is:issue")
-	}
-	if !supportedRoadmapSort(view, mapping.StartFieldID) {
-		compatibility.reasons = append(compatibility.reasons, "roadmap saved sorting remains unverified; supported sorting is none or one ascending mapped start DATE field")
+	if !supportedRoadmapSort(view) {
+		compatibility.reasons = append(compatibility.reasons, "timeline sorting requires at most two supported distinct fields with consistent definitions")
 	}
 	return compatibility
 }
 
-// The populated roadmap comparison verifies start-DATE ASC, unset last, and
-// project-position ties. It does not establish DESC or secondary-sort behavior.
-func supportedRoadmapSort(view github.View, startID string) bool {
-	if len(view.SortByFields) == 0 {
-		return true
-	}
-	if len(view.SortByFields) != 1 {
+// Share board/table sort semantics: stable project-position ties and unset last.
+func supportedRoadmapSort(view github.View) bool {
+	if len(view.SortByFields) > 2 {
 		return false
 	}
-	sort := view.SortByFields[0]
-	return sort.Field.ID == startID && strings.EqualFold(sort.Field.DataType, "DATE") && strings.EqualFold(sort.Direction, "ASC")
+	seen := map[string]bool{}
+	for _, sort := range view.SortByFields {
+		if !supportedSortDirection(sort.Direction) || !supportedSortField(sort.Field) {
+			return false
+		}
+		if sort.Field.ID == "" {
+			continue
+		}
+		if seen[sort.Field.ID] {
+			return false
+		}
+		seen[sort.Field.ID] = true
+		count := 0
+		for _, field := range view.ProjectFields {
+			if field.ID == sort.Field.ID {
+				count++
+				if !strings.EqualFold(field.DataType, sort.Field.DataType) {
+					return false
+				}
+			}
+		}
+		if count != 1 {
+			return false
+		}
+	}
+	return true
 }

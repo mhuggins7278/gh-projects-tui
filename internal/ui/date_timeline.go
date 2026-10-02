@@ -10,7 +10,7 @@ import (
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
 
-// Inputs use explicit endpoint IDs validated against DATE definitions. Inclusive
+// Inputs are calendar dates resolved from explicitly mapped endpoint fields. Inclusive
 // bars and same-day/partial points have bounded web/API evidence. Invalid and
 // unavailable rows are conservative client policies, not verified web geometry.
 type dateTimelineEndpoint struct {

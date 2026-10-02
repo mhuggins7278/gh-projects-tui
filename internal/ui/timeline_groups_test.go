@@ -165,3 +165,54 @@ func TestTimelineGroupingUsesSavedOptionsWithMinimalProjectDefinitions(t *testin
 		t.Fatal("missing grouping options admitted")
 	}
 }
+
+func TestTimelineIterationEndpointsUseIDsAndRoleBoundaries(t *testing.T) {
+	field := github.Field{ID: "sprint", DataType: "ITERATION", Iterations: []github.Iteration{{ID: "current", StartDate: "2026-10-01", Duration: 7}, {ID: "completed", StartDate: "2026-09-24", Duration: 7, Completed: true}}}
+	for _, tc := range []struct{ id, start, end string }{{"current", "2026-10-01", "2026-10-07"}, {"completed", "2026-09-24", "2026-09-30"}} {
+		item := github.Item{FieldValues: []github.FieldValue{{FieldID: field.ID, IterationID: tc.id, Value: "Misleading title", Available: true}}}
+		a, b := timelineMappedEndpoint(field, item, false), timelineMappedEndpoint(field, item, true)
+		if !a.Available || !b.Available || a.Value != tc.start || b.Value != tc.end {
+			t.Fatalf("bad conversion: %+v/%+v", a, b)
+		}
+	}
+	if e := timelineMappedEndpoint(field, github.Item{}, false); !e.Available || e.Value != "" {
+		t.Fatal("unset became current iteration")
+	}
+	for _, values := range [][]github.FieldValue{
+		{{FieldID: "sprint", IterationID: "unknown", Available: true}},
+		{{FieldID: "sprint", IterationID: "current", Available: false}},
+		{{FieldID: "sprint", Value: "guess by title", Available: true}},
+		{{FieldID: "sprint", IterationID: "current", Available: true}, {FieldID: "sprint", IterationID: "current", Available: true}},
+	} {
+		if timelineMappedEndpoint(field, github.Item{FieldValues: values}, true).Available {
+			t.Fatal("unavailable/ambiguous membership became dates")
+		}
+	}
+}
+
+func TestTimelineIterationMappingRendersAndStaysReadOnly(t *testing.T) {
+	m, source := groupedLiveTimelineFixture()
+	field := github.Field{ID: "sprint", Name: "Sprint", DataType: "ITERATION", Iterations: []github.Iteration{{ID: "current", StartDate: "2026-10-01", Duration: 7}}}
+	m.view.ProjectFields = append(m.view.ProjectFields, field)
+	m.roadmapMappings.Roadmaps[0].StartFieldID = field.ID
+	m.roadmapMappings.Roadmaps[0].TargetFieldID = field.ID
+	item := groupedItem("selected", "ready")
+	item.FieldValues = append(item.FieldValues, github.FieldValue{FieldID: "sprint", IterationID: "current", Available: true})
+	m.items = []github.Item{item}
+	m.timelineMonth = "2026-10"
+	if c := m.viewCompatibility(*m.view); !c.supported() {
+		t.Fatal(c.summary())
+	}
+	for _, s := range []string{"Start: 2026-10-01", "Target: 2026-10-07"} {
+		if !strings.Contains(string(m.View().Content), s) {
+			t.Fatalf("missing %s", s)
+		}
+	}
+	source.view = *m.view
+	source.view.ProjectFields = append([]github.Field(nil), m.view.ProjectFields...)
+	source.view.ProjectFields[len(source.view.ProjectFields)-1].Iterations = nil
+	m = runMembershipReads(t, m, m.refresh())
+	if m.view != nil || m.screen != screenViewPicker {
+		t.Fatal("refresh admitted unavailable iteration definitions")
+	}
+}

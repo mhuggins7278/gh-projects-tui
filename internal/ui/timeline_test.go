@@ -23,11 +23,11 @@ func TestTimelineCompatibilityRejectsFiltersAndSorts(t *testing.T) {
 	for _, mode := range []string{"filter", "sort"} {
 		m, _ := liveTimelineFixture()
 		if mode == "filter" {
-			m.view.Filter = "is:open"
+			m.view.Filter = "is:unknown"
 		} else {
-			m.view.SortByFields = []github.SortField{{Field: github.Field{Name: "Title", DataType: "TITLE"}, Direction: "ASC"}}
+			m.view.SortByFields = []github.SortField{{Field: github.Field{Name: "Title", DataType: "TITLE"}, Direction: "INVALID"}}
 		}
-		if c := m.viewCompatibility(*m.view); c.supported() || !strings.Contains(c.summary(), "remain") {
+		if c := m.viewCompatibility(*m.view); c.supported() || c.summary() == "" {
 			t.Fatalf("admitted %s: %s", mode, c.summary())
 		}
 	}
@@ -94,9 +94,9 @@ func TestTimelineRefreshPreservesFocusAndRejectsChangedSettings(t *testing.T) {
 			m.tableFocusID = "selected"
 			switch changed {
 			case "filter":
-				source.view.Filter = "is:open"
+				source.view.Filter = "is:unknown"
 			case "sort":
-				source.view.SortByFields = []github.SortField{{Field: github.Field{Name: "Title"}, Direction: "ASC"}}
+				source.view.SortByFields = []github.SortField{{Field: github.Field{Name: "Title"}, Direction: "INVALID"}}
 			case "group":
 				source.view.GroupByFields = []github.Field{compatibilityStatusField()}
 			case "mapping":
@@ -213,7 +213,7 @@ func TestTimelinePickerOpensForBothOwnerKindsAndDetailsTargetSelection(t *testin
 	}
 }
 
-func TestTimelineAdmitsOnlyVerifiedFilterAndMappedStartSort(t *testing.T) {
+func TestTimelineAdmitsSharedFiltersAndSupportedSavedSorts(t *testing.T) {
 	for _, tc := range []struct {
 		name, filter, direction, fieldID, dataType string
 		secondary                                  bool
@@ -224,12 +224,12 @@ func TestTimelineAdmitsOnlyVerifiedFilterAndMappedStartSort(t *testing.T) {
 		{name: "whitespace preserved", filter: " is:issue ", supported: true},
 		{name: "start ASC", direction: "ASC", fieldID: "start-id", dataType: "DATE", supported: true},
 		{name: "filtered start ASC", filter: "is:issue", direction: "ASC", fieldID: "start-id", dataType: "DATE", supported: true},
-		{name: "conjunction", filter: "is:issue is:open"},
-		{name: "other filter", filter: "is:pr"},
-		{name: "DESC", direction: "DESC", fieldID: "start-id", dataType: "DATE"},
-		{name: "target ASC", direction: "ASC", fieldID: "target-id", dataType: "DATE"},
+		{name: "conjunction", filter: "is:issue is:open", supported: true},
+		{name: "other filter", filter: "is:pr", supported: true},
+		{name: "DESC", direction: "DESC", fieldID: "start-id", dataType: "DATE", supported: true},
+		{name: "target ASC", direction: "ASC", fieldID: "target-id", dataType: "DATE", supported: true},
 		{name: "wrong type", direction: "ASC", fieldID: "start-id", dataType: "TEXT"},
-		{name: "secondary sort", direction: "ASC", fieldID: "start-id", dataType: "DATE", secondary: true},
+		{name: "duplicate secondary sort", direction: "ASC", fieldID: "start-id", dataType: "DATE", secondary: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := liveTimelineFixture()
@@ -336,5 +336,52 @@ func TestFilteredTimelineStandardTerminalKeepsCountsAndDatesVisible(t *testing.T
 		if !strings.Contains(text, want) {
 			t.Fatalf("standard terminal lost %q: %s", want, text)
 		}
+	}
+}
+
+func TestTimelineBroaderFiltersForwardUnchangedAcrossPages(t *testing.T) {
+	for _, filter := range []string{` is:issue label:demo status:"In Progress" `, `label:demo -status:Done`, `is:open repo:owner/repo`} {
+		m, base := liveTimelineFixture()
+		m.view.Filter = filter
+		first, second := github.Item{ID: "first", Content: &github.Content{Title: "first"}}, github.Item{ID: "second", Content: &github.Content{Title: "second"}}
+		base.itemPages = map[string]github.ItemsPage{"": {Items: []github.Item{first}, HasNext: true, EndCursor: "next"}, "next": {Items: []github.Item{second}}}
+		source := &filteredTimelineSource{viewRefreshSource: base}
+		m.source = source
+		if c := m.viewCompatibility(*m.view); !c.supported() {
+			t.Fatal(c.summary())
+		}
+		cmd := m.startItemsLoad()
+		updated, next := m.Update(cmd())
+		m = updated.(Model)
+		m.tableFocusID = "first"
+		m = runMembershipReads(t, m, next)
+		if len(source.fullFilters) != 2 || source.fullFilters[0] != filter || source.fullFilters[1] != filter {
+			t.Fatal("saved filter changed across pages")
+		}
+		if item, _ := m.selectedItem(); item.ID != "first" || len(m.items) != 2 {
+			t.Fatal("page changed selection/membership")
+		}
+	}
+}
+
+func TestTimelineTwoDateSortsPreserveTiesNullsAndEndpointRoles(t *testing.T) {
+	m, _ := liveTimelineFixture()
+	m.view.SortByFields = []github.SortField{{Field: m.view.ProjectFields[0], Direction: "DESC"}, {Field: m.view.ProjectFields[1], Direction: "ASC"}}
+	for _, tc := range []struct{ id, start, target string }{{"tie-later", "2026-10-05", "2026-11-02"}, {"null", "", ""}, {"tie-earlier", "2026-10-05", "2026-10-16"}, {"latest", "2026-10-26", "2026-11-20"}, {"tie-stable", "2026-10-05", "2026-10-16"}} {
+		item := github.Item{ID: tc.id, Content: &github.Content{Title: tc.id}, FieldValues: []github.FieldValue{{FieldID: "start-id", Value: tc.start, Available: true}, {FieldID: "target-id", Value: tc.target, Available: true}}}
+		m.items = append(m.items, item)
+	}
+	if c := m.viewCompatibility(*m.view); !c.supported() {
+		t.Fatal(c.summary())
+	}
+	for i, id := range []string{"latest", "tie-earlier", "tie-stable", "tie-later", "null"} {
+		if m.tableItems()[i].ID != id {
+			t.Fatal("two-field order/ties/nulls changed")
+		}
+	}
+	m.tableFocusID = "tie-later"
+	display := string(m.View().Content)
+	if !strings.Contains(display, "Date A descending, Date B ascending") || !strings.Contains(display, "Target: 2026-11-02") {
+		t.Fatal("saved order/endpoint role mislabeled")
 	}
 }
