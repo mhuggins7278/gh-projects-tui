@@ -72,7 +72,7 @@ func TestTimelineGroupingCompatibilityUsesCompleteDefinitions(t *testing.T) {
 			case "stale":
 				m.view.ProjectFields = m.view.ProjectFields[:2]
 			case "duplicate-option":
-				m.view.ProjectFields[2].Options = append(m.view.ProjectFields[2].Options, m.view.ProjectFields[2].Options[0])
+				m.view.GroupByFields[0].Options = append(m.view.GroupByFields[0].Options, m.view.GroupByFields[0].Options[0])
 			case "duplicate-field":
 				m.view.ProjectFields = append(m.view.ProjectFields, m.view.ProjectFields[2])
 			}
@@ -145,5 +145,23 @@ func TestGroupedTimelinePickerAndDirectStartup(t *testing.T) {
 				t.Fatal("grouped detail lost selection")
 			}
 		}
+	}
+}
+
+func TestTimelineGroupingUsesSavedOptionsWithMinimalProjectDefinitions(t *testing.T) {
+	m, _ := groupedLiveTimelineFixture()
+	// Real View() queries deliberately omit options from ProjectFields.
+	m.view.ProjectFields[2].Options = nil
+	m.items = []github.Item{groupedItem("ready-item", "ready"), groupedItem("done-item", "done"), groupedItem("unset", "")}
+	if c := m.viewCompatibility(*m.view); !c.supported() {
+		t.Fatal(c.summary())
+	}
+	groups, err := timelineGroups(m.view, m.items)
+	if err != nil || len(groups) != 3 || groups[0].Items[0].ID != "ready-item" || groups[1].Items[0].ID != "done-item" {
+		t.Fatalf("missing saved options: %+v, %v", groups, err)
+	}
+	m.view.GroupByFields[0].Options = nil
+	if c := m.viewCompatibility(*m.view); c.supported() {
+		t.Fatal("missing grouping options admitted")
 	}
 }

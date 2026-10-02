@@ -21,8 +21,14 @@ func timelineGroupField(view *github.View) (github.Field, error) {
 			field, count = candidate, count+1
 		}
 	}
-	if count != 1 || !isSingleSelectField(field) || len(field.Options) == 0 {
+	if count != 1 || !isSingleSelectField(field) {
 		return github.Field{}, fmt.Errorf("timeline grouping requires a unique complete single-select definition")
+	}
+	// ProjectFields is the filter-validation projection (ID/name/type only).
+	// The saved grouping connection supplies the complete option definitions.
+	field = view.GroupByFields[0]
+	if !isSingleSelectField(field) || len(field.Options) == 0 {
+		return github.Field{}, fmt.Errorf("timeline grouping requires complete single-select group options")
 	}
 	seen := map[string]bool{}
 	for _, option := range field.Options {

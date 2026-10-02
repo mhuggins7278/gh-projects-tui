@@ -105,7 +105,8 @@ and [the current roadmap scope](roadmap-proposal.md).
 The user requested general enablement on 2026-10-01 without requiring access to
 an existing work board from this computer. A mapped DATE timeline can now open
 with one saved single-select grouping field. Its field ID must resolve uniquely
-against complete project definitions with nonempty, unique option IDs.
+against project definitions; the saved grouping connection must supply
+nonempty, unique option IDs.
 
 This uses a disclosed local display policy: API field-option order, a final
 “No value” section, and all groups expanded. Empty options remain visible with
