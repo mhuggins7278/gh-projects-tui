@@ -21,7 +21,7 @@ func (c viewCompatibility) summary() string {
 }
 
 func evaluateViewCompatibility(view github.View) viewCompatibility {
-	return evaluateViewCompatibilityWithRoadmapReason(view, "roadmap views are not supported: saved start/target field mapping and timeline settings are not available through this client; open this view in GitHub")
+	return evaluateViewCompatibilityWithRoadmapReason(view, "roadmap views are not supported in this release; required timeline settings are not available through this client; open this view in GitHub")
 }
 
 func evaluateViewCompatibilityWithRoadmapReason(view github.View, roadmapReason string) viewCompatibility {

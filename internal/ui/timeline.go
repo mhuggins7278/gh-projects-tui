@@ -65,19 +65,19 @@ func timelineEndpoint(fieldID string, item github.Item) dateTimelineEndpoint {
 func (m Model) renderTimelineContent(b *strings.Builder) {
 	mapping, ok := m.roadmapMappings.Find(m.host, m.view.ProjectID, m.view.ID)
 	if !ok {
-		b.WriteString("Timeline mapping unavailable\n")
+		b.WriteString("Timeline endpoint selection unavailable\n")
 		return
 	}
 	fields, err := github.ResolveRoadmapFields(m.view.ProjectFields, mapping.StartFieldID, mapping.TargetFieldID)
 	if err != nil {
-		b.WriteString("Timeline mapping unavailable: " + err.Error() + "\n")
+		b.WriteString("Timeline endpoint selection unavailable: " + err.Error() + "\n")
 		return
 	}
 	width := m.frameContentWidth()
 	items := m.tableItems()
 	lines := []string{
 		m.view.Name + " · read-only timeline",
-		fmt.Sprintf("User-configured: start %s · target %s", fields.Start.Name, fields.Target.Name),
+		fmt.Sprintf("Start: %s · target: %s", fields.Start.Name, fields.Target.Name),
 		"Local range; saved zoom, markers, slicing and field sums unavailable.",
 	}
 	if strings.TrimSpace(m.view.Filter) != "" {

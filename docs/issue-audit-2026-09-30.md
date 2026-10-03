@@ -27,7 +27,7 @@ it reaches `main`. Existing implementation commits are preserved.
 | [#30](https://github.com/mhuggins7278/gh-projects-tui/issues/30) — iteration endpoints | The initial verified timeline, explicit endpoint mapping, and existing populated comparisons for active/completed/missing/mixed endpoints and date conversion. |
 
 These feature issues stay open. Their issue descriptions and the
-[roadmap proposal](roadmap-proposal.md#tracked-follow-up-work) record the actual
+[roadmap investigation](api-contract.md#roadmap-layout-investigation) record the actual
 missing prerequisites. No project data or authentication was changed, and no
 undocumented endpoint, browser credential, inferred field role, or local
 substitute was used to bypass the roadmap gate.
@@ -42,12 +42,8 @@ picker rejection, and timeline fixtures also pass. No release tag was created.
 
 ## Subsequent endpoint-source decision
 
-The user subsequently approved [explicit local mappings](local-roadmap-mappings.md).
-They provide host/project/view-scoped, user-selected DATE field IDs without
-recovering GitHub's saved selections. The API no-go finding above remains valid.
-The mapping capability now exists; #26 still needs representative placement,
-filtering, and order comparisons, and #28 still needs verified read-only
-integration. #29/#30 continue to depend on that initial verified timeline.
+The user subsequently decided to keep roadmap views unsupported. No endpoint
+configuration workaround is exposed by the application.
 
 The [populated sample probe](roadmap-date-verification-2026-09-30.md) returned
 540 unique items over six pages and matched 21 visible web rows to project

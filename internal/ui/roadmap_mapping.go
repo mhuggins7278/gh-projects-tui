@@ -3,14 +3,29 @@ package ui
 import (
 	"strings"
 
-	"github.com/mhuggins7278/gh-projects-tui/internal/config"
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
 
-// SetRoadmapMappings installs an explicit local source without changing the
-// GitHub client or cached saved-view metadata.
-func (m *Model) SetRoadmapMappings(mappings config.RoadmapMappings) {
-	m.roadmapMappings.Roadmaps = append([]config.RoadmapMapping(nil), mappings.Roadmaps...)
+type roadmapMapping struct {
+	Host, ProjectID, ViewID     string
+	StartFieldID, TargetFieldID string
+}
+
+type roadmapMappings struct{ Roadmaps []roadmapMapping }
+
+func (m roadmapMappings) Find(host, projectID, viewID string) (roadmapMapping, bool) {
+	for _, mapping := range m.Roadmaps {
+		if mapping.Host == host && mapping.ProjectID == projectID && mapping.ViewID == viewID {
+			return mapping, true
+		}
+	}
+	return roadmapMapping{}, false
+}
+
+// setRoadmapMappings is kept package-private for renderer compatibility tests.
+// The application no longer loads endpoint choices from user files.
+func (m *Model) setRoadmapMappings(mappings roadmapMappings) {
+	m.roadmapMappings.Roadmaps = append([]roadmapMapping(nil), mappings.Roadmaps...)
 }
 
 func (m Model) viewCompatibility(view github.View) viewCompatibility {
@@ -23,7 +38,7 @@ func (m Model) viewCompatibility(view github.View) viewCompatibility {
 	}
 	_, err := github.ResolveRoadmapFields(view.ProjectFields, mapping.StartFieldID, mapping.TargetFieldID)
 	if err != nil {
-		return evaluateViewCompatibilityWithRoadmapReason(view, "invalid user-configured roadmap mapping: "+err.Error())
+		return evaluateViewCompatibilityWithRoadmapReason(view, "invalid roadmap endpoint selection: "+err.Error())
 	}
 	_, groupErr := timelineGroupField(&view)
 	compatibility := evaluateViewCompatibilityWithRoadmapGrouping(view, "", groupErr == nil)

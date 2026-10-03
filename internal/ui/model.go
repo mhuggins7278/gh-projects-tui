@@ -160,7 +160,7 @@ type Model struct {
 
 	host            string
 	debug           bool
-	roadmapMappings config.RoadmapMappings
+	roadmapMappings roadmapMappings
 	timelineMonth   string
 
 	screen                screen
@@ -1403,6 +1403,12 @@ func (m Model) renderViewPicker(b *strings.Builder) {
 	}
 	b.WriteString(m.pickerHeading("Saved views", fmt.Sprintf("#%d %s", m.selectedProject.Number, m.selectedProject.Title)))
 	b.WriteString("\n")
+	for _, view := range m.views {
+		if view.Layout == github.RoadmapLayout {
+			b.WriteString(statusStyle.Render("Roadmap views are unsupported in this release.") + "\n")
+			break
+		}
+	}
 	if m.viewPickerNotice != "" {
 		b.WriteString(statusStyle.Render(m.viewPickerNotice) + "\n")
 	}
@@ -1414,13 +1420,14 @@ func (m Model) renderViewPicker(b *strings.Builder) {
 	}
 	for i, view := range views {
 		label := fmt.Sprintf("#%-4d %-24s", view.Number, view.Name)
-		if _, mapped := m.roadmapMappings.Find(m.host, m.selectedProject.ID, view.ID); mapped && view.Layout == github.RoadmapLayout {
-			label += "  (user-configured mapping)"
-		}
 		if reason := m.boardViewReasons[view.Number]; reason != "" {
 			label += "  (unsupported: " + reason + ")"
 		}
-		b.WriteString(m.pickerRow(i == m.cursor, label+" "+layoutBadge(string(view.Layout))) + "\n")
+		badge := layoutBadge(string(view.Layout))
+		if view.Layout == github.RoadmapLayout {
+			badge = readOnlyBadgeStyle.Render("UNSUPPORTED")
+		}
+		b.WriteString(m.pickerRow(i == m.cursor, label+" "+badge) + "\n")
 	}
 }
 

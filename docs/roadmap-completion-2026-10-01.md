@@ -1,5 +1,8 @@
 # Read-only timeline completion — 2026-10-01
 
+Historical implementation record. Roadmap views are unsupported in the current
+application release and remain in the saved-view picker.
+
 The user explicitly authorized synthetic repository issues, sandbox project
 items/fields/views, and finishing the feature. This supersedes older requirements
 that all remaining comparisons use only pre-existing samples. The demo remains
@@ -79,6 +82,7 @@ This closes the scoped read-only implementation tracked by #26/#29/#30. Existing
 large-fixture performance evidence remains in `roadmap-performance-2026-10-01.md`.
 It does not claim every GitHub filter/sort/type, an independent work-organization
 web comparison, or unavailable saved display state. Automatic saved endpoint
-recovery remains unavailable (#25); explicit local mappings supply endpoint roles.
+recovery remains unavailable (#25); the earlier experiment used manually
+selected endpoint roles, which are no longer exposed by the application.
 Saved zoom/range, markers, slicing, field sums, collapsed/custom group order and
 rescheduling/writes are not part of the implementation.

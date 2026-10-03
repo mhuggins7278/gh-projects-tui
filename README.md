@@ -103,11 +103,9 @@ You can also pass only `--owner` to start at that owner's project picker.
 telemetry in the header and enable the `A` inspector overlay, including measured
 GraphQL points by operation.
 
-Explicit local roadmap endpoint-field mappings can be supplied with
-`--roadmap-mappings ./roadmaps.json`. They are scoped to host/project/view node
-IDs and labeled as user-configured. Read-only timelines support DATE and ITERATION endpoints, the app's supported
-saved filters, up to two supported ASC/DESC sorts, and one single-select group.
-Use `j/k` for rows, `h/l` for months, and `g` for the current month. See [mapping setup and the current boundary](docs/local-roadmap-mappings.md).
+Roadmap views currently appear in the saved-view picker as unsupported and
+cannot be opened. The API does not expose enough saved-view configuration to
+render them faithfully; open roadmap views in GitHub.
 
 ### Build a local binary
 
@@ -177,12 +175,9 @@ offer these issue actions.
 
 ## Pre-alpha limitations
 
-- Roadmaps require explicit local DATE/ITERATION endpoint mappings. One
-  single-select group uses local API option order, unset last, and all groups
-  expanded. Supported filters and up to two supported ASC/DESC sorts reuse the
-  board/table rules. Vertical/multiple/iteration grouping and restored web
-  display settings remain unsupported.
-  See [the timeline boundary and remaining gates](docs/roadmap-proposal.md).
+- Roadmap views are unsupported in this release and remain in the picker with
+  an explanation. The TUI does not guess which project fields GitHub uses for
+  the roadmap date axis.
 - Saved filters support `status:Todo`, `status:"In Progress"`, `assignee:@me`,
   `assignee:USERNAME`, `label:bug`, `repo:OWNER/REPO`, `is:open`, `is:closed`,
   `is:issue`, `is:pr`, `is:draft`, `is:merged`, `type:Epic` or

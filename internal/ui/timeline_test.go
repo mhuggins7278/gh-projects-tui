@@ -14,7 +14,7 @@ func liveTimelineFixture() (Model, *viewRefreshSource) {
 	source := &viewRefreshSource{fakePickerSource: fakePickerSource{view: view}}
 	m := mutationModel(source.fakePickerSource, view, nil)
 	m.source = source
-	m.SetRoadmapMappings(mappings)
+	m.setRoadmapMappings(mappings)
 	m.width, m.height, m.timelineMonth = 120, 35, "2024-01"
 	return m, source
 }
@@ -59,7 +59,7 @@ func TestTimelinePagesKeepOrderSelectionAndFullEndpointReads(t *testing.T) {
 		t.Fatal("page changed selection")
 	}
 	display := string(m.View().Content)
-	for _, want := range []string{"User-configured", "Start: 2024-03-01", "Target: 2024-03-02", "Local range"} {
+	for _, want := range []string{"Start: Date A", "Start: 2024-03-01", "Target: 2024-03-02", "Local range"} {
 		if !strings.Contains(display, want) {
 			t.Fatalf("missing %q: %s", want, display)
 		}
@@ -185,7 +185,7 @@ func TestTimelinePickerOpensForBothOwnerKindsAndDetailsTargetSelection(t *testin
 			item := github.Item{ID: "selected", Content: &github.Content{ID: "issue", Kind: "Issue", Title: "Selected issue", URL: "https://github.com/owner/repo/issues/1"}}
 			source := fakePickerSource{view: view, itemPages: map[string]github.ItemsPage{"": {Items: []github.Item{item}}}, detail: github.ItemDetail{ID: item.ID, Content: item.Content}}
 			m := NewModelWithHost(source, Selection{}, "github.com")
-			m.SetRoadmapMappings(mappings)
+			m.setRoadmapMappings(mappings)
 			m.screen = screenViewPicker
 			m.selectedOwner = &github.Owner{Login: "owner", Kind: kind}
 			m.selectedProject = &github.Project{ID: view.ProjectID, Number: 7}

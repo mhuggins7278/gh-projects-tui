@@ -121,7 +121,7 @@ func TestGroupedTimelinePickerAndDirectStartup(t *testing.T) {
 			item := groupedItem("selected", "ready")
 			source := fakePickerSource{view: view, itemPages: map[string]github.ItemsPage{"": {Items: []github.Item{item}}}, detail: github.ItemDetail{ID: item.ID, Content: item.Content}}
 			m := NewModelWithHost(source, Selection{}, "github.com")
-			m.SetRoadmapMappings(fixture.roadmapMappings)
+			m.setRoadmapMappings(fixture.roadmapMappings)
 			owner := github.Owner{Login: "owner", Kind: kind}
 			var updatedModel Model
 			if direct {

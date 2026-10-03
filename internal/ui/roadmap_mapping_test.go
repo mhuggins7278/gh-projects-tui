@@ -4,91 +4,25 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mhuggins7278/gh-projects-tui/internal/config"
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
 
-func mappedRoadmapFixture() (github.View, config.RoadmapMappings) {
-	view := github.View{ProjectID: "project-id", ID: "view-id", Number: 3, Name: "Timeline", Layout: github.RoadmapLayout, ViewerCanUpdate: true,
-		ProjectFields: []github.Field{{ID: "start-id", Name: "Date A", DataType: "DATE"}, {ID: "target-id", Name: "Date B", DataType: "DATE"}},
-	}
-	mappings := config.RoadmapMappings{Roadmaps: []config.RoadmapMapping{{Host: "github.com", ProjectID: view.ProjectID, ViewID: view.ID, StartFieldID: "start-id", TargetFieldID: "target-id"}}}
-	return view, mappings
-}
-
-func TestLocalRoadmapMappingValidatesThroughPicker(t *testing.T) {
-	for _, invalid := range []string{"stale", "non-date", "duplicate"} {
-		for _, kind := range []github.OwnerKind{github.UserOwner, github.OrganizationOwner} {
-			t.Run(invalid+string(kind), func(t *testing.T) {
-				view, mappings := mappedRoadmapFixture()
-				switch invalid {
-				case "stale":
-					view.ProjectFields = view.ProjectFields[:1]
-				case "non-date":
-					view.ProjectFields[1].DataType = "ITERATION"
-				case "duplicate":
-					view.ProjectFields = append(view.ProjectFields, view.ProjectFields[1])
-				}
-				viewCalls, itemCalls := 0, 0
-				mutations := []string{}
-				source := fakePickerSource{view: view, viewCalls: &viewCalls, itemCalls: &itemCalls, mutations: &mutations}
-				model := NewModelWithHost(source, Selection{}, "github.com")
-				model.screen = screenViewPicker
-				model.selectedOwner = &github.Owner{Login: "owner", Kind: kind}
-				model.selectedProject = &github.Project{ID: view.ProjectID, Number: 7}
-				model.views = []github.ViewSummary{{ID: view.ID, Number: view.Number, Name: view.Name, Layout: view.Layout}}
-				model.SetRoadmapMappings(mappings)
-				if !strings.Contains(string(model.View().Content), "user-configured mapping") {
-					t.Fatal("picker omitted the local source label")
-				}
-				updated, cmd := model.Update(keyPress("enter"))
-				model = updated.(Model)
-				if cmd == nil {
-					t.Fatal("configured roadmap could not read its definitions")
-				}
-				updated, cmd = model.Update(cmd())
-				model = updated.(Model)
-				if cmd != nil || model.screen != screenViewPicker || model.view != nil || model.itemsLoading || viewCalls != 1 || itemCalls != 0 || len(mutations) != 0 {
-					t.Fatalf("mapping enabled live loading/writes: screen=%v status=%q", model.screen, model.status)
-				}
-				if !strings.Contains(model.status, "invalid user-configured roadmap mapping") {
-					t.Fatalf("invalid mapping had no explanation: %q", model.status)
-				}
-			})
-		}
-	}
-}
-
-func TestLocalRoadmapMappingsDoNotLeakAcrossScopesOrOtherLayouts(t *testing.T) {
-	view, mappings := mappedRoadmapFixture()
+func TestUnmappedRoadmapPickerClearlyMarksUnsupported(t *testing.T) {
+	view, _ := mappedRoadmapFixture()
 	model := NewModelWithHost(nil, Selection{}, "github.com")
-	model.SetRoadmapMappings(mappings)
-	// The setter owns its entries rather than observing caller mutations.
-	mappings.Roadmaps[0].TargetFieldID = "changed"
-	if got := model.viewCompatibility(view).summary(); got != "" {
-		t.Fatalf("caller changed an installed mapping: %q", got)
-	}
-	for _, scope := range []string{"host", "project", "view"} {
-		candidate := view
-		copy := model
-		switch scope {
-		case "host":
-			copy.host = "enterprise.example"
-		case "project":
-			candidate.ProjectID = "other-project"
-		case "view":
-			candidate.ID = "other-view"
-		}
-		if got := copy.viewCompatibility(candidate).summary(); strings.Contains(got, "user-configured") || !strings.Contains(got, "saved start/target") {
-			t.Fatalf("mapping leaked across %s: %q", scope, got)
+	model.screen = screenViewPicker
+	model.selectedOwner = &github.Owner{Login: "owner", Kind: github.UserOwner}
+	model.selectedProject = &github.Project{ID: view.ProjectID, Number: 7, Title: "Project"}
+	model.views = []github.ViewSummary{{ID: view.ID, Number: view.Number, Name: view.Name, Layout: view.Layout}}
+
+	content := string(model.View().Content)
+	for _, want := range []string{"Roadmap views are unsupported in this release", "UNSUPPORTED"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("roadmap picker omitted %q: %s", want, content)
 		}
 	}
-	for _, layout := range []github.ViewLayout{github.BoardLayout, github.TableLayout} {
-		view.Layout = layout
-		view.ProjectFields = nil
-		if got := model.viewCompatibility(view); !got.supported() {
-			t.Fatalf("local mapping affected %s: %q", layout, got.summary())
-		}
+	if strings.Contains(content, "mapping") || strings.Contains(content, "roadmaps.json") {
+		t.Fatalf("picker exposed endpoint configuration details: %s", content)
 	}
 }
 
@@ -97,7 +31,7 @@ func TestLocalRoadmapMappingDirectSelectionLoadsTimeline(t *testing.T) {
 	owner := github.Owner{Login: "owner", Kind: github.UserOwner}
 	source := fakePickerSource{}
 	model := NewModelWithHost(source, Selection{OwnerLogin: owner.Login, ProjectNumber: 7, ViewNumber: view.Number}, "github.com")
-	model.SetRoadmapMappings(mappings)
+	model.setRoadmapMappings(mappings)
 	updated, cmd := model.Update(discoveryMsg{generation: model.generation, view: &view, discovery: github.Discovery{
 		Owners: []github.Owner{owner}, Projects: map[string][]github.Project{owner.Login: {{ID: view.ProjectID, Number: 7}}},
 	}})
@@ -121,7 +55,7 @@ func TestRoadmapGroupingIsExplicitlyRejected(t *testing.T) {
 			model := NewModelWithHost(nil, Selection{}, "github.com")
 			for _, mapped := range []bool{false, true} {
 				if mapped {
-					model.SetRoadmapMappings(mappings)
+					model.setRoadmapMappings(mappings)
 				}
 				compatibility := model.viewCompatibility(view)
 				if compatibility.supported() || !strings.Contains(compatibility.summary(), "roadmap grouping is not supported") {

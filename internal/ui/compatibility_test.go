@@ -393,14 +393,14 @@ func TestRoadmapDateAndIterationMetadataDoesNotEnableLoading(t *testing.T) {
 			if !strings.Contains(result.status, "roadmap views are not supported") {
 				t.Fatalf("missing roadmap explanation: %q", result.status)
 			}
-			if !strings.Contains(result.status, "start/target field mapping") || !strings.Contains(result.status, "open this view in GitHub") {
+			if !strings.Contains(result.status, "required timeline settings") || !strings.Contains(result.status, "open this view in GitHub") {
 				t.Fatalf("missing actionable roadmap limitation: %q", result.status)
 			}
 		})
 	}
 }
 
-func TestRoadmapUnavailableEndpointMappingsStayBlocked(t *testing.T) {
+func TestRoadmapLayoutsStayBlockedRegardlessOfDateFields(t *testing.T) {
 	start := github.Field{ID: "start", Name: "Start", DataType: "DATE"}
 	target := github.Field{ID: "target", Name: "Target", DataType: "DATE"}
 	for _, test := range []struct {
@@ -428,8 +428,8 @@ func TestRoadmapUnavailableEndpointMappingsStayBlocked(t *testing.T) {
 			if cmd != nil || result.screen != screenViewPicker || result.view != nil || result.itemsLoading {
 				t.Fatal("unavailable endpoint mapping enabled a roadmap")
 			}
-			if !strings.Contains(result.status, "saved start/target field mapping") {
-				t.Fatalf("missing mapping explanation: %q", result.status)
+			if !strings.Contains(result.status, "roadmap views are not supported in this release") {
+				t.Fatalf("missing unsupported-view explanation: %q", result.status)
 			}
 		})
 	}
