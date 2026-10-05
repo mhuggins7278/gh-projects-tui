@@ -18,9 +18,10 @@ Sanitized results below contain only counts and invented calendar semantics.
   roles use the first day; target roles use start plus duration minus one.
   Missing membership stays unset; unavailable/unknown/duplicate values do not
   turn into guessed dates. Invalid definitions block entry/refresh.
-- Saved filters use the existing board/table compatibility grammar and are
-  forwarded unchanged to the server on every page. Local search only narrows
-  loaded rows. Unsupported grammar remains blocked.
+- Saved filters used the then-current board/table compatibility grammar and were
+  forwarded unchanged to the server on every page. Local search only narrowed
+  loaded rows. The grammar gate has since been removed; see the
+  [current filter contract](api-contract.md#saved-filter-grammar-and-evidence).
 - Up to two distinct supported ASC/DESC sort fields reuse stable board/table
   sorting: unset last, original project-position ties. Sort order does not change
   endpoint roles. Unsupported/inconsistent metadata remains blocked.

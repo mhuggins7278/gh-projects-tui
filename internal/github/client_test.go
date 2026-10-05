@@ -69,6 +69,13 @@ func cursor(value string) *string {
 
 func TestPageBoardItemsPreservesSavedFilterAcrossPages(t *testing.T) {
 	filters := []string{
+		"has:otc-sprint",
+		`note:"hello world" target:>=@today teams:Core,Platform`,
+		`"Estimate (days)":>=2 has:équipe_🚀`,
+		"reviewers:@me -iteration:@next new-qualifier:some-value",
+		`status:"Work, blocked" title:"quote\"value"`,
+		`status:"unterminated`,
+		" \t\n",
 		`label:"bug","needs review" assignee:@me is:closed`,
 		`parent-issue:"octocat/hello-world#123" is:open`,
 		"closed:>=2026-09-24",

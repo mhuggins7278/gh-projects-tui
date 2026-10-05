@@ -126,7 +126,10 @@ After pulling updates, rerun `go run` or rebuild your local binary.
 - Progressive board loading through one paginated stream with selective fields.
 - Single-select and iteration grouping, including combined columns/swimlanes.
 - Saved visible fields, supported field sorting, and local card search.
-- Table rendering using saved fields, single-field grouping, row navigation, local search, and issue sub-issue progress. Writable tables can archive or remove project items, change groups, and reorder position-sorted rows.
+- Tables render saved fields, single-field groups, linked PRs, and expandable
+  sub-issue hierarchies. Nested children load on demand, including children
+  outside the saved filter. Writable tables can archive or remove project items,
+  change groups, and reorder position-sorted top-level rows.
 - Issue, pull request, and draft details, including Markdown bodies and project
   fields. Details are cached in memory until refresh or view changes.
 - Optimistic card moves and reordering on supported writable boards.
@@ -151,11 +154,13 @@ the saved state. Use `r` to pick up external changes.
 | --- | --- |
 | `j/k` or `↑/↓` | Move through picker entries or cards |
 | `h/l` or `←/→` | Navigate board lanes |
+| `h/l` or `←/→` (table) | Collapse/select the parent / expand sub-issues |
+| `space` (table) | Toggle the selected row's sub-issues |
 | `enter` | Select a picker entry or open item details |
 | `H/L` (uppercase) | Move the selected card to an adjacent lane |
 | `J/K` (uppercase) | Reorder the selected card within its lane |
 | `m` (table) | Pick a saved group for the selected row; `j/k` choose and `enter` moves |
-| `J/K` (table) | Reorder the selected row within its group when project-position sorted |
+| `J/K` (table) | Reorder the selected top-level row within its group when project-position sorted |
 | `a` / `D` (table) | Archive / remove the selected item from this project (confirmation required) |
 | `/` | Filter picker entries or search loaded cards |
 | `enter` / `esc` while searching | Finish search / clear search |
@@ -178,33 +183,15 @@ offer these issue actions.
 - Roadmap views are unsupported in this release and remain in the picker with
   an explanation. The TUI does not guess which project fields GitHub uses for
   the roadmap date axis.
-- Saved filters support `status:Todo`, `status:"In Progress"`, `assignee:@me`,
-  `assignee:USERNAME`, `label:bug`, `repo:OWNER/REPO`, `is:open`, `is:closed`,
-  `is:issue`, `is:pr`, `is:draft`, `is:merged`, `type:Epic` or
-  `type:"Epic"` for issue types, `parent-issue:OWNER/REPO#123` (optionally
-  double-quoted), `reviewers:USERNAME`, `reason:completed`, and
-  `reason:"not planned"`. `has:`/`no:` check Status, assignee, label, reviewers,
-  parent-issue, closed, and verified single-select/number/iteration project fields.
-  `iteration:@current` is also supported. Custom fields use their hyphenated names, for
-  example `phase:"Phase I"`, `points:>=2`, or `sprint:@previous`. `created:`,
-  `updated:`, and `closed:` accept dates, comparisons, ranges, and relative
-  `@today` offsets. `closed:` filters the closure date, not the current state;
-  use `is:closed` for the latter.
-  `title:"Exact title"`, `title:*word*`, `label:*word*`, and unqualified words
-  such as `filter` use GitHub's text matching. Commas inside exact quoted titles
-  are supported, but embedded escaped quotes remain blocked.
-  Values separated by commas in a single-select, assignee, reviewers, label,
-  numeric, or supported reason qualifier act as OR; whitespace-separated terms
-  act as AND (including repeated qualifiers). A leading `-` negates supported
-  qualifiers except iteration and `has:`; `-no:` checks for a present value.
-  Double-quote Status or label names with spaces, for example `status:"In Progress"`.
-  Examples: `label:bug,support assignee:@me` and `status:"Todo","Done" is:issue`.
-  See [the filter grammar and evidence matrix](docs/api-contract.md#saved-filter-grammar-and-evidence)
-  for exact boundaries. Cross-field `OR`, unquoted grouping parentheses, unverified custom field types,
-  next-iteration offsets, reviewer `@me`/team references, `reason:reopened`,
-  milestone filters, unverified text-field/wildcard forms, escaped/single quotes,
-  and other unverified forms remain blocked with a
-  picker explanation. Unsupported grouping/sorting semantics are also blocked.
+- Saved filters are sent unchanged to GitHub's `ProjectV2.items(query:)` on
+  every page and refresh, including custom fields such as `has:otc-sprint`.
+  GitHub determines syntax and item membership; the TUI has no local filter
+  allowlist or field-name/type restrictions. API errors are displayed without
+  retrying as an unfiltered view. `/` searches only already-loaded cards and
+  does not change the saved GitHub query.
+  See [the filter contract and evidence](docs/api-contract.md#saved-filter-grammar-and-evidence)
+  for observed server behavior and web/API differences. Grouping and sorting
+  have separate compatibility checks because the TUI implements them locally.
 - If a project has no compatible saved board, unsupported views stay in the
   picker with an explanation; the TUI never substitutes an unfiltered board.
 - Card mutations require a writable, fully loaded board with
@@ -268,7 +255,7 @@ against a complete unfiltered metadata baseline, and forces two-item pages to
 exercise cursor pagination. It also checks created/updated date forms and Status
 OR, repeated-qualifier AND, negation, and cross-field AND when two populated
 Status values exist. Missing optional samples are reported. The
-[latest filter audit](docs/filter-audit-2026-09-30.md) records the results and the
+[2026-09-30 filter audit](docs/filter-audit-2026-09-30.md) records the results and the
 distinction between project-item and issue update timestamps:
 
 ```sh

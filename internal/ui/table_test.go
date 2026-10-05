@@ -33,7 +33,7 @@ func TestTableViewRendersSavedFieldsAndRows(t *testing.T) {
 			t.Fatalf("table missing %q: %s", expected, content)
 		}
 	}
-	if !strings.Contains(content, "> ○ First item") {
+	if !strings.Contains(content, ">   ○ First item") {
 		t.Fatalf("selected table row missing: %s", content)
 	}
 }
@@ -80,7 +80,7 @@ func TestTableSelectionTargetsVisibleRowAcrossSearchSortAndPages(t *testing.T) {
 	if target, _, _ := model.browserTarget(); target != "https://example.com/z" {
 		t.Fatalf("browser target = %q", target)
 	}
-	if !strings.Contains(ansi.Strip(model.View().Content), "> ○ Zebra") {
+	if !strings.Contains(ansi.Strip(model.View().Content), ">   ○ Zebra") {
 		t.Fatalf("highlight does not follow sorted selection: %s", ansi.Strip(model.View().Content))
 	}
 	updated, cmd := model.Update(keyPress("enter"))
@@ -170,7 +170,7 @@ func TestTableGroupsFollowSavedOptionsAndSelection(t *testing.T) {
 	model.filter = "Working"
 	model.clampTableRow(true)
 	filtered := ansi.Strip(model.View().Content)
-	if !strings.Contains(filtered, "[Doing]  1") || strings.Contains(filtered, "[Todo]") || strings.Contains(filtered, "[No Status]") || !strings.Contains(filtered, "> • Working") {
+	if !strings.Contains(filtered, "[Doing]  1") || strings.Contains(filtered, "[Todo]") || strings.Contains(filtered, "[No Status]") || !strings.Contains(filtered, ">   • Working") {
 		t.Fatalf("filtered groups = %s", filtered)
 	}
 	model.filter = "absent title"
@@ -217,7 +217,7 @@ func TestTableWindowAccountsForGroupHeadingsDuringLoading(t *testing.T) {
 		model.moveTableRow(1)
 	}
 	content := ansi.Strip(model.View().Content)
-	if !strings.Contains(content, "[Todo]  35") || !strings.Contains(content, "> • Row 25") || !strings.Contains(content, "loading") {
+	if !strings.Contains(content, "[Todo]  35") || !strings.Contains(content, ">   • Row 25") || !strings.Contains(content, "loading") {
 		t.Fatalf("windowed partially loaded group = %s", content)
 	}
 	if strings.Contains(content, "[In Progress]") {
@@ -226,7 +226,7 @@ func TestTableWindowAccountsForGroupHeadingsDuringLoading(t *testing.T) {
 	model.items = append(model.items, github.Item{ID: "new", Content: &github.Content{Title: "New work"}, FieldValues: []github.FieldValue{{FieldID: "status", OptionID: "doing", Available: true}}})
 	model.moveTableRow(20)
 	content = ansi.Strip(model.View().Content)
-	if !strings.Contains(content, "[In Progress]  1") || !strings.Contains(content, "> • New work") {
+	if !strings.Contains(content, "[In Progress]  1") || !strings.Contains(content, ">   • New work") {
 		t.Fatalf("populated group did not appear during loading: %s", content)
 	}
 }

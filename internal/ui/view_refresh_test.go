@@ -55,12 +55,12 @@ func TestRefreshReadsCurrentSettingsBeforeItemsAndPreservesSelection(t *testing.
 					m, source := refreshTestModel(oldLayout)
 					m.selectedOwner.Kind = ownerKind
 					fresh := *m.view
-					fresh.Name, fresh.Layout, fresh.Filter = "New name", newLayout, "is:closed"
+					fresh.Name, fresh.Layout, fresh.Filter = "New name", newLayout, "has:otc-sprint"
 					fresh.Fields = []github.Field{{ID: "estimate", Name: "Estimate", DataType: "NUMBER"}, {ID: "title", Name: "Title", DataType: "TITLE"}}
 					fresh.GroupByFields = []github.Field{{ID: "priority", Name: "Priority", DataType: "SINGLE_SELECT", Options: []github.FieldOption{{ID: "high", Name: "High"}, {ID: "low", Name: "Low"}}}}
 					fresh.SortByFields = []github.SortField{{Direction: "DESC", Field: fresh.Fields[0]}}
 					source.view = fresh
-					source.itemPagesByFilter = map[string]map[string]github.ItemsPage{"is:closed": {
+					source.itemPagesByFilter = map[string]map[string]github.ItemsPage{fresh.Filter: {
 						"":     {Items: []github.Item{{ID: "first", FieldValues: []github.FieldValue{{FieldID: "priority", OptionID: "high", Available: true}}}}, HasNext: true, EndCursor: "next"},
 						"next": {Items: []github.Item{{ID: "selected", FieldValues: []github.FieldValue{{FieldID: "priority", OptionID: "low", Available: true}}}}},
 					}}
@@ -87,7 +87,7 @@ func TestRefreshReadsCurrentSettingsBeforeItemsAndPreservesSelection(t *testing.
 					if !ok || item.ID != "selected" || m.loadingDetail || m.itemsLoading || m.refreshFocusID != "" || !reflect.DeepEqual(*m.view, fresh) {
 						t.Fatalf("fresh settings/selection not applied: selected=%v view=%v", item.ID, m.view)
 					}
-					if source.reads != 1 || !reflect.DeepEqual(source.filters, []string{"is:closed", "is:closed"}) || !reflect.DeepEqual(source.cursors, []string{"", "next"}) {
+					if source.reads != 1 || !reflect.DeepEqual(source.filters, []string{fresh.Filter, fresh.Filter}) || !reflect.DeepEqual(source.cursors, []string{"", "next"}) {
 						t.Fatalf("incorrect metadata/items pipeline: reads=%d filters=%v cursors=%v", source.reads, source.filters, source.cursors)
 					}
 					for _, fields := range source.fields {
@@ -105,14 +105,12 @@ func TestRefreshReadsCurrentSettingsBeforeItemsAndPreservesSelection(t *testing.
 }
 
 func TestRefreshRejectsNewUnsupportedSettings(t *testing.T) {
-	for _, change := range []string{"roadmap", "filter", "group", "sort"} {
+	for _, change := range []string{"roadmap", "group", "sort"} {
 		t.Run(change, func(t *testing.T) {
 			m, source := refreshTestModel(github.BoardLayout)
 			switch change {
 			case "roadmap":
 				source.view.Layout = github.RoadmapLayout
-			case "filter":
-				source.view.Filter = "unknown:value"
 			case "group":
 				source.view.GroupByFields = []github.Field{{Name: "Text", DataType: "TEXT"}}
 			case "sort":

@@ -44,9 +44,8 @@ func evaluateViewCompatibilityWithRoadmapGrouping(view github.View, roadmapReaso
 		reasons = append(reasons, fmt.Sprintf("layout %q is not supported", view.Layout))
 	}
 
-	if err := validateSavedFilterWithFields(view.Filter, view.ProjectFields); err != nil {
-		reasons = append(reasons, fmt.Sprintf("saved filter %q is unsupported: %v", view.Filter, err))
-	}
+	// Saved filters are opaque GitHub queries. Only semantics implemented locally
+	// (layout, grouping, and sorting) belong in the compatibility gate.
 
 	if len(view.GroupByFields) > 1 {
 		reasons = append(reasons, "multiple column grouping fields are not supported")

@@ -34,7 +34,7 @@ The mutation input and payload types report these fields:
 
 These schema observations were followed by write probes against a disposable personal project; work projects were not modified.
 
-The `items.query` argument is present in the target schema. It is the only filter evaluator used by the app; the client accepts only the bounded grammar recorded below. Other GitHub filter grammar remains unsupported.
+The `items.query` argument is present in the target schema. It is the only filter evaluator used by the app; saved filter strings are forwarded unchanged without a local grammar allowlist.
 
 ## Read Probe Results
 
@@ -64,7 +64,33 @@ These results establish that the intended discovery, view metadata, position ord
 
 ## Saved Filter Grammar and Evidence
 
-GitHub's [Projects filtering documentation](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/filtering-projects) defines AND between whitespace-separated qualifiers, OR between comma-separated values **within one qualifier**, and AND for repeated qualifiers. Cross-field `OR` is not supported by GitHub. The app validates syntax before opening a saved view; accepted strings are forwarded unchanged as the `items(query:)` variable on every page. It does not implement the filter locally.
+Saved filters are opaque strings owned and evaluated by GitHub. The app forwards
+the exact `ProjectV2View.filter` as the `items(query:)` variable on every page,
+initial load, and refresh. It does not parse, normalize, rewrite, or evaluate
+membership locally. Custom fields, arbitrary names, missing field metadata,
+and unfamiliar qualifiers do not block opening a view.
+
+GitHub's [Projects filtering documentation](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/filtering-projects)
+defines AND between whitespace-separated qualifiers, OR between comma-separated
+values **within one qualifier**, and AND for repeated qualifiers. Cross-field
+`OR` is not supported by GitHub. Forwarding a string does not make unsupported
+GitHub syntax valid or establish web/API parity. Errors returned by GitHub are
+displayed as item-loading errors; the client never drops a filter to retry an
+unfiltered view. An empty result is displayed as empty, not interpreted as an
+invalid filter.
+
+Compatibility checks cover layout, grouping, and sorting, whose implementation
+belongs to the TUI. Local `/` search narrows loaded rows/cards only and does not
+alter the saved query. Filtered-view mutations still resolve writes using
+unfiltered project state and reload the saved query afterward; visible query
+membership is not used as authoritative project mutation state.
+
+### Historical probe matrix
+
+The matrix below records the former bounded grammar and its evidence as of
+2026-09-30. References to accepted or gated forms describe that historical
+policy, **not current runtime restrictions**. Probes remain useful for detecting
+server behavior changes, but lack of a probe is no longer an access gate.
 
 Read-only probes on 2026-09-26 used the disposable user-owned sandbox (#2) and public `github` organization projects on `github.com`; additional parent, closure-date, reviewer, reason, wildcard, and quoting probes were added on 2026-09-29. The sandbox had 17 issue items on one page at probe time. No item titles, IDs, or body data were retained in this document. The counts below are snapshots, not promised counts for future runs. Contrast queries with the unfiltered baseline and the documented item composition before treating a zero-result shape as semantically verified.
 
@@ -92,35 +118,25 @@ The [2026-09-30 audit](filter-audit-2026-09-30.md) rechecked a complete 26-item 
 | Quoted punctuation | Commas inside an exact double-quoted `title:` value; optional leading `-` | A public-project title containing a comma matched its one known item; its negation matched the remaining 117 across two pages (100/17). A known title containing embedded quotation marks matched zero when backslash-escaped, despite a baseline member, so escaped quotes remain gated. This does not verify commas inside label or single-select names. |
 | AND combinations | Whitespace-separated supported terms, including repeated qualifiers; no explicit `AND` | `is:issue is:open` → 1, `label:bug is:closed` → 2, `label:bug is:issue is:closed` → 2, `has:status label:bug` → 2, `no:label is:closed` → 1, `status:"Todo","Done" assignee:@me` → 1. Previous Status/assignee probes had nonempty intersections. No arbitrary OR expressions are accepted. |
 
-The structural grammar below is narrowed by the qualifier-specific rules in the evidence table. Values are kept verbatim, not unquoted or normalized before submission:
+### Evidence gaps and server limitations
 
-```text
-filter        := whitespace? (term (whitespace term)*)? whitespace?
-term          := text-word | "-"? qualifier ":" values
-values        := value ("," value)*
-value         := unquoted-value | '"' quoted-value '"'
-qualifier     := verified lower-case built-in or unique hyphenated project-field name
-```
+The following are probe gaps or server limitations, not local rejection rules.
+For example, the historical escaped-quote probe returned zero items despite a
+matching baseline title; a successful response alone cannot prove the server
+interpreted an expression the same way as the web UI.
 
-- A text-word is unquoted and unnegated. Standalone `AND`/`OR` words are never general search terms. Whitespace expresses AND; no explicit Boolean operators, unquoted grouping parentheses, or cross-field OR are accepted. Literal parentheses in double-quoted values remain accepted. Duplicate/repeated terms are allowed, with GitHub determining membership.
-- Multiple values are enabled only for single-select, assignee, reviewers, label, number, and verified reason values. There is no whitespace after a comma. Single-select and label values are nonempty words or double-quoted names; quotes group spaces. Commas inside quotes are enabled only for exact titles, not label/single-select names. Backslash escapes and single quotes remain gated.
-- Assignees are `@me` or unquoted usernames; reviewers are unquoted usernames only. Repo is one unquoted `OWNER/REPO`; `is:` is one verified keyword; `type:` is one word or double-quoted issue type. Parent is one `OWNER/REPO#NUMBER` reference with a positive issue number, optionally double-quoted. Close reason is `completed` (optionally quoted) or quoted `"not planned"`.
-- Title accepts an exact word, a double-quoted exact title, or leading/trailing `*` around one word. Label accepts the same edge-wildcard word shapes. Internal/repeated stars and other wildcard forms remain gated.
-- Custom single-select/number/iteration qualifiers must match exactly one hyphenated ASCII project-field name in the **complete**, cursor-paginated project-field metadata, even when hidden in the saved view. Custom DATE/TEXT/MULTI_SELECT fields and ambiguous name collisions remain gated.
-- Number values are decimal literals, `>`, `>=`, `<`, `<=` comparisons, or inclusive `..` ranges with an optional `*` bound. Iteration accepts a quoted title, `@previous`, `@current`, comparisons or ranges between those keywords. Only `@current` is verified on the standalone `iteration:` qualifier.
-- Created/updated/closed dates accept valid `YYYY-MM-DD` dates or `@today` with optional numeric `+`/`-` offsets (days or weeks), comparisons/ranges, and `*` bounds. Both-wildcard ranges, empty values/components, malformed dates, and partial quotes are rejected.
-- `has:`/`no:` accept Status, assignee, label, reviewers, parent-issue, closed, or verified single-select/number/iteration project fields. `-no:` selects present values. `-has:` is gated (use `no:`); negative built-in/custom iteration filters remain gated. Other supported qualifiers accept leading `-`.
-
-| Documented but gated (needs matching probes) | Examples / evidence needed |
+| Probe area | Examples / evidence needed |
 | --- | --- |
 | Other custom field types/names | Custom DATE, TEXT, MULTI_SELECT, and field names with punctuation (for example `Estimate (days)`); their exact qualifier spelling and matching value syntax remain unverified on suitable samples. |
 | Remaining relative forms | `iteration:@next`, `iteration:@current+3`, and custom iteration offsets/next ranges; the sandbox has no next-iteration member. Relative created/updated queries are verified against Sep 26 snapshot timestamps; other hosts/time-zone boundaries remain unprobed. |
-| Specialized filters and additional text shapes | Custom text-field qualifiers, quoted general phrases, wildcard shapes other than verified title/label edges, milestone, reviewer `@me`/team references, and `reason:reopened`. Existing sampled projects had no populated custom DATE/TEXT values or milestones suitable for matching probes; no project data was created to manufacture samples. Other reason keywords remain gated even if exposed by issue metadata. |
-| Additional Boolean and value shapes | Commas for other qualifiers (including parent references), mixed multi-assignee membership, commas inside label/single-select values, escaped quotes, single-quoted values, and cross-field `OR` (GitHub documents the last as unsupported). A sample `status:"Todo" OR label:bug` returned 3, but this alone cannot establish what the server interpreted; it stays blocked. |
+| Specialized filters and additional text shapes | Custom text-field qualifiers, quoted general phrases, wildcard shapes other than verified title/label edges, milestone, reviewer `@me`/team references, and `reason:reopened`. Existing sampled projects had no populated custom DATE/TEXT values or milestones suitable for matching probes; no project data was created to manufacture samples. |
+| Additional Boolean and value shapes | Commas for other qualifiers (including parent references), mixed multi-assignee membership, commas inside label/single-select values, escaped quotes, single-quoted values, and cross-field `OR` (GitHub documents the last as unsupported). A sample `status:"Todo" OR label:bug` returned 3, but this alone cannot establish what the server interpreted. |
 | Pagination | On public `github` project #12106, the `is:pr` saved-query shape returned 338 matching PR items over four cursor pages (100/100/100/38), with 338 unique IDs and `hasNextPage=false` on the last page. This verifies a representative multi-page server-filtered result; the adapter fixture also verifies the filter variable remains byte-for-byte identical on each page. |
 | Closed-date pagination | The sandbox's `closed:>=2026-09-24` returned 11 unique items across six deliberately small pages (2/2/2/2/2/1), with every returned closure date matching the comparison and `hasNextPage=false` on the last page. The unchanged-filter adapter fixture also covers closure-date comparisons, negation, and relative ranges, plus quoted parent-issue references. |
 
-These boundaries are deliberate: API acceptance with zero results is not evidence that GitHub applied the intended semantics. Revisit gated entries with read-only probes on suitable existing projects rather than silently opening them as unfiltered views.
+API acceptance with zero results is not evidence that GitHub applied the intended
+semantics. Read-only probes on suitable existing projects can investigate those
+differences without making a growing syntax allowlist part of view loading.
 
 ## Current Compatibility Matrix
 
@@ -129,10 +145,11 @@ These boundaries are deliberate: API acceptance with zero results is not evidenc
 | Capability | Current client behavior | Empirical status / remaining limit |
 | --- | --- | --- |
 | Layout | Saved boards and tables open; the explicitly mapped DATE roadmap subset opens. | Board and table reads were probed. Exact table/roadmap rendering is outside the board MVP. If no saved board is compatible, unsupported views remain blocked; the app does not create an unfiltered substitute. |
-| Saved filters | The bounded grammar in [Saved Filter Grammar and Evidence](#saved-filter-grammar-and-evidence) runs through `items(query:)` without local emulation. Unsupported expressions are blocked with a reason. | Common metadata, parent references, reviewer usernames, two close reasons, edge title/label wildcards, single-select/number/iteration fields, created/updated/closed date forms, and >100-result live pagination were probed. Custom date/text/multi-select fields, additional iteration offsets, and the specifically listed specialized filters remain gated. |
+| Saved filters | Opaque saved queries run unchanged through `items(query:)` on every page and refresh, without local parsing, field restrictions, or emulation. API errors are displayed without an unfiltered fallback. | Common metadata, parent references, reviewer usernames, two close reasons, edge title/label wildcards, single-select/number/iteration fields, created/updated/closed date forms, and >100-result live pagination were probed. Broader syntax is forwarded, but forwarding tests do not establish web/API membership parity. See [the evidence gaps](#evidence-gaps-and-server-limitations). |
 | Board axes | One single-select or iteration field per axis; `groupByFields` maps to columns and `verticalGroupByFields` maps to swimlanes when both exist. A sole vertical field is projected into lanes. Unset values get a lane; single-select options and active/completed iterations preserve metadata order. Multi-valued and multiple grouping fields are blocked. | Sole vertical Status → lanes/columns matches the supplied GitHub web and TUI screenshots. Iteration grouping has fixture coverage, but probe view #4 uses Status as its grouping field; direct web comparison of iteration lanes remains outstanding. |
 | Table grouping | One saved single-select or iteration `groupByFields` field renders ordered row sections with loaded-item counts. Only populated sections are shown, including an unset section when populated. Saved sorts apply within sections; local search recalculates counts. Table vertical/multiple grouping is blocked with a picker explanation. | Fixture-backed projection of API field/option order; collapsed-group state and any custom display order are not exposed by the API. Counts are for loaded items while pagination is in progress. |
-| Table cells | Saved visible fields remain the column boundary. Issue/PR/draft icons and issue numbers identify titles; available single-select values are accented, and issue sub-issue progress uses the lightweight content summary. Unset and explicitly unavailable values differ. The title receives the remaining width after other columns on narrow terminals. | No full-detail read is triggered for table cells. Linked pull requests and other nested fields are not enriched beyond the selective item response. |
+| Table cells | Saved visible fields remain the column boundary. Issue/PR/draft icons and issue numbers identify titles; available single-select values are accented, and issue sub-issue progress uses the lightweight content summary with whole-percent truncation. Multi-select names come from selected options once, using the comma-separated scalar only as a fallback. Linked PRs are fetched in the row query. Unset and explicitly unavailable values differ. | No full-detail read is triggered for table cells. Assignees and linked PRs fetch up to 10 entries each, with a visible truncation marker; detail reads paginate the full values. |
+| Table hierarchy | `l`/Right expands a row's direct sub-issues; `h`/Left collapses or selects its parent; Space toggles. Children retain GitHub's hierarchy order and can expand recursively. Saved filters select roots, while child reads are independent of that filter. Local search preserves loaded ancestors of matching descendants. Refresh reloads expanded paths and restores nested focus. | Fixture-backed. `Issue.subIssues` and `Issue.projectItems` arguments were confirmed by schema introspection. Child reads page 20 direct children and 10 active project memberships at a time, using only this project's item for project cells. Issues outside the project remain navigable with issue-only detail and browser links, but cannot be archived/removed as project items. Nested rows do not support project reorder/group moves. Expansion state is local; saved web expansion state is unavailable. |
 | Table actions | On writable, fully loaded views, a confirmed single row can be archived or removed from its project. Group changes use the saved single-select/iteration field; row reorder uses project-wide position only with position sorting. Writes are resolved against project readback and blocked during local search. | GraphQL schema exposes `archiveProjectV2Item` and `deleteProjectV2Item` with project/item IDs; archive returns `isArchived`, delete returns `deletedItemId`. Other GitHub UI actions (bulk cell editing, item creation, archive restoration, and arbitrary field editing) are not implemented. |
 | Roadmap | Roadmap layouts are unsupported and stay in the picker with an explanation. | The API returns generic field/item data but not enough saved timeline configuration to render the view faithfully. |
 | Sorting | Project-position order is the read baseline. Title, text, number, date, single-select, and iteration ASC/DESC field sorts currently use local comparisons, with unset values last and project-position order for ties. Other field types/directions are blocked; explicit field sorts disable manual reorder. | Numeric DESC ordering and a tied-value relative order matched GitHub web in saved sandbox view #3. Iteration ASC completed/current/unset ordering matches the user's GitHub/TUI comparison after switching the TUI comparator to iteration start dates. Null placement in a mixed populated/unset numeric lane, numeric ASC, and text/date/single-select parity remain unverified. |
@@ -324,7 +341,7 @@ The following results are intentionally aggregate and contain no project names, 
 The following items remain unverified:
 
 - Iteration state and unset values beyond the sampled single-select boards
-- Filter semantics outside the bounded grammar above, and the explicitly noted zero-result forms within it
+- Web/API membership parity for unprobed filters and the explicitly noted zero-result forms in the historical probe matrix
 - Sort null placement and tie behavior against representative GitHub-rendered views (the current client places unset values last and uses stable project-position order for ties)
 - Grouping-axis mapping and display settings beyond the sampled board views; collapsed-group state is not exposed by the introspected view schema
 - Mutation failure, partial-completion, timeout reconciliation, and stale-anchor handling

@@ -77,10 +77,19 @@ fragment FieldValuesPage on ProjectV2ItemFieldValueConnection {
     ... on ProjectV2ItemFieldUserValue {
       users(first: 10) { nodes { login } pageInfo { hasNextPage endCursor } }
     }
+    ...LinkedPullRequests
   }
   pageInfo { hasNextPage endCursor }
 }
-` + fieldValueFragment
+` + fieldValueFragment + linkedPullRequestsFragment
+
+const linkedPullRequestsFragment = `
+fragment LinkedPullRequests on ProjectV2ItemFieldPullRequestValue {
+  pullRequests(first: 10) {
+    nodes { number title url repository { name nameWithOwner } }
+    pageInfo { hasNextPage endCursor }
+  }
+}`
 
 const itemDetailFieldValueFragments = `
 fragment DetailFieldValuesPage on ProjectV2ItemFieldValueConnection {
@@ -162,6 +171,9 @@ type Item struct {
 	Type        string
 	Content     *Content
 	FieldValues []FieldValue
+	// OutsideProject identifies a nested issue without an active item in this
+	// project. Its ID is the issue node ID, not a writable project-item ID.
+	OutsideProject bool
 }
 
 type Content struct {
@@ -564,6 +576,9 @@ func (value rawIssueFieldValue) hasValue() bool {
 }
 
 func issueFieldValueValue(value rawIssueFieldValue) string {
+	if value.Kind == "IssueFieldMultiSelectValue" {
+		return multiSelectValue(value.Options, "")
+	}
 	parts := make([]string, 0, len(value.Options)+4)
 	if value.Text != "" {
 		parts = append(parts, value.Text)
@@ -592,6 +607,9 @@ func (value rawFieldValue) hasScalarValue() bool {
 }
 
 func valueValue(value rawFieldValue) string {
+	if value.Kind == "ProjectV2ItemFieldMultiSelectValue" {
+		return multiSelectValue(value.Options, value.Value)
+	}
 	parts := make([]string, 0, 4)
 	if value.Text != "" {
 		parts = append(parts, value.Text)
@@ -615,6 +633,25 @@ func valueValue(value rawFieldValue) string {
 		parts = append(parts, option.Name)
 	}
 	return strings.Join(parts, ", ")
+}
+
+func multiSelectValue(options []FieldOption, fallback string) string {
+	if len(options) == 0 {
+		return fallback
+	}
+	seen := make(map[string]bool, len(options))
+	names := make([]string, 0, len(options))
+	for _, option := range options {
+		key := option.ID
+		if key == "" {
+			key = option.Name
+		}
+		if option.Name != "" && !seen[key] {
+			seen[key] = true
+			names = append(names, option.Name)
+		}
+	}
+	return strings.Join(names, ", ")
 }
 
 func formatNumber(value float64) string {

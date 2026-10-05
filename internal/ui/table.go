@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
 
@@ -23,9 +24,9 @@ func (m Model) renderTableContent(b *strings.Builder) {
 	if m.view.Filter != "" {
 		fmt.Fprintf(b, "%s %s\n", mutedStyle.Render("Filter:"), m.view.Filter)
 	}
-	visibleItems := m.boardItems()
-	groups := tableGroups(m.view, visibleItems)
-	visibleItems = tableGroupItems(groups)
+	rows := m.tableTreeRows()
+	groups := m.tableTreeGroups(rows)
+	visibleItems := tableGroupItems(groups)
 	if m.filtering || strings.TrimSpace(m.filter) != "" {
 		search := m.filter
 		if m.filtering {
@@ -33,7 +34,10 @@ func (m Model) renderTableContent(b *strings.Builder) {
 		}
 		fmt.Fprintf(b, "%s %s (%d matches)\n", statusStyle.Render("Search:"), search, len(visibleItems))
 	}
-	fmt.Fprintf(b, "%s %d", mutedStyle.Render("Items:"), len(visibleItems))
+	fmt.Fprintf(b, "%s %d", mutedStyle.Render("Items:"), len(m.items))
+	if len(visibleItems) != len(m.items) {
+		fmt.Fprintf(b, " (%d visible rows)", len(visibleItems))
+	}
 	if m.itemsLoading {
 		b.WriteString("  " + statusStyle.Render(m.itemsLoadingSpinner()+" loading"))
 	}
@@ -107,7 +111,7 @@ func (m Model) renderTableContent(b *strings.Builder) {
 			b.WriteString(tableGroupHeading(groups[entry.group], m.frameContentWidth()-2, entry.group) + "\n")
 			continue
 		}
-		b.WriteString(tableDataRow(columns, visibleItems[entry.row], widths, entry.row == selected) + "\n")
+		b.WriteString(tableDataRowWithTitlePrefix(columns, visibleItems[entry.row], widths, entry.row == selected, m.tableTreePrefix(rows[entry.row])) + "\n")
 	}
 	if end < len(entries) {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("... %d more", len(entries)-end)) + "\n")
@@ -152,6 +156,9 @@ func tableEntries(groups []boardLane) []tableEntry {
 	entries := make([]tableEntry, 0)
 	row := 0
 	for groupIndex, group := range groups {
+		if len(group.Items) == 0 {
+			continue
+		}
 		if group.Name != "" {
 			entries = append(entries, tableEntry{group: groupIndex, row: -1})
 		}
@@ -273,6 +280,14 @@ func (m *Model) clampTableRow(finished bool) {
 }
 
 func (m Model) tableItems() []github.Item {
+	if m.isTable() {
+		rows := m.tableTreeRows()
+		items := make([]github.Item, 0, len(rows))
+		for _, row := range rows {
+			items = append(items, row.item)
+		}
+		return items
+	}
 	if m.isTimeline() && len(m.view.GroupByFields) > 0 {
 		groups, err := timelineGroups(m.view, m.boardItems())
 		if err == nil {
@@ -407,9 +422,19 @@ func tableHeaderRow(columns []github.Field, widths []int) string {
 }
 
 func tableDataRow(columns []github.Field, item github.Item, widths []int, selected bool) string {
+	return tableDataRowWithTitlePrefix(columns, item, widths, selected, "")
+}
+
+func tableDataRowWithTitlePrefix(columns []github.Field, item github.Item, widths []int, selected bool, titlePrefix string) string {
 	parts := make([]string, 0, len(columns))
 	for index, column := range columns {
-		parts = append(parts, tableStyledCell(column, item, widths[index]))
+		if isTitleField(column) {
+			// Hierarchy spacing is intentional; truncateText normalizes it away.
+			prefix := ansi.Truncate(titlePrefix, max(0, widths[index]-4), "")
+			parts = append(parts, mutedStyle.Render(prefix)+tableStyledCell(column, item, widths[index]-lipgloss.Width(prefix)))
+		} else {
+			parts = append(parts, tableStyledCell(column, item, widths[index]))
+		}
 	}
 	prefix := "  "
 	if selected {
@@ -526,7 +551,7 @@ func tableCellValue(field github.Field, item github.Item) string {
 			return "Unavailable"
 		}
 		if item.Content.Kind == "Issue" && item.Content.SubIssueTotal > 0 {
-			percent := (item.Content.SubIssueDone*100 + item.Content.SubIssueTotal/2) / item.Content.SubIssueTotal
+			percent := item.Content.SubIssueDone * 100 / item.Content.SubIssueTotal
 			return fmt.Sprintf("%d/%d %d%%", item.Content.SubIssueDone, item.Content.SubIssueTotal, percent)
 		}
 		return "-"

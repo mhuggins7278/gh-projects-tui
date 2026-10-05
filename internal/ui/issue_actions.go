@@ -149,7 +149,7 @@ func (m Model) updateIssueAction(msg issueActionMsg) (tea.Model, tea.Cmd) {
 // Closing/reopening can change server-filter membership. Keep the detail open
 // while the user reads it, then re-run the saved filter on returning to the board.
 func (m *Model) queueIssueViewReload(origin boardReadScope) tea.Cmd {
-	if !origin.sameProject(*m) || m.screen != screenBoard || m.view == nil || strings.TrimSpace(m.view.Filter) == "" {
+	if !origin.sameProject(*m) || m.screen != screenBoard || m.view == nil || (strings.TrimSpace(m.view.Filter) == "" && !m.isTable()) {
 		return nil
 	}
 	scope := m.currentBoardReadScope()

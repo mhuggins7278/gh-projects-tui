@@ -1,7 +1,12 @@
 # Saved-filter audit — 2026-09-30
 
-Issue #14's bounded grammar is implemented. The authoritative supported/unsupported
-matrix, quoting rules, and earlier live evidence remain in
+Historical audit: the bounded grammar described here has since been removed.
+The [current filter contract](api-contract.md#saved-filter-grammar-and-evidence)
+forwards saved filters unchanged to GitHub without a local allowlist. The probe
+results below remain evidence of server behavior at the time of this audit.
+
+At the time of this audit, issue #14's bounded grammar was implemented. Its
+historical supported/unsupported matrix and earlier live evidence remain in
 [API contract: Saved Filter Grammar and Evidence](api-contract.md#saved-filter-grammar-and-evidence).
 This audit rechecks representative expressions; it does not enable every documented
 GitHub qualifier or turn previously gated forms into supported syntax.

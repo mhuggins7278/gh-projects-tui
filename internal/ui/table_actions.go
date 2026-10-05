@@ -52,6 +52,12 @@ func (m *Model) selectTableBoardCursor() bool {
 		m.status = "Select a table row first"
 		return false
 	}
+	for _, row := range m.tableTreeRows() {
+		if row.item.ID == item.ID && row.depth > 0 {
+			m.status = "Nested rows follow issue hierarchy order; project moves apply to top-level rows"
+			return false
+		}
+	}
 	for laneIndex, lane := range m.boardLanes() {
 		for cardIndex, card := range lane.Items {
 			if card.ID == item.ID {
@@ -176,6 +182,9 @@ func (m Model) tableActionUnavailable() string {
 	}
 	if strings.TrimSpace(m.filter) != "" || m.filtering {
 		return "Clear local search before changing project items"
+	}
+	if item, ok := m.selectedItem(); ok && item.OutsideProject {
+		return "This sub-issue is not an active item in this project"
 	}
 	return ""
 }
@@ -352,6 +361,20 @@ func (m Model) updateTableMoveKey(key string) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleTableNavigationKey(key string) (tea.Cmd, bool) {
 	switch key {
+	case "l", "right":
+		return m.expandTableRow(), true
+	case "h", "left":
+		m.collapseTableRow()
+		return nil, true
+	case "space", " ":
+		item, ok := m.selectedItem()
+		if ok {
+			if state := m.tableSubIssues[item.ID]; state != nil && state.expanded {
+				m.collapseTableRow()
+				return nil, true
+			}
+		}
+		return m.expandTableRow(), true
 	case "m":
 		m.beginTableMove()
 		return nil, true

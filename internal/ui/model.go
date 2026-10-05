@@ -133,6 +133,7 @@ func (m *Model) abandonReads() {
 	m.pendingMutationReload = nil
 	m.pendingIssueReload = nil
 	m.refreshFocusID = ""
+	m.tableSubIssues = nil
 }
 
 type screen int
@@ -198,6 +199,7 @@ type Model struct {
 	tableFocusID          string
 	tableAction           *tableActionState
 	tableMove             *tableMoveState
+	tableSubIssues        map[string]*subIssueState
 	width                 int
 	height                int
 	detailVisible         bool
@@ -386,6 +388,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.startItemsLoadWithSpinner()
 	case itemsPageMsg:
 		return m.updateItems(msg)
+	case subIssuesMsg:
+		return m.updateSubIssues(msg)
 	case viewRefreshMsg:
 		return m.updateViewRefresh(msg)
 	case itemDetailMsg:
@@ -672,6 +676,7 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.generation++
 	m.pendingMutationReload = nil
+	m.resetSubIssueReads()
 	m.pendingIssueReload = nil
 	m.refreshFocusID = ""
 	m.items = nil
@@ -711,9 +716,6 @@ func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
 	owner := *m.selectedOwner
 	project := m.selectedProject.Number
 	filter := m.view.Filter
-	if strings.TrimSpace(filter) == "" {
-		filter = ""
-	}
 	fields := boardReadFields(*m.view)
 	generation := m.generation
 	scope := m.currentBoardReadScope()
@@ -791,13 +793,13 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	}
 	m.itemsLoading = false
 	if m.isRowLayout() {
-		m.clampTableRow(true)
+		m.clampTableRow(!m.subIssuesPending())
 	} else {
 		m.clampBoardCursor()
 	}
 	m.reconcileFilteredMoveFocus()
 	m.refreshFocusID = ""
-	return m, m.finishMutationReload()
+	return m, tea.Batch(m.finishMutationReload(), m.loadExpandedSubIssues())
 }
 
 func (m *Model) finishMutationReload() tea.Cmd {
@@ -902,7 +904,24 @@ func (m *Model) loadItemDetailCmd(itemID string, requestID uint64, scope boardRe
 	generation := m.generation
 	ctx := m.ctx
 	source := m.source
+	outsideProject := false
+	for _, item := range m.tableItems() {
+		if item.ID == itemID {
+			outsideProject = item.OutsideProject
+			break
+		}
+	}
 	return func() tea.Msg {
+		if outsideProject {
+			loader, ok := source.(interface {
+				LoadIssueDetail(context.Context, string) (github.ItemDetail, error)
+			})
+			if !ok {
+				return itemDetailMsg{itemID: itemID, requestID: requestID, err: fmt.Errorf("nested issue detail is unavailable"), generation: generation, scope: scope}
+			}
+			detail, err := loader.LoadIssueDetail(ctx, itemID)
+			return itemDetailMsg{itemID: itemID, requestID: requestID, detail: &detail, err: err, generation: generation, scope: scope}
+		}
 		loader, ok := source.(ItemDetailSource)
 		if !ok {
 			return itemDetailMsg{itemID: itemID, requestID: requestID, err: fmt.Errorf("item detail is not supported by this client"), generation: generation, scope: scope}
@@ -1106,6 +1125,7 @@ func (m *Model) refresh() tea.Cmd {
 	m.generation++
 	m.itemsLoading = false
 	m.loading = m.screen == screenLoading
+	m.cancelSubIssueReads()
 	m.err = nil
 	m.viewsErr = nil
 	m.projectsErr = nil
@@ -1501,7 +1521,7 @@ func (m Model) footerHints() string {
 			return "j/k rows · h/l months · g today · enter details · / search · r refresh · o browser · v views · ? help · q quit" + m.debugHint()
 		}
 		if m.isTable() {
-			return "j/k rows · enter details · a archive · D remove · m group · J/K reorder · / search · o browser · ? help · q quit" + m.debugHint()
+			return "j/k rows · h/l collapse/expand · enter details · a archive · D remove · m group · J/K reorder · / search · r refresh · o browser · ? help · q quit" + m.debugHint()
 		}
 		return "h/l lanes · j/k cards · H/L move · J/K reorder · / search · enter details · v views · p projects · r refresh · o open in browser · ? help · q quit" + m.debugHint()
 	default:
@@ -1533,7 +1553,8 @@ func (m Model) layoutHelpText() string {
 	}
 	if m.isTable() {
 		return "In tables, j/k moves rows, / searches, and enter opens detail. a archives; D removes from the project (confirm each).\n" +
-			"m changes the saved group; J/K reorders project-wide when position-sorted and fully loaded.\n" +
+			"l/right expands sub-issues; h/left collapses or selects the parent; space toggles expansion.\n" +
+			"m changes the saved group; J/K reorders top-level project rows when position-sorted and fully loaded.\n" +
 			"In detail, j/k scrolls, f toggles all project fields, and esc returns to the table."
 	}
 	return "On the board, h/l changes lanes, j/k changes cards, / searches loaded cards, and enter opens detail.\n" +

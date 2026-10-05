@@ -49,31 +49,13 @@ func (c *Client) pageSelectedItems(ctx context.Context, owner Owner, project int
 		return ItemsPage{}, fmt.Errorf("unsupported owner kind %q", owner.Kind)
 	}
 	variables := map[string]interface{}{"login": owner.Login, "project": project, "filter": nullableCursor(filter), "after": nullableCursor(after)}
-	var definitions, selections strings.Builder
-	seen := map[string]bool{}
-	names := []string{}
-	for _, field := range fields {
-		if field.Name == "" || seen[field.Name] {
-			continue
-		}
-		seen[field.Name] = true
-		name := fmt.Sprintf("field%d", len(names))
-		names = append(names, name)
-		fmt.Fprintf(&definitions, ", $%s: String!", name)
-		fmt.Fprintf(&selections, "%s: fieldValueByName(name: $%s) { ...FieldValue", name, name)
-		if content {
-			selections.WriteString(" ... on ProjectV2ItemFieldUserValue { users(first: 10) { nodes { login } pageInfo { hasNextPage endCursor } } }")
-		}
-		selections.WriteString(" } ")
-		variables[name] = field.Name
-	}
-	contentSelection := ""
-	if content {
-		contentSelection = `content { __typename ... on Issue { id number title url repository { name } state subIssuesSummary { total completed } } ... on PullRequest { id number title url repository { name } state isDraft merged } ... on DraftIssue { id title } }`
-	}
-	query := fmt.Sprintf(`query SelectedProjectItems($login: String!, $project: Int!, $filter: String, $after: String%s) { %s(login: $login) { projectV2(number: $project) { items(first: 100, after: $after, query: $filter, orderBy: {field: POSITION, direction: ASC}) { nodes { id %s %s } pageInfo { hasNextPage endCursor } } } } }`, definitions.String(), branch, contentSelection, selections.String())
+	definitions, selection, names := selectedItemFields(fields, content, variables)
+	query := fmt.Sprintf(`query SelectedProjectItems($login: String!, $project: Int!, $filter: String, $after: String%s) { %s(login: $login) { projectV2(number: $project) { items(first: 100, after: $after, query: $filter, orderBy: {field: POSITION, direction: ASC}) { nodes { %s } pageInfo { hasNextPage endCursor } } } } }`, definitions, branch, selection)
 	if len(names) > 0 {
 		query += fieldValueFragment
+		if content {
+			query += linkedPullRequestsFragment
+		}
 	}
 	if !content {
 		query = strings.Replace(query, "query SelectedProjectItems(", "query MutationProjectItems(", 1)
@@ -110,24 +92,60 @@ func (c *Client) pageSelectedItems(ctx context.Context, owner Owner, project int
 		if string(node) == "null" {
 			continue
 		}
-		var item rawItem
-		if err := json.Unmarshal(node, &item); err != nil {
+		item, err := decodeSelectedItem(node, names)
+		if err != nil {
 			return ItemsPage{}, err
 		}
-		var values map[string]json.RawMessage
-		if err := json.Unmarshal(node, &values); err != nil {
-			return ItemsPage{}, err
-		}
-		for _, name := range names {
-			var value *rawFieldValue
-			if err := json.Unmarshal(values[name], &value); err != nil {
-				return ItemsPage{}, err
-			}
-			if value != nil {
-				item.FieldValues.Nodes = append(item.FieldValues.Nodes, value)
-			}
-		}
-		page.Nodes = append(page.Nodes, &item)
+		page.Nodes = append(page.Nodes, item)
 	}
 	return c.projectItems(ctx, page)
+}
+
+// Share visible-field selection between saved-view rows and nested issue rows.
+func selectedItemFields(fields []Field, content bool, variables map[string]interface{}) (string, string, []string) {
+	var definitions, selections strings.Builder
+	seen := map[string]bool{}
+	names := []string{}
+	for _, field := range fields {
+		if field.Name == "" || seen[field.Name] {
+			continue
+		}
+		seen[field.Name] = true
+		name := fmt.Sprintf("field%d", len(names))
+		names = append(names, name)
+		fmt.Fprintf(&definitions, ", $%s: String!", name)
+		fmt.Fprintf(&selections, "%s: fieldValueByName(name: $%s) { ...FieldValue", name, name)
+		if content {
+			selections.WriteString(" ... on ProjectV2ItemFieldUserValue { users(first: 10) { nodes { login } pageInfo { hasNextPage endCursor } } }")
+			selections.WriteString(" ...LinkedPullRequests")
+		}
+		selections.WriteString(" } ")
+		variables[name] = field.Name
+	}
+	contentSelection := ""
+	if content {
+		contentSelection = `content { __typename ... on Issue { id number title url repository { name } state subIssuesSummary { total completed } } ... on PullRequest { id number title url repository { name } state isDraft merged } ... on DraftIssue { id title } }`
+	}
+	return definitions.String(), "id " + contentSelection + " " + selections.String(), names
+}
+
+func decodeSelectedItem(node json.RawMessage, names []string) (*rawItem, error) {
+	var item rawItem
+	if err := json.Unmarshal(node, &item); err != nil {
+		return nil, err
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(node, &values); err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		var value *rawFieldValue
+		if err := json.Unmarshal(values[name], &value); err != nil {
+			return nil, err
+		}
+		if value != nil {
+			item.FieldValues.Nodes = append(item.FieldValues.Nodes, value)
+		}
+	}
+	return &item, nil
 }

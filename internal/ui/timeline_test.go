@@ -19,17 +19,11 @@ func liveTimelineFixture() (Model, *viewRefreshSource) {
 	return m, source
 }
 
-func TestTimelineCompatibilityRejectsFiltersAndSorts(t *testing.T) {
-	for _, mode := range []string{"filter", "sort"} {
-		m, _ := liveTimelineFixture()
-		if mode == "filter" {
-			m.view.Filter = "is:unknown"
-		} else {
-			m.view.SortByFields = []github.SortField{{Field: github.Field{Name: "Title", DataType: "TITLE"}, Direction: "INVALID"}}
-		}
-		if c := m.viewCompatibility(*m.view); c.supported() || c.summary() == "" {
-			t.Fatalf("admitted %s: %s", mode, c.summary())
-		}
+func TestTimelineCompatibilityRejectsUnsupportedSorts(t *testing.T) {
+	m, _ := liveTimelineFixture()
+	m.view.SortByFields = []github.SortField{{Field: github.Field{Name: "Title", DataType: "TITLE"}, Direction: "INVALID"}}
+	if c := m.viewCompatibility(*m.view); c.supported() || c.summary() == "" {
+		t.Fatalf("admitted invalid sort: %s", c.summary())
 	}
 }
 
@@ -86,15 +80,13 @@ func TestTimelinePagesKeepOrderSelectionAndFullEndpointReads(t *testing.T) {
 }
 
 func TestTimelineRefreshPreservesFocusAndRejectsChangedSettings(t *testing.T) {
-	for _, changed := range []string{"none", "filter", "sort", "group", "mapping"} {
+	for _, changed := range []string{"none", "sort", "group", "mapping"} {
 		t.Run(changed, func(t *testing.T) {
 			m, source := liveTimelineFixture()
 			source.itemPages = map[string]github.ItemsPage{"": {Items: []github.Item{{ID: "first", Content: &github.Content{Title: "first"}}, {ID: "selected", Content: &github.Content{Title: "selected"}}}}}
 			m.items = source.itemPages[""].Items
 			m.tableFocusID = "selected"
 			switch changed {
-			case "filter":
-				source.view.Filter = "is:unknown"
 			case "sort":
 				source.view.SortByFields = []github.SortField{{Field: github.Field{Name: "Title"}, Direction: "INVALID"}}
 			case "group":
