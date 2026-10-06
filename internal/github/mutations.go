@@ -94,16 +94,20 @@ type FieldValueInput struct {
 }
 
 type ItemFieldValueUpdate struct {
-	ProjectID string
-	ItemID    string
-	FieldID   string
-	Value     FieldValueInput
+	IssueID      string
+	IssueFieldID string
+	ProjectID    string
+	ItemID       string
+	FieldID      string
+	Value        FieldValueInput
 }
 
 type ItemFieldValueClear struct {
-	ProjectID string
-	ItemID    string
-	FieldID   string
+	IssueID      string
+	IssueFieldID string
+	ProjectID    string
+	ItemID       string
+	FieldID      string
 }
 
 type ItemPositionUpdate struct {
@@ -251,6 +255,9 @@ type updateItemPositionResponse struct {
 
 // UpdateItemFieldValue sets a single Projects v2 field value variant.
 func (c *Client) UpdateItemFieldValue(ctx context.Context, request ItemFieldValueUpdate) error {
+	if request.IssueFieldID != "" {
+		return c.setIssueFieldValue(ctx, request.IssueID, request.IssueFieldID, request.Value, false)
+	}
 	value, err := request.Value.input()
 	if err != nil {
 		return err
@@ -280,6 +287,9 @@ func (c *Client) UpdateItemFieldValue(ctx context.Context, request ItemFieldValu
 // ClearItemFieldValue removes a Projects v2 field value, producing the
 // project's explicit no-value state.
 func (c *Client) ClearItemFieldValue(ctx context.Context, request ItemFieldValueClear) error {
+	if request.IssueFieldID != "" {
+		return c.setIssueFieldValue(ctx, request.IssueID, request.IssueFieldID, FieldValueInput{}, true)
+	}
 	if err := validateMutationIDs(request.ProjectID, request.ItemID, request.FieldID); err != nil {
 		return err
 	}
@@ -364,6 +374,48 @@ func validateMutationIDs(values ...string) error {
 		if value == "" {
 			return fmt.Errorf("mutation IDs must not be empty")
 		}
+	}
+	return nil
+}
+
+// Issue-backed fields belong to the issue, not the project's field-value store.
+func (c *Client) setIssueFieldValue(ctx context.Context, issueID, fieldID string, value FieldValueInput, clear bool) error {
+	if err := validateMutationIDs(issueID, fieldID); err != nil {
+		return err
+	}
+	field := map[string]interface{}{"fieldId": fieldID}
+	if clear {
+		field["delete"] = true
+	} else {
+		input, err := value.input()
+		if err != nil {
+			return err
+		}
+		for key, v := range input {
+			switch key {
+			case "text":
+				key = "textValue"
+			case "number":
+				key = "numberValue"
+			case "date":
+				key = "dateValue"
+			case "singleSelectOptionId", "multiSelectOptionIds":
+			default:
+				return fmt.Errorf("unsupported issue field value %q", key)
+			}
+			field[key] = v
+		}
+	}
+	query := `mutation SetIssueField($input: SetIssueFieldValueInput!) { setIssueFieldValue(input: $input) { issue { id } } }`
+	var response struct {
+		Set *struct{ Issue *struct{ ID string } } `json:"setIssueFieldValue"`
+	}
+	input := map[string]interface{}{"issueId": issueID, "issueFields": []interface{}{field}}
+	if err := c.graphql.DoWithContext(ctx, query, map[string]interface{}{"input": input}, &response); err != nil {
+		return classifyMutationError(err)
+	}
+	if response.Set == nil || response.Set.Issue == nil || response.Set.Issue.ID != issueID {
+		return classifyMutationError(fmt.Errorf("issue field mutation returned no matching issue"))
 	}
 	return nil
 }

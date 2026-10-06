@@ -11,7 +11,7 @@ import (
 func TestSubIssuesReadHierarchyAndOwnProjectValuesWithoutSavedFilter(t *testing.T) {
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(query string, variables map[string]interface{}, response interface{}) error {
-			if !strings.Contains(query, "subIssues(first: 20, after: $after)") || !strings.Contains(query, "includeArchived: false") || strings.Contains(query, "$filter") || variables["id"] != "parent-issue" || variables["field0"] != "OTC Sprint" || variables["field1"] != "Linked pull requests" || variables["after"] != nil {
+			if !strings.Contains(query, "subIssues(first: 20, after: $after)") || !strings.Contains(query, "includeArchived: false") || strings.Contains(query, "$filter") || variables["id"] != "parent-issue" || strings.Contains(query, "fieldValueByName") || variables["after"] != nil {
 				t.Fatalf("wrong hierarchy query: %s, %v", query, variables)
 			}
 			return json.Unmarshal([]byte(`{"node":{"subIssues":{"nodes":[null,
@@ -20,6 +20,16 @@ func TestSubIssuesReadHierarchyAndOwnProjectValuesWithoutSavedFilter(t *testing.
 {"id":"child-item","project":{"id":"project"},"field0":{"__typename":"ProjectV2ItemFieldMultiSelectValue","field":{"id":"sprint","name":"OTC Sprint"},"value":"Sprint 8, Sprint 9","options":[{"id":"eight","name":"Sprint 8"},{"id":"nine","name":"Sprint 9"}]},"field1":{"__typename":"ProjectV2ItemFieldPullRequestValue","field":{"id":"pulls","name":"Linked pull requests"},"pullRequests":{"nodes":[{"number":43,"repository":{"nameWithOwner":"owner/repo"}}]}}}]}},
 {"__typename":"Issue","id":"external-issue","number":44,"title":"Outside project","state":"OPEN","projectItems":{"nodes":[]}}
 ],"pageInfo":{"hasNextPage":true,"endCursor":"children-next"}}}}`), response)
+		},
+		func(query string, variables map[string]interface{}, response interface{}) error {
+			if !strings.Contains(query, "query SubIssueValues") || variables["field0"] != "OTC Sprint" || variables["field1"] != "Linked pull requests" {
+				t.Fatalf("wrong hydration query: %s, %v", query, variables)
+			}
+			ids := variables["ids"].([]string)
+			if len(ids) != 1 || ids[0] != "child-item" {
+				t.Fatalf("hydrated unrelated projects: %v", ids)
+			}
+			return json.Unmarshal([]byte(`{"nodes":[{"id":"child-item","field0":{"__typename":"ProjectV2ItemFieldMultiSelectValue","field":{"id":"sprint","name":"OTC Sprint"},"options":[{"id":"eight","name":"Sprint 8"},{"id":"nine","name":"Sprint 9"}]},"field1":{"__typename":"ProjectV2ItemFieldPullRequestValue","field":{"id":"pulls","name":"Linked pull requests"},"pullRequests":{"nodes":[{"number":43,"repository":{"nameWithOwner":"owner/repo"}}]}}}]}`), response)
 		},
 		func(_ string, variables map[string]interface{}, response interface{}) error {
 			if variables["after"] != "children-next" {
@@ -53,10 +63,16 @@ func TestSubIssueProjectMembershipPagination(t *testing.T) {
 			return json.Unmarshal([]byte(`{"node":{"subIssues":{"nodes":[{"__typename":"Issue","id":"child","title":"Child","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"projects-next"}}}]}}}`), response)
 		},
 		func(query string, variables map[string]interface{}, response interface{}) error {
-			if !strings.Contains(query, "query SubIssueProjectItems") || variables["id"] != "child" || variables["after"] != "projects-next" || variables["field0"] != "Note" {
+			if !strings.Contains(query, "query SubIssueProjectItems") || variables["id"] != "child" || variables["after"] != "projects-next" || strings.Contains(query, "fieldValueByName") {
 				t.Fatalf("wrong membership continuation: %s, %v", query, variables)
 			}
 			return json.Unmarshal([]byte(`{"node":{"projectItems":{"nodes":[{"id":"item","project":{"id":"project"},"field0":{"__typename":"ProjectV2ItemFieldTextValue","field":{"name":"Note"},"text":"child value"}}]}}}`), response)
+		},
+		func(query string, variables map[string]interface{}, response interface{}) error {
+			if !strings.Contains(query, "SubIssueValues") || variables["field0"] != "Note" {
+				t.Fatalf("wrong hydration: %s %v", query, variables)
+			}
+			return json.Unmarshal([]byte(`{"nodes":[{"id":"item","field0":{"__typename":"ProjectV2ItemFieldTextValue","field":{"name":"Note"},"text":"child value"}}]}`), response)
 		},
 	}}
 	page, err := newClient(graphql, &fakeREST{}).PageSubIssues(context.Background(), "project", "parent", "", []Field{{Name: "Note"}})
@@ -107,5 +123,61 @@ func TestOutsideProjectIssueDetailLoadsBodyAndComments(t *testing.T) {
 	detail, err := newClient(graphql, &fakeREST{}).LoadIssueDetail(context.Background(), "issue")
 	if err != nil || detail.ID != "issue" || detail.Content.Body != "Body" || !detail.Content.BodyAvailable || !detail.CommentsLoaded || len(detail.Fields) != 0 {
 		t.Fatalf("external detail = %#v, %v", detail, err)
+	}
+}
+
+func TestSubIssueValuesAreBatchedOnlyForMatchingProjectItems(t *testing.T) {
+	calls := 0
+	api := reviewGraphQLFunc(func(_ context.Context, query string, vars map[string]interface{}, response interface{}) error {
+		calls++
+		if strings.Contains(query, "IssueSubIssues(") {
+			if strings.Contains(query, "fieldValueByName") || strings.Contains(query, "fieldValues(") {
+				t.Fatal("hydrated unrelated memberships")
+			}
+			children := []interface{}{}
+			for _, id := range []string{"one", "two", "three"} {
+				children = append(children, map[string]interface{}{"__typename": "Issue", "id": "issue-" + id, "projectItems": map[string]interface{}{"nodes": []interface{}{map[string]interface{}{"id": "other-" + id, "project": map[string]string{"id": "unrelated"}}, map[string]interface{}{"id": id, "project": map[string]string{"id": "project"}}}}})
+			}
+			b, _ := json.Marshal(map[string]interface{}{"node": map[string]interface{}{"subIssues": map[string]interface{}{"nodes": children}}})
+			return json.Unmarshal(b, response)
+		}
+		if !strings.Contains(query, "SubIssueValues(") {
+			t.Fatal(query)
+		}
+		ids := vars["ids"].([]string)
+		if len(ids) != 3 {
+			t.Fatalf("batch=%v", ids)
+		}
+		nodes := []interface{}{}
+		for _, id := range ids {
+			nodes = append(nodes, map[string]interface{}{"id": id, "field0": map[string]interface{}{"__typename": "ProjectV2ItemFieldTextValue", "field": map[string]string{"id": "notes"}, "text": id}})
+		}
+		b, _ := json.Marshal(map[string]interface{}{"nodes": nodes})
+		return json.Unmarshal(b, response)
+	})
+	page, err := newClient(api, &fakeREST{}).PageSubIssues(context.Background(), "project", "parent", "", []Field{{Name: "Notes"}})
+	if err != nil || calls != 2 || len(page.Items) != 3 {
+		t.Fatalf("batch calls=%d page=%#v err=%v", calls, page, err)
+	}
+	for _, item := range page.Items {
+		if item.FieldValues[0].Value != item.ID {
+			t.Fatal(item)
+		}
+	}
+}
+
+func TestSubIssueBatchFailureDoesNotSilentlyLoseProjectValues(t *testing.T) {
+	for _, payload := range []string{`{"nodes":[]}`, `{"nodes":[null]}`, `{"nodes":[{"id":"wrong"}]}`} {
+		api := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+			func(_ string, _ map[string]interface{}, r interface{}) error {
+				return json.Unmarshal([]byte(`{"node":{"subIssues":{"nodes":[{"__typename":"Issue","id":"issue","projectItems":{"nodes":[{"id":"item","project":{"id":"project"}}]}}]}}}`), r)
+			},
+			func(_ string, _ map[string]interface{}, r interface{}) error {
+				return json.Unmarshal([]byte(payload), r)
+			},
+		}}
+		if _, err := newClient(api, &fakeREST{}).PageSubIssues(context.Background(), "project", "parent", "", []Field{{Name: "Notes"}}); err == nil {
+			t.Fatal("lost batch treated as empty values")
+		}
 	}
 }

@@ -134,6 +134,7 @@ func (m *Model) abandonReads() {
 	m.pendingIssueReload = nil
 	m.refreshFocusID = ""
 	m.tableSubIssues = nil
+	m.tableEditor = nil
 }
 
 type screen int
@@ -199,6 +200,7 @@ type Model struct {
 	tableFocusID          string
 	tableAction           *tableActionState
 	tableMove             *tableMoveState
+	tableEditor           *tableFieldEditor
 	tableSubIssues        map[string]*subIssueState
 	width                 int
 	height                int
@@ -381,6 +383,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tableRow = 0
 		m.tableFocusID = ""
 		m.tableMove = nil
+		m.tableEditor = nil
 		m.err = nil
 		m.status = ""
 		m.screen = screenBoard
@@ -522,6 +525,7 @@ func (m *Model) enterBoardFromDiscovery() {
 	m.tableFocusID = ""
 	m.tableAction = nil
 	m.tableMove = nil
+	m.tableEditor = nil
 	m.setDiscoverySelection()
 }
 
@@ -942,6 +946,14 @@ func (m *Model) clampBoardCursor() {
 		return
 	}
 	if m.boardFocusID != "" {
+		if m.boardLane >= 0 && m.boardLane < len(lanes) {
+			for cardIndex, item := range lanes[m.boardLane].Items {
+				if item.ID == m.boardFocusID {
+					m.boardCard = cardIndex
+					return
+				}
+			}
+		}
 		for laneIndex, lane := range lanes {
 			for cardIndex, item := range lane.Items {
 				if item.ID == m.boardFocusID {
@@ -1483,6 +1495,9 @@ func (m Model) footerHints() string {
 		}
 		return "saving issue action... · q quit" + m.debugHint()
 	}
+	if m.isTable() && m.tableEditor != nil {
+		return "j/k choose · space toggle multi-select · ctrl+u clear text · enter save · esc cancel" + m.debugHint()
+	}
 	if m.isTable() && m.tableMove != nil {
 		return "j/k choose group · enter move · esc cancel" + m.debugHint()
 	}
@@ -1504,7 +1519,7 @@ func (m Model) footerHints() string {
 			return "enter confirm · esc cancel" + m.debugHint()
 		}
 		hints := "j/k scroll · f fields · o browser · esc close · q quit"
-		if !m.isRowLayout() && m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
+		if !m.isTimeline() && m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
 			hints = "j/k scroll · f fields · c comment · x close/reopen · o browser · esc close · q quit"
 		}
 		return hints + m.debugHint()
@@ -1521,7 +1536,7 @@ func (m Model) footerHints() string {
 			return "j/k rows · h/l months · g today · enter details · / search · r refresh · o browser · v views · ? help · q quit" + m.debugHint()
 		}
 		if m.isTable() {
-			return "j/k rows · h/l collapse/expand · enter details · a archive · D remove · m group · J/K reorder · / search · r refresh · o browser · ? help · q quit" + m.debugHint()
+			return "j/k rows · h/l collapse/expand · enter details · e edit field · a archive · D remove · m group · J/K reorder · / search · r refresh · o browser · ? help · q quit" + m.debugHint()
 		}
 		return "h/l lanes · j/k cards · H/L move · J/K reorder · / search · enter details · v views · p projects · r refresh · o open in browser · ? help · q quit" + m.debugHint()
 	default:
@@ -1554,8 +1569,9 @@ func (m Model) layoutHelpText() string {
 	if m.isTable() {
 		return "In tables, j/k moves rows, / searches, and enter opens detail. a archives; D removes from the project (confirm each).\n" +
 			"l/right expands sub-issues; h/left collapses or selects the parent; space toggles expansion.\n" +
-			"m changes the saved group; J/K reorders top-level project rows when position-sorted and fully loaded.\n" +
-			"In detail, j/k scrolls, f toggles all project fields, and esc returns to the table."
+			"e edits saved text/number/date/select/iteration columns; multi-select uses space to toggle values.\n" +
+			"m changes writable groups; J/K reorders position-sorted top-level rows. Multi-select group moves/reordering are read-only.\n" +
+			"In issue detail, c comments and x closes/reopens; j/k scrolls, f toggles fields, and esc returns to the table."
 	}
 	return "On the board, h/l changes lanes, j/k changes cards, / searches loaded cards, and enter opens detail.\n" +
 		"H/L moves cards and J/K reorders cards when the view is writable and fully loaded.\n" +

@@ -63,12 +63,20 @@ func (m Model) tableTreeRows() []tableTreeRow {
 		}
 	}
 	seen := map[string]bool{}
+	repeatedGroups := m.view != nil && len(m.view.GroupByFields) == 1 && isMultiSelectField(m.view.GroupByFields[0])
+	visitKey := func(group int, id string) string {
+		if repeatedGroups {
+			return fmt.Sprintf("%d/%s", group, id)
+		}
+		return id
+	}
 	var appendRow func(github.Item, int, string, int) []tableTreeRow
 	appendRow = func(item github.Item, depth int, parent string, group int) []tableTreeRow {
-		if seen[item.ID] {
+		key := visitKey(group, item.ID)
+		if seen[key] {
 			return nil
 		}
-		seen[item.ID] = true
+		seen[key] = true
 		row := tableTreeRow{item: item, depth: depth, parentID: parent, group: group}
 		children := []tableTreeRow{}
 		if state := m.tableSubIssues[item.ID]; state != nil && state.expanded {
@@ -93,7 +101,7 @@ func (m Model) tableTreeRows() []tableTreeRow {
 	// still ensures each row appears once when recovering an unattached root.
 	for groupIndex, group := range groups {
 		for _, item := range group.Items {
-			if !seen[item.ID] {
+			if !seen[visitKey(groupIndex, item.ID)] {
 				rows = append(rows, appendRow(item, 0, "", groupIndex)...)
 			}
 		}

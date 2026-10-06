@@ -24,6 +24,10 @@ func (m Model) renderTableContent(b *strings.Builder) {
 	if m.view.Filter != "" {
 		fmt.Fprintf(b, "%s %s\n", mutedStyle.Render("Filter:"), m.view.Filter)
 	}
+	if m.tableEditor != nil {
+		b.WriteString(m.renderTableEditor())
+		return
+	}
 	rows := m.tableTreeRows()
 	groups := m.tableTreeGroups(rows)
 	visibleItems := tableGroupItems(groups)
@@ -214,6 +218,9 @@ func (m Model) selectedTableRow(items []github.Item) int {
 		return -1
 	}
 	if m.tableFocusID != "" {
+		if m.tableRow >= 0 && m.tableRow < len(items) && items[m.tableRow].ID == m.tableFocusID {
+			return m.tableRow
+		}
 		for index, item := range items {
 			if item.ID == m.tableFocusID {
 				return index

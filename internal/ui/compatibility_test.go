@@ -150,7 +150,7 @@ func TestViewCompatibilityRejectsUnsupportedSemantics(t *testing.T) {
 		{name: "multiple table groups", view: github.View{Layout: github.TableLayout, GroupByFields: []github.Field{status, status}}, reason: "multiple column grouping"},
 		{name: "vertical table groups", view: github.View{Layout: github.TableLayout, VerticalGroupBy: []github.Field{status}}, reason: "vertical grouping is not supported in table views"},
 		{name: "unsupported vertical grouping", view: github.View{Layout: github.BoardLayout, VerticalGroupBy: []github.Field{{Name: "Labels", DataType: "MULTI_SELECT"}}}, reason: "vertical grouping field"},
-		{name: "unsupported grouping", view: github.View{Layout: github.BoardLayout, GroupByFields: []github.Field{{Name: "Labels", DataType: "MULTI_SELECT"}}}, reason: "not single-select or iteration"},
+		{name: "unsupported grouping", view: github.View{Layout: github.BoardLayout, GroupByFields: []github.Field{{Name: "Labels", DataType: "LABELS"}}}, reason: "not single-select, multi-select, or iteration"},
 		{name: "missing options", view: github.View{Layout: github.BoardLayout, GroupByFields: []github.Field{{Name: "Status", DataType: "SINGLE_SELECT"}}}, reason: "has no options"},
 		{name: "unsupported sort", view: github.View{Layout: github.BoardLayout, SortByFields: []github.SortField{{Direction: "ASC", Field: github.Field{Name: "Labels", DataType: "MULTI_SELECT"}}}}, reason: "sort field"},
 		{name: "invalid direction", view: github.View{Layout: github.BoardLayout, SortByFields: []github.SortField{{Direction: "RANDOM", Field: github.Field{Name: "Title", DataType: "TITLE"}}}}, reason: "sort direction"},

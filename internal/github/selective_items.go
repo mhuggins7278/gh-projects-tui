@@ -118,13 +118,14 @@ func selectedItemFields(fields []Field, content bool, variables map[string]inter
 		if content {
 			selections.WriteString(" ... on ProjectV2ItemFieldUserValue { users(first: 10) { nodes { login } pageInfo { hasNextPage endCursor } } }")
 			selections.WriteString(" ...LinkedPullRequests")
+			selections.WriteString(selectedRowMetadata(field))
 		}
 		selections.WriteString(" } ")
 		variables[name] = field.Name
 	}
 	contentSelection := ""
 	if content {
-		contentSelection = `content { __typename ... on Issue { id number title url repository { name } state subIssuesSummary { total completed } } ... on PullRequest { id number title url repository { name } state isDraft merged } ... on DraftIssue { id title } }`
+		contentSelection = `content { __typename ... on Issue { id number title url repository { name } state viewerCanSetFields subIssuesSummary { total completed } } ... on PullRequest { id number title url repository { name } state isDraft merged } ... on DraftIssue { id title } }`
 	}
 	return definitions.String(), "id " + contentSelection + " " + selections.String(), names
 }
@@ -148,4 +149,32 @@ func decodeSelectedItem(node json.RawMessage, names []string) (*rawItem, error) 
 		}
 	}
 	return &item, nil
+}
+
+// Select nested metadata only for saved columns that display it.
+func selectedRowMetadata(field Field) string {
+	kind := strings.ToUpper(field.DataType)
+	if kind == "" {
+		switch strings.ToLower(field.Name) {
+		case "labels":
+			kind = "LABELS"
+		case "milestone":
+			kind = "MILESTONE"
+		case "repository":
+			kind = "REPOSITORY"
+		case "reviewers":
+			kind = "REVIEWERS"
+		}
+	}
+	switch kind {
+	case "LABELS":
+		return ` ... on ProjectV2ItemFieldLabelValue { labels(first: 10) { nodes { name } pageInfo { hasNextPage endCursor } } }`
+	case "MILESTONE":
+		return ` ... on ProjectV2ItemFieldMilestoneValue { milestone { title } }`
+	case "REPOSITORY":
+		return ` ... on ProjectV2ItemFieldRepositoryValue { repository { name nameWithOwner } }`
+	case "REVIEWERS":
+		return ` ... on ProjectV2ItemFieldReviewerValue { reviewers(first: 10) { nodes { __typename ... on User { login } ... on Team { name } } pageInfo { hasNextPage endCursor } } }`
+	}
+	return ""
 }

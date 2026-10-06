@@ -349,3 +349,64 @@ The following items remain unverified:
 ## Gate To Continue
 
 Run the remaining probes against representative board views. Sandbox write semantics are verified; single-axis unfiltered boards expose guarded lane moves, and position-sorted views additionally expose manual reordering. Unsupported grouping/reordering paths remain read-only. Supported saved-filtered board mutations use canonical unfiltered project state and are covered by fixture tests; those tests do not establish additional live filter semantics.
+
+
+## Functionality and compatibility follow-up (2026-10-05)
+
+The supported development target is github.com. Existing host routing is
+retained, but older Enterprise schemas are not covered by capability negotiation.
+
+- Selective row queries hydrate saved Labels, Milestone, Repository, and Reviewers
+  columns alongside Assignees and Linked pull requests. Nested connections are
+  bounded at 10 and display `...` when additional values exist; full item details
+  retain their complete pagination path. Unrelated nested metadata is not selected.
+- Multi-select field definitions use `multiSelectOptions`, with issue-field option
+  fallback. Item values preserve option IDs. Boards and tables display an item
+  in each selected option group, and combined boards use each axis's membership.
+  Option names containing commas are never split. Unknown IDs remain visible in
+  Other. Multi-select group moves and manual reordering are disabled. Fixtures
+  cover this client projection; the schema and announcement establish available
+  grouping support, not every saved web display setting.
+- `e` on a table opens an editor for writable saved text, number, date, single-select,
+  multi-select, and iteration fields. Scalars validate locally, empty scalar input
+  clears, and select pickers use IDs. Edits use authoritative unfiltered pre-reads,
+  the shared mutation session, and field readback for ambiguous outcomes. `r`
+  retries readback without resubmitting the write. Successful field edits refresh
+  rows/hierarchies to restore server-filter membership and sorting.
+- Issue-backed fields carry the underlying issue-field ID and use
+  `setIssueFieldValue(input: {issueId, issueFields: [...]})`; clears use `delete: true`.
+  Text/date/number inputs are `textValue`/`dateValue`/`numberValue`, and select inputs
+  are `singleSelectOptionId`/`multiSelectOptionIds`. These definitions and the
+  `viewerCanSetFields`, `viewerCanClose`, and `viewerCanReopen` permission fields
+  were checked through read-only github.com schema introspection on 2026-10-05.
+  No live field mutation was submitted in this follow-up. Fixture tests cover
+  routing, clearing, validation, and uncertain-write reconciliation.
+- Table issue details enable comments and close/reopen using the existing issue
+  action path, including deferred saved-query reload and the cross-navigation
+  gate for uncertain state changes. Issue state permissions are checked separately
+  from project update access when supplied by GitHub.
+- Hierarchy reads fetch up to 20 direct children with identity-only active-project
+  memberships (100 per page). Only matching current-project item IDs are hydrated
+  in one batch, preserving hierarchy order and excluding unrelated project fields.
+  Membership continuations remain identity-only; missing batch nodes fail the read.
+- `TestLiveSavedViewMembershipParity` compares REST saved-view node IDs to unchanged
+  GraphQL `items(query:)` membership. It repeats the GraphQL read and filter metadata
+  around the REST read to catch changing samples. REST Links supply only cursors;
+  the client constructs its own host-relative paths. REST is a comparison source,
+  not a fallback that can silently alter the displayed view.
+- Sorting regression fixtures cover scalar/select/iteration ASC and DESC, unset
+  values last, position ties, secondary sorts, and unknown iteration identities.
+  Broader populated web sort comparisons remain empirical checks.
+
+Read-only checks on public organization project `github/12106`, view 4, confirmed
+stable agreement for 136 items across pages. Enhanced selective and full-row
+queries also succeeded: the first 100 items exposed 200 available standard cells
+across four selected metadata definitions. No parent with children was present in
+that first sampled page, so that sample does not establish live hierarchy parity.
+These dated counts are observations, not promised project contents.
+
+The existing disposable personal project `mhuggins7278/2`, view 3, also passed
+stable REST/GraphQL membership comparison for 38 items. Enhanced reads returned
+72 available standard cells across four metadata definitions, and the hierarchy
+probe loaded two direct children with no continuation. These checks submitted no
+mutations and retained no item titles, bodies, or identities in fixtures.

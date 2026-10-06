@@ -257,24 +257,21 @@ func lanesForView(view *github.View, items []github.Item) []boardLane {
 	}
 
 	for _, item := range items {
-		key, label := itemGroupKey(field, item)
-		index, ok := indexes[key]
-		if !ok {
-			// Keep an item visible when GitHub returns a value not present in
-			// the saved view metadata.
-			if key == "no-value" {
-				index = indexes[key]
-			} else {
-				if len(lanes) == 0 || lanes[len(lanes)-1].Key != "other" {
+		assigned := map[int]bool{}
+		for _, key := range itemGroupKeys(field, item) {
+			index, ok := indexes[key]
+			if !ok {
+				if index, ok = indexes["other"]; !ok {
+					index = len(lanes)
+					indexes["other"] = index
 					lanes = append(lanes, boardLane{Key: "other", Name: "Other"})
 				}
-				index = len(lanes) - 1
 			}
-			// The card remains in one stable fallback lane; its actual
-			// value is still shown in the card fields below.
-			_ = label
+			if !assigned[index] {
+				lanes[index].Items = append(lanes[index].Items, item)
+				assigned[index] = true
+			}
 		}
-		lanes[index].Items = append(lanes[index].Items, item)
 	}
 	return withoutEmptyNoStatusLanes(lanes)
 }
@@ -291,13 +288,15 @@ func combinedLanesForView(columnField, verticalField github.Field, items []githu
 	needsOtherColumn := false
 	needsOtherRow := false
 	for _, item := range items {
-		columnKey, _ := itemGroupKey(columnField, item)
-		if !containsLaneKey(columns, columnKey) && columnKey != "no-value" {
-			needsOtherColumn = true
+		for _, key := range itemGroupKeys(columnField, item) {
+			if !containsLaneKey(columns, key) {
+				needsOtherColumn = true
+			}
 		}
-		rowKey, _ := itemGroupKey(verticalField, item)
-		if !containsLaneKey(rows, rowKey) && rowKey != "no-value" {
-			needsOtherRow = true
+		for _, key := range itemGroupKeys(verticalField, item) {
+			if !containsLaneKey(rows, key) {
+				needsOtherRow = true
+			}
 		}
 	}
 	if needsOtherColumn {
@@ -325,16 +324,20 @@ func combinedLanesForView(columnField, verticalField github.Field, items []githu
 	}
 
 	for _, item := range items {
-		columnKey, _ := itemGroupKey(columnField, item)
-		if !columnKeys[columnKey] {
-			columnKey = "other"
-		}
-		rowKey, _ := itemGroupKey(verticalField, item)
-		if !rowKeys[rowKey] {
-			rowKey = "other"
-		}
-		if index, ok := indexes[combinedLaneKey(rowKey, columnKey)]; ok {
-			lanes[index].Items = append(lanes[index].Items, item)
+		assigned := map[int]bool{}
+		for _, columnKey := range itemGroupKeys(columnField, item) {
+			if !columnKeys[columnKey] {
+				columnKey = "other"
+			}
+			for _, rowKey := range itemGroupKeys(verticalField, item) {
+				if !rowKeys[rowKey] {
+					rowKey = "other"
+				}
+				if index, ok := indexes[combinedLaneKey(rowKey, columnKey)]; ok && !assigned[index] {
+					lanes[index].Items = append(lanes[index].Items, item)
+					assigned[index] = true
+				}
+			}
 		}
 	}
 	return withoutEmptyNoStatusLanes(lanes)
@@ -395,7 +398,7 @@ func combinedLaneKey(rowKey, columnKey string) string {
 
 func laneDefinitions(field github.Field) ([]laneDefinition, bool) {
 	switch {
-	case field.Kind == "ProjectV2SingleSelectField" || field.DataType == "SINGLE_SELECT":
+	case isSingleSelectField(field), isMultiSelectField(field):
 		definitions := []laneDefinition{{key: "no-value", name: noValueLaneName(field)}}
 		for _, option := range field.Options {
 			definitions = append(definitions, laneDefinition{key: "option:" + option.ID, name: option.Name})
@@ -417,6 +420,34 @@ func noValueLaneName(field github.Field) string {
 		return "No Status"
 	}
 	return "No value"
+}
+
+// Multi-select membership uses identities, never comma-splitting display names.
+// An item can appear once in each selected option's group.
+func itemGroupKeys(field github.Field, item github.Item) []string {
+	if !isMultiSelectField(field) {
+		key, _ := itemGroupKey(field, item)
+		return []string{key}
+	}
+	value, ok := itemFieldValue(field, item)
+	if !ok || !value.Available {
+		return []string{"no-value"}
+	}
+	keys := []string{}
+	seen := map[string]bool{}
+	for _, option := range value.Options {
+		if option.ID != "" && !seen[option.ID] {
+			keys = append(keys, "option:"+option.ID)
+			seen[option.ID] = true
+		}
+	}
+	if len(keys) == 0 {
+		if value.Value != "" {
+			return []string{"other"}
+		}
+		return []string{"no-value"}
+	}
+	return keys
 }
 
 func itemGroupKey(field github.Field, item github.Item) (string, string) {
@@ -677,6 +708,29 @@ func (m *Model) reorderBoardItem(delta int) tea.Cmd {
 
 func replaceFieldValue(values []github.FieldValue, field github.Field, input github.FieldValueInput) []github.FieldValue {
 	updated := github.FieldValue{FieldID: field.ID, FieldName: field.Name, Available: true}
+	if input.Text != nil {
+		updated.Value = *input.Text
+	}
+	if input.Date != nil {
+		updated.Value = *input.Date
+	}
+	if input.Number != nil {
+		updated.Value = strconv.FormatFloat(*input.Number, 'f', -1, 64)
+	}
+	if input.MultiSelectOptionIDs != nil {
+		names := []string{}
+		for _, id := range input.MultiSelectOptionIDs {
+			for _, option := range field.Options {
+				if option.ID == id {
+					updated.Options = append(updated.Options, option)
+					names = append(names, option.Name)
+					break
+				}
+			}
+		}
+		updated.Value = strings.Join(names, ", ")
+	}
+
 	if input.SingleSelectOptionID != nil {
 		updated.OptionID = *input.SingleSelectOptionID
 		for _, option := range field.Options {

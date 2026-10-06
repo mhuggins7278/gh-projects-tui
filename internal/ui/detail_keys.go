@@ -35,7 +35,7 @@ func (m Model) updateDetailKey(key string) (tea.Model, tea.Cmd) {
 			m.status = "Finish or reconcile the pending project change before another issue write"
 			return m, nil
 		}
-		if m.isRowLayout() {
+		if m.isTimeline() {
 			return m, nil
 		}
 		if m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
@@ -51,7 +51,7 @@ func (m Model) updateDetailKey(key string) (tea.Model, tea.Cmd) {
 			m.status = "Finish or reconcile the pending project change before another issue write"
 			return m, nil
 		}
-		if m.isRowLayout() {
+		if m.isTimeline() {
 			return m, nil
 		}
 		if m.detail == nil || m.detail.Content == nil || m.detail.Content.Kind != "Issue" {
@@ -67,6 +67,15 @@ func (m Model) updateDetailKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.issueActionClosing = strings.EqualFold(m.detail.Content.State, "OPEN")
+		permission := m.detail.Content.ViewerCanReopen
+		if m.issueActionClosing {
+			permission = m.detail.Content.ViewerCanClose
+		}
+		if permission != nil && !*permission {
+			m.status = "You do not have permission to change this issue's state"
+			return m, nil
+		}
+
 		m.issueActionConfirm = true
 		verb := "reopen"
 		if m.issueActionClosing {

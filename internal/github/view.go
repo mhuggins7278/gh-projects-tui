@@ -8,12 +8,12 @@ import (
 const fieldConfigurationFragment = `
 fragment FieldConfiguration on ProjectV2FieldConfiguration {
   __typename
-  ... on ProjectV2Field { id name dataType }
+  ... on ProjectV2Field { id name dataType isIssueField issueField { ...IssueFieldIdentity } }
   ... on ProjectV2SingleSelectField {
-    id name dataType options { id name }
-    issueField { ... on IssueFieldSingleSelect { options { id name } } }
+    id name dataType isIssueField options { id name }
+    issueField { ...IssueFieldIdentity ... on IssueFieldSingleSelect { options { id name } } }
   }
-  ... on ProjectV2MultiSelectField { id name dataType }
+  ... on ProjectV2MultiSelectField { id name dataType isIssueField options: multiSelectOptions { id name } issueField { ...IssueFieldIdentity ... on IssueFieldMultiSelect { options { id name } } } }
   ... on ProjectV2IterationField {
     id name dataType
     configuration {
@@ -21,6 +21,15 @@ fragment FieldConfiguration on ProjectV2FieldConfiguration {
       completedIterations { id title startDate duration }
     }
   }
+}` + issueFieldIdentityFragment
+
+const issueFieldIdentityFragment = `
+fragment IssueFieldIdentity on IssueFields {
+ ... on IssueFieldText { id }
+ ... on IssueFieldNumber { id }
+ ... on IssueFieldDate { id }
+ ... on IssueFieldSingleSelect { id }
+ ... on IssueFieldMultiSelect { id }
 }`
 
 // Project definitions support filter validation and explicit iteration endpoint
@@ -125,12 +134,14 @@ type View struct {
 }
 
 type Field struct {
-	ID         string
-	Name       string
-	DataType   string
-	Kind       string
-	Options    []FieldOption
-	Iterations []Iteration
+	ID           string
+	Name         string
+	DataType     string
+	Kind         string
+	IssueFieldID string
+	IsIssueField bool
+	Options      []FieldOption
+	Iterations   []Iteration
 }
 
 type FieldOption struct {
@@ -199,11 +210,13 @@ type rawField struct {
 	Name          string                  `json:"name"`
 	DataType      string                  `json:"dataType"`
 	Options       []FieldOption           `json:"options"`
+	IsIssueField  bool                    `json:"isIssueField"`
 	IssueField    *rawIssueField          `json:"issueField"`
 	Configuration *iterationConfiguration `json:"configuration"`
 }
 
 type rawIssueField struct {
+	ID      string        `json:"id"`
 	Options []FieldOption `json:"options"`
 }
 
@@ -513,7 +526,10 @@ func (f rawField) project() Field {
 	if len(options) == 0 && f.IssueField != nil {
 		options = f.IssueField.Options
 	}
-	result := Field{ID: f.ID, Name: f.Name, DataType: f.DataType, Kind: f.Kind, Options: options}
+	result := Field{ID: f.ID, Name: f.Name, DataType: f.DataType, Kind: f.Kind, Options: options, IsIssueField: f.IsIssueField}
+	if f.IssueField != nil {
+		result.IssueFieldID = f.IssueField.ID
+	}
 	if f.Configuration != nil {
 		result.Iterations = append(result.Iterations, f.Configuration.Iterations...)
 		for _, iteration := range f.Configuration.CompletedIterations {

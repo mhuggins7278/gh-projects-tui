@@ -82,3 +82,43 @@ func TestVisibleLinkedPullRequestsAreFetchedWithoutDetailReads(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectiveRowsHydrateOnlyVisibleStandardMetadata(t *testing.T) {
+	fields := []Field{{ID: "labels", Name: "Labels", DataType: "LABELS"}, {ID: "milestone", Name: "Milestone", DataType: "MILESTONE"}, {ID: "repo", Name: "Repository", DataType: "REPOSITORY"}, {ID: "reviewers", Name: "Reviewers", DataType: "REVIEWERS"}}
+	for _, owner := range []Owner{{Login: "owner", Kind: UserOwner}, {Login: "owner", Kind: OrganizationOwner}} {
+		branch := "user"
+		if owner.Kind == OrganizationOwner {
+			branch = "organization"
+		}
+		calls := 0
+		api := reviewGraphQLFunc(func(_ context.Context, query string, vars map[string]interface{}, response interface{}) error {
+			calls++
+			for _, required := range []string{"labels(first: 10)", "milestone { title }", "repository { name nameWithOwner }", "reviewers(first: 10)", "... on Team { name }"} {
+				if !strings.Contains(query, required) {
+					t.Fatalf("missing %s", required)
+				}
+			}
+			if strings.Contains(query, "ItemDetail") || strings.Contains(query, "first: 100) { nodes { login }") {
+				t.Fatal("unbounded detail read")
+			}
+			node := map[string]interface{}{"id": "item", "field0": map[string]interface{}{"__typename": "ProjectV2ItemFieldLabelValue", "field": map[string]string{"id": "labels"}, "labels": map[string]interface{}{"nodes": []map[string]string{{"name": "bug"}}, "pageInfo": map[string]bool{"hasNextPage": true}}}, "field1": map[string]interface{}{"__typename": "ProjectV2ItemFieldMilestoneValue", "field": map[string]string{"id": "milestone"}, "milestone": map[string]string{"title": "Release"}}, "field2": map[string]interface{}{"__typename": "ProjectV2ItemFieldRepositoryValue", "field": map[string]string{"id": "repo"}, "repository": map[string]string{"nameWithOwner": "owner/repo"}}, "field3": map[string]interface{}{"__typename": "ProjectV2ItemFieldReviewerValue", "field": map[string]string{"id": "reviewers"}, "reviewers": map[string]interface{}{"nodes": []map[string]string{{"__typename": "User", "login": "alice"}, {"__typename": "Team", "name": "Platform"}}}}}
+			payload := map[string]interface{}{branch: map[string]interface{}{"projectV2": map[string]interface{}{"items": map[string]interface{}{"nodes": []interface{}{node}}}}}
+			b, _ := json.Marshal(payload)
+			return json.Unmarshal(b, response)
+		})
+		page, err := newClient(api, &fakeREST{}).PageBoardItems(context.Background(), owner, 7, "", "", fields)
+		if err != nil || calls != 1 {
+			t.Fatalf("rows: %v calls=%d", err, calls)
+		}
+		for i, want := range []string{"bug, ...", "Release", "owner/repo", "alice, Platform"} {
+			if !page.Items[0].FieldValues[i].Available || page.Items[0].FieldValues[i].Value != want {
+				t.Fatalf("value %d: %#v", i, page.Items[0].FieldValues[i])
+			}
+		}
+	}
+	vars := map[string]interface{}{}
+	_, selection, _ := selectedItemFields([]Field{{Name: "Status", DataType: "SINGLE_SELECT"}}, true, vars)
+	if strings.Contains(selection, "labels(") || strings.Contains(selection, "reviewers(") {
+		t.Fatal("unrelated nested metadata selected")
+	}
+}

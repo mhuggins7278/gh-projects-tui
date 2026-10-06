@@ -124,12 +124,16 @@ After pulling updates, rerun `go run` or rebuild your local binary.
 
 - Owner, project, and saved-view pickers with filtering.
 - Progressive board loading through one paginated stream with selective fields.
-- Single-select and iteration grouping, including combined columns/swimlanes.
+- Single-select, multi-select, and iteration grouping, including combined columns/swimlanes.
+  Multi-select items appear in each selected option group; group moves and
+  manual reordering remain disabled for these views.
 - Saved visible fields, supported field sorting, and local card search.
 - Tables render saved fields, single-field groups, linked PRs, and expandable
   sub-issue hierarchies. Nested children load on demand, including children
   outside the saved filter. Writable tables can archive or remove project items,
-  change groups, and reorder position-sorted top-level rows.
+  change groups, edit saved text/number/date/select/iteration columns, and
+  reorder position-sorted top-level rows. Standard columns include labels,
+  milestone, repository, reviewers, assignees, and linked PRs.
 - Issue, pull request, and draft details, including Markdown bodies and project
   fields. Details are cached in memory until refresh or view changes.
 - Optimistic card moves and reordering on supported writable boards.
@@ -159,6 +163,7 @@ the saved state. Use `r` to pick up external changes.
 | `enter` | Select a picker entry or open item details |
 | `H/L` (uppercase) | Move the selected card to an adjacent lane |
 | `J/K` (uppercase) | Reorder the selected card within its lane |
+| `e` (table) | Choose a saved field to edit; enter saves, esc cancels; space toggles multi-select options |
 | `m` (table) | Pick a saved group for the selected row; `j/k` choose and `enter` moves |
 | `J/K` (table) | Reorder the selected top-level row within its group when project-position sorted |
 | `a` / `D` (table) | Archive / remove the selected item from this project (confirmation required) |
@@ -173,7 +178,7 @@ the saved state. Use `r` to pick up external changes.
 | `q` or `ctrl+c` | Quit |
 
 In item details, `j/k` scrolls, `f` toggles all fields (including unset/unavailable
-values), and `esc` closes the panel. For GitHub issues on boards, `c` opens a comment
+values), and `esc` closes the panel. For GitHub issues on boards and tables, `c` opens a comment
 composer (`enter` submits, `esc` cancels), and `x` prompts to close or reopen the
 issue (`enter` confirms, `esc` cancels). Pull requests and draft issues do not
 offer these issue actions.
@@ -212,7 +217,11 @@ offer these issue actions.
   API cooldowns pace writes; `--debug` shows their countdown and request telemetry.
 - Table support is an early preview; full parity with GitHub's table UI is not
   implemented. Table actions require update access, a complete item load, and
-  no local search. Group moves require one writable single-select or iteration
+  no local search. Field editing uses the saved visible columns; empty text,
+  number, or date input clears the field. Dates must be `YYYY-MM-DD`, and
+  numbers must be finite. Issue-backed fields require issue field permissions
+  and are saved on the issue; project-only fields use project permissions.
+  System metadata columns remain read-only. Group moves require one writable single-select or iteration
   grouping field; reordering requires project-position sorting. Removing a
   project-only draft deletes that draft, while removing an issue or PR leaves
   its repository content intact. Archiving retains an item for restoration on
@@ -269,3 +278,26 @@ go test -tags live ./internal/github -run '^TestLiveSavedFilterContract$' -count
 The read-only [roadmap investigation probe](docs/api-contract.md#reproducible-read-only-probe)
 can inspect an existing saved roadmap's schema and aggregate date/iteration data.
 It does not enable roadmap rendering or change project data.
+
+### Saved-view compatibility probes
+
+Compatibility work targets **github.com**. Enterprise schema negotiation is not
+implemented. The read-only parity probe compares GraphQL saved-filter membership
+with REST saved-view membership, including cursor pagination, and repeats the
+GraphQL read to detect a changing sample. It reports aggregate counts only:
+
+```sh
+GH_PROJECTS_TUI_LIVE_PARITY=1 \
+GH_PROJECTS_TUI_LIVE_OWNER=OWNER \
+GH_PROJECTS_TUI_LIVE_PROJECT=PROJECT_NUMBER \
+GH_PROJECTS_TUI_LIVE_VIEW=VIEW_NUMBER \
+go test -tags live ./internal/github -run '^TestLive(SavedViewMembershipParity|EnhancedRowReads)$' -count=1 -v
+```
+
+Set `GH_PROJECTS_TUI_LIVE_OWNER_KIND=user` for personal projects. REST comparison
+uses API version `2026-03-10`; it does not replace the production GraphQL loader.
+The enhanced row probe checks visible standard metadata and reads sub-issues
+when a parent exists in the first sampled page. Neither probe submits writes.
+Sort fixtures cover both directions, unset values, stable position ties,
+secondary sorts, and completed/unknown iterations. They pin the current client
+policy; they do not establish universal agreement with GitHub's web renderer.

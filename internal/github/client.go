@@ -117,7 +117,9 @@ func NewClientWithHost(host string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	rest, err := api.NewRESTClient(options)
+	restOptions := options
+	restOptions.Headers = map[string]string{"X-GitHub-Api-Version": "2026-03-10"}
+	rest, err := api.NewRESTClient(restOptions)
 	if err != nil {
 		return nil, err
 	}

@@ -375,6 +375,9 @@ func (m *Model) handleTableNavigationKey(key string) (tea.Cmd, bool) {
 			}
 		}
 		return m.expandTableRow(), true
+	case "e":
+		m.beginTableFieldEdit()
+		return nil, true
 	case "m":
 		m.beginTableMove()
 		return nil, true

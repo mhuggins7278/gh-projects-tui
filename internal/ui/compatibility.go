@@ -68,7 +68,7 @@ func evaluateViewCompatibilityWithRoadmapGrouping(view github.View, roadmapReaso
 		}
 		field := grouping.fields[0]
 		switch {
-		case isSingleSelectField(field):
+		case isSingleSelectField(field), isMultiSelectField(field):
 			if len(field.Options) == 0 {
 				reasons = append(reasons, fmt.Sprintf("%s grouping field %q has no options", grouping.axis, field.Name))
 			}
@@ -77,7 +77,7 @@ func evaluateViewCompatibilityWithRoadmapGrouping(view github.View, roadmapReaso
 				reasons = append(reasons, fmt.Sprintf("%s grouping field %q has no iterations", grouping.axis, field.Name))
 			}
 		default:
-			reasons = append(reasons, fmt.Sprintf("%s grouping field %q is not single-select or iteration", grouping.axis, field.Name))
+			reasons = append(reasons, fmt.Sprintf("%s grouping field %q is not single-select, multi-select, or iteration", grouping.axis, field.Name))
 		}
 	}
 
@@ -100,6 +100,10 @@ func evaluateViewCompatibilityWithRoadmapGrouping(view github.View, roadmapReaso
 
 func isSingleSelectField(field github.Field) bool {
 	return field.Kind == "ProjectV2SingleSelectField" || strings.EqualFold(field.DataType, "SINGLE_SELECT")
+}
+
+func isMultiSelectField(field github.Field) bool {
+	return field.Kind == "ProjectV2MultiSelectField" || strings.EqualFold(field.DataType, "MULTI_SELECT")
 }
 
 func isIterationField(field github.Field) bool {

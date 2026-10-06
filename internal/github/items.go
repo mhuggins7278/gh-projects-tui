@@ -78,10 +78,21 @@ fragment FieldValuesPage on ProjectV2ItemFieldValueConnection {
       users(first: 10) { nodes { login } pageInfo { hasNextPage endCursor } }
     }
     ...LinkedPullRequests
+    ...RowMetadata
   }
   pageInfo { hasNextPage endCursor }
 }
-` + fieldValueFragment + linkedPullRequestsFragment
+` + fieldValueFragment + linkedPullRequestsFragment + rowMetadataFragment
+
+// Row metadata is bounded; an ellipsis distinguishes a partial connection from
+// an empty value. Full connections remain available in item details.
+const rowMetadataFragment = `
+fragment RowMetadata on ProjectV2ItemFieldValue {
+  ... on ProjectV2ItemFieldLabelValue { labels(first: 10) { nodes { name } pageInfo { hasNextPage endCursor } } }
+  ... on ProjectV2ItemFieldMilestoneValue { milestone { title } }
+  ... on ProjectV2ItemFieldRepositoryValue { repository { name nameWithOwner } }
+  ... on ProjectV2ItemFieldReviewerValue { reviewers(first: 10) { nodes { __typename ... on User { login } ... on Team { name } } pageInfo { hasNextPage endCursor } } }
+}`
 
 const linkedPullRequestsFragment = `
 fragment LinkedPullRequests on ProjectV2ItemFieldPullRequestValue {
@@ -135,7 +146,7 @@ fragment ItemsPage on ProjectV2ItemConnection {
     id type
     content {
       __typename
-      ... on Issue { id number title url repository { name } state subIssuesSummary { total completed } }
+      ... on Issue { id number title url repository { name } state viewerCanSetFields subIssuesSummary { total completed } }
       ... on PullRequest { id number title url repository { name } state isDraft merged }
       ... on DraftIssue { id title }
     }
@@ -177,22 +188,26 @@ type Item struct {
 }
 
 type Content struct {
-	Kind          string
-	ID            string
-	Number        int
-	Title         string
-	URL           string
-	Repository    string
-	State         string
-	IsDraft       bool
-	Merged        bool
-	SubIssueTotal int
-	SubIssueDone  int
-	Body          string
-	BodyAvailable bool
+	ViewerCanSetFields *bool
+	ViewerCanClose     *bool
+	ViewerCanReopen    *bool
+	Kind               string
+	ID                 string
+	Number             int
+	Title              string
+	URL                string
+	Repository         string
+	State              string
+	IsDraft            bool
+	Merged             bool
+	SubIssueTotal      int
+	SubIssueDone       int
+	Body               string
+	BodyAvailable      bool
 }
 
 type FieldValue struct {
+	Options     []FieldOption
 	Kind        string
 	FieldID     string
 	FieldName   string
@@ -232,17 +247,20 @@ type rawItem struct {
 }
 
 type rawContent struct {
-	Kind       string         `json:"__typename"`
-	ID         string         `json:"id"`
-	Number     int            `json:"number"`
-	Title      string         `json:"title"`
-	URL        string         `json:"url"`
-	Repository *rawRepository `json:"repository"`
-	State      string         `json:"state"`
-	IsDraft    bool           `json:"isDraft"`
-	Merged     bool           `json:"merged"`
-	SubIssues  *rawSubIssues  `json:"subIssuesSummary"`
-	Body       *string        `json:"body"`
+	ViewerCanSetFields *bool          `json:"viewerCanSetFields"`
+	ViewerCanClose     *bool          `json:"viewerCanClose"`
+	ViewerCanReopen    *bool          `json:"viewerCanReopen"`
+	Kind               string         `json:"__typename"`
+	ID                 string         `json:"id"`
+	Number             int            `json:"number"`
+	Title              string         `json:"title"`
+	URL                string         `json:"url"`
+	Repository         *rawRepository `json:"repository"`
+	State              string         `json:"state"`
+	IsDraft            bool           `json:"isDraft"`
+	Merged             bool           `json:"merged"`
+	SubIssues          *rawSubIssues  `json:"subIssuesSummary"`
+	Body               *string        `json:"body"`
 }
 
 type rawRepository struct {
@@ -433,14 +451,17 @@ func projectContent(content *rawContent) *Content {
 		return nil
 	}
 	projected := &Content{
-		Kind:    content.Kind,
-		ID:      content.ID,
-		Number:  content.Number,
-		Title:   content.Title,
-		URL:     content.URL,
-		State:   content.State,
-		IsDraft: content.IsDraft,
-		Merged:  content.Merged,
+		ViewerCanSetFields: content.ViewerCanSetFields,
+		ViewerCanClose:     content.ViewerCanClose,
+		ViewerCanReopen:    content.ViewerCanReopen,
+		Kind:               content.Kind,
+		ID:                 content.ID,
+		Number:             content.Number,
+		Title:              content.Title,
+		URL:                content.URL,
+		State:              content.State,
+		IsDraft:            content.IsDraft,
+		Merged:             content.Merged,
 	}
 	if content.Repository != nil {
 		projected.Repository = content.Repository.Name
@@ -474,6 +495,7 @@ func (value rawFieldValue) project() FieldValue {
 			FieldID:   value.Field.ID,
 			FieldName: value.Field.Name,
 			OptionID:  value.IssueFieldValue.OptionID,
+			Options:   append([]FieldOption(nil), value.IssueFieldValue.Options...),
 			Value:     issueFieldValueValue(*value.IssueFieldValue),
 			Available: value.IssueFieldValue.hasValue(),
 		}
@@ -483,6 +505,7 @@ func (value rawFieldValue) project() FieldValue {
 		FieldID:     value.Field.ID,
 		FieldName:   value.Field.Name,
 		OptionID:    value.OptionID,
+		Options:     append([]FieldOption(nil), value.Options...),
 		IterationID: value.IterationID,
 	}
 	switch value.Kind {

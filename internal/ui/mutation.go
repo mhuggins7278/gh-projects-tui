@@ -2,7 +2,10 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,9 +24,13 @@ type boardMutationKind uint8
 const (
 	boardMutationMoveLane boardMutationKind = iota
 	boardMutationReorder
+	boardMutationSetField
 )
 
 type boardMutationIntent struct {
+	field       github.Field
+	value       github.FieldValueInput
+	clear       bool
 	kind        boardMutationKind
 	itemID      string
 	direction   int
@@ -37,6 +44,7 @@ type boardMutationPlan struct {
 	intent        boardMutationIntent
 	projectID     string
 	beforeItems   []github.Item
+	issueID       string
 	field         github.Field
 	fieldValue    github.FieldValueInput
 	hasField      bool
@@ -66,6 +74,7 @@ type boardMutationSession struct {
 	readbackCount  int
 	notice         string
 	lastSuccess    string
+	fieldEdited    bool
 }
 
 type filteredMoveFocus struct {
@@ -130,6 +139,17 @@ func (m *Model) enqueueBoardMutation(intent boardMutationIntent) tea.Cmd {
 	}
 
 	session := m.mutationSession
+	// Expanded children can be active project items outside saved membership.
+	// Retain their content for issue-field routing; the authoritative pre-read
+	// still determines whether the item exists before submission.
+	if intent.kind == boardMutationSetField {
+		session.fieldEdited = true
+	}
+	if intent.kind == boardMutationSetField && projectItemIndex(session.canonicalItems, intent.itemID) < 0 {
+		if item, ok := m.selectedItem(); ok && item.ID == intent.itemID && !item.OutsideProject {
+			session.canonicalItems = append(session.canonicalItems, cloneItems([]github.Item{item})[0])
+		}
+	}
 	if strings.TrimSpace(session.view.Filter) != "" {
 		session.filteredFocus = filteredMoveFocusFor(m, intent.itemID)
 	}
@@ -227,6 +247,12 @@ func (m *Model) startMutationReadback() tea.Cmd {
 	ctx := context.Background()
 	baseline := cloneItems(session.canonicalItems)
 	fields := append(append([]github.Field(nil), session.view.GroupByFields...), session.view.VerticalGroupBy...)
+	for _, intent := range session.intents {
+		if intent.kind == boardMutationSetField {
+			fields = append(fields, intent.field)
+		}
+	}
+
 	var verifyField *github.Field
 	var verifyItem string
 	if session.attempt != nil && session.plan != nil && session.plan.hasField && !session.plan.hasPosition {
@@ -495,7 +521,7 @@ func (m *Model) dispatchNextMutation() tea.Cmd {
 
 func mutationCompletionStatus(session *boardMutationSession) string {
 	status := session.lastSuccess
-	if status != "" && strings.TrimSpace(session.view.Filter) != "" {
+	if status != "" && !session.fieldEdited && strings.TrimSpace(session.view.Filter) != "" {
 		status += "; project position is shared across views, so this move can change the card's relationship to hidden items and other views"
 	}
 	return status
@@ -503,8 +529,9 @@ func mutationCompletionStatus(session *boardMutationSession) string {
 
 func (m *Model) applyMutationPlanCmd(sessionID, writeID uint64, plan boardMutationPlan) tea.Cmd {
 	source := m.source
-	ctx := context.Background()
 	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
+		defer cancel()
 		mutator, ok := source.(ItemMutationSource)
 		if !ok {
 			return boardMutationMsg{sessionID: sessionID, writeID: writeID, result: mutationAttemptResult{err: fmt.Errorf("mutations are unavailable for this client")}}
@@ -512,9 +539,9 @@ func (m *Model) applyMutationPlanCmd(sessionID, writeID uint64, plan boardMutati
 		result := mutationAttemptResult{}
 		if plan.hasField {
 			if plan.clearField {
-				result.err = mutator.ClearItemFieldValue(ctx, github.ItemFieldValueClear{ProjectID: plan.projectID, ItemID: plan.intent.itemID, FieldID: plan.field.ID})
+				result.err = mutator.ClearItemFieldValue(ctx, github.ItemFieldValueClear{ProjectID: plan.projectID, ItemID: plan.intent.itemID, FieldID: plan.field.ID, IssueID: plan.issueID, IssueFieldID: plan.field.IssueFieldID})
 			} else {
-				result.err = mutator.UpdateItemFieldValue(ctx, github.ItemFieldValueUpdate{ProjectID: plan.projectID, ItemID: plan.intent.itemID, FieldID: plan.field.ID, Value: plan.fieldValue})
+				result.err = mutator.UpdateItemFieldValue(ctx, github.ItemFieldValueUpdate{ProjectID: plan.projectID, ItemID: plan.intent.itemID, FieldID: plan.field.ID, Value: plan.fieldValue, IssueID: plan.issueID, IssueFieldID: plan.field.IssueFieldID})
 			}
 			if result.err != nil {
 				result.ambiguous = github.IsAmbiguousMutationError(result.err)
@@ -565,7 +592,7 @@ func (m *Model) showReconciledItems(session *boardMutationSession) tea.Cmd {
 	if !sameMutationViewByModel(session, m) || session.generation != m.generation {
 		return m.startItemsLoadWithSpinner()
 	}
-	if m.view != nil && strings.TrimSpace(m.view.Filter) != "" {
+	if m.view != nil && (strings.TrimSpace(m.view.Filter) != "" || (session.lastSuccess != "" && session.fieldEdited && session.view.Layout == github.TableLayout)) {
 		if session.lastSuccess != "" && !m.isTable() {
 			m.pendingFilteredMove = &session.filteredFocus
 		}
@@ -640,6 +667,22 @@ func resolveBoardMutationPlan(view github.View, items []github.Item, intent boar
 	if itemIndex < 0 {
 		return boardMutationPlan{}, fmt.Errorf("card %q is no longer in the project", intent.itemID)
 	}
+	if items[itemIndex].Content != nil && items[itemIndex].Content.Kind == "Issue" {
+		plan.issueID = items[itemIndex].Content.ID
+	}
+	if intent.kind == boardMutationSetField {
+		if !view.ViewerCanUpdate || intent.field.ID == "" || !editableTableField(intent.field) {
+			return boardMutationPlan{}, fmt.Errorf("field is not writable")
+		}
+		if intent.field.IsIssueField && (intent.field.IssueFieldID == "" || plan.issueID == "" || (items[itemIndex].Content.ViewerCanSetFields != nil && !*items[itemIndex].Content.ViewerCanSetFields)) {
+			return boardMutationPlan{}, fmt.Errorf("issue field requires an accessible issue and field identity")
+		}
+		plan.field, plan.fieldValue, plan.clearField, plan.hasField = intent.field, intent.value, intent.clear, true
+		satisfied, known := mutationFieldSatisfied(plan, items[itemIndex])
+		plan.noOp = known && satisfied
+		return plan, nil
+	}
+
 	visible := map[string]bool(nil)
 	if len(visibleIDs) > 0 {
 		visible = visibleIDs[0]
@@ -661,7 +704,7 @@ func resolveBoardMutationPlan(view github.View, items []github.Item, intent boar
 	switch intent.kind {
 	case boardMutationMoveLane:
 		field, grouped := mutationGroupingField(&view)
-		if !grouped {
+		if !grouped || !writableMutationGroupingField(field) {
 			return boardMutationPlan{}, fmt.Errorf("the saved grouping is no longer writable")
 		}
 		currentLane := -1
@@ -702,6 +745,9 @@ func resolveBoardMutationPlan(view github.View, items []github.Item, intent boar
 		if err != nil {
 			return boardMutationPlan{}, err
 		}
+		if field.IsIssueField && (field.IssueFieldID == "" || plan.issueID == "") {
+			return boardMutationPlan{}, fmt.Errorf("issue field requires an accessible issue")
+		}
 		plan.field = field
 		plan.fieldValue = value
 		plan.hasField = currentKey != destinationColumnKey
@@ -723,6 +769,11 @@ func resolveBoardMutationPlan(view github.View, items []github.Item, intent boar
 		plan.noOp = !plan.hasField && !plan.hasPosition
 		return plan, nil
 	case boardMutationReorder:
+		for _, field := range append(append([]github.Field(nil), view.GroupByFields...), view.VerticalGroupBy...) {
+			if isMultiSelectField(field) {
+				return boardMutationPlan{}, fmt.Errorf("multi-select groups cannot be manually reordered")
+			}
+		}
 		if !positionOnly(&view) {
 			return boardMutationPlan{}, fmt.Errorf("manual reorder is not available for this saved view")
 		}
@@ -910,8 +961,14 @@ func mutationFieldState(field github.Field, item github.Item) (string, bool) {
 	if found && !value.Available {
 		return "", false
 	}
-	key, _ := itemGroupKey(field, item)
-	return key, true
+	if !found {
+		return "<unset>", true
+	}
+	encoded, _ := json.Marshal(struct {
+		Value, Option, Iteration string
+		Options                  []string
+	}{value.Value, value.OptionID, value.IterationID, optionIDs(value.Options)})
+	return string(encoded), true
 }
 
 func mutationPlanObservation(plan boardMutationPlan, items []github.Item) (string, bool) {
@@ -949,8 +1006,7 @@ func mutationFieldSatisfied(plan boardMutationPlan, item github.Item) (bool, boo
 		return false, false
 	}
 	if plan.clearField {
-		key, _ := itemGroupKey(plan.field, item)
-		return key == "no-value", true
+		return !found || (value.Value == "" && value.OptionID == "" && value.IterationID == "" && len(value.Options) == 0), true
 	}
 	if !found {
 		return false, true
@@ -960,6 +1016,27 @@ func mutationFieldSatisfied(plan boardMutationPlan, item github.Item) (bool, boo
 	}
 	if plan.fieldValue.IterationID != nil {
 		return value.IterationID == *plan.fieldValue.IterationID, true
+	}
+	if plan.fieldValue.Text != nil {
+		return value.Value == *plan.fieldValue.Text, true
+	}
+	if plan.fieldValue.Date != nil {
+		return value.Value == *plan.fieldValue.Date, true
+	}
+	if plan.fieldValue.Number != nil {
+		number, err := strconv.ParseFloat(value.Value, 64)
+		return err == nil && number == *plan.fieldValue.Number, err == nil
+	}
+	if plan.fieldValue.MultiSelectOptionIDs != nil {
+		actual := map[string]bool{}
+		for _, option := range value.Options {
+			actual[option.ID] = true
+		}
+		expected := map[string]bool{}
+		for _, id := range plan.fieldValue.MultiSelectOptionIDs {
+			expected[id] = true
+		}
+		return reflect.DeepEqual(actual, expected), true
 	}
 	return false, false
 }
@@ -985,6 +1062,9 @@ func cloneItems(items []github.Item) []github.Item {
 	cloned := append([]github.Item(nil), items...)
 	for index := range cloned {
 		cloned[index].FieldValues = append([]github.FieldValue(nil), items[index].FieldValues...)
+		for f := range cloned[index].FieldValues {
+			cloned[index].FieldValues[f].Options = append([]github.FieldOption(nil), items[index].FieldValues[f].Options...)
+		}
 	}
 	return cloned
 }

@@ -9,9 +9,12 @@ import (
 func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	// Text payloads belong to the focused editor before printable shortcuts.
-	if (m.filtering || m.commentEditing) && msg.Text != "" && key != "ctrl+c" {
+	if (m.filtering || m.commentEditing || (m.tableEditor != nil && m.tableEditor.acceptsText())) && msg.Text != "" && key != "ctrl+c" {
 		m.appendInputText(msg.Text)
 		return m, nil
+	}
+	if m.tableEditor != nil && key != "ctrl+c" {
+		return m.updateTableEditorKey(key)
 	}
 	// Global keys.
 	switch key {
@@ -124,6 +127,12 @@ var singleLineInput = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 
 // appendInputText consumes text and paste payloads before printable shortcuts.
 func (m *Model) appendInputText(text string) {
+	if m.tableEditor != nil {
+		if m.tableEditor.acceptsText() {
+			m.tableEditor.draft += singleLineInput.Replace(text)
+		}
+		return
+	}
 	if m.commentEditing && !m.mutationLoading {
 		m.commentDraft += text
 		return

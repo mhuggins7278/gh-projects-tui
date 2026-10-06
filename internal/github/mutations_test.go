@@ -256,3 +256,53 @@ func TestMutationErrorClassifiesTransportAndServerOutcomes(t *testing.T) {
 func stringPtr(value string) *string {
 	return &value
 }
+
+func TestIssueBackedFieldsUseIssueMutationAndIdentities(t *testing.T) {
+	text, date, option := "note", "2026-10-05", "option"
+	number := 1.25
+	for _, tc := range []struct {
+		name, key string
+		value     FieldValueInput
+		want      interface{}
+		clear     bool
+	}{
+		{name: "text", key: "textValue", value: FieldValueInput{Text: &text}, want: text},
+		{name: "number", key: "numberValue", value: FieldValueInput{Number: &number}, want: number},
+		{name: "date", key: "dateValue", value: FieldValueInput{Date: &date}, want: date},
+		{name: "single", key: "singleSelectOptionId", value: FieldValueInput{SingleSelectOptionID: &option}, want: option},
+		{name: "multi", key: "multiSelectOptionIds", value: FieldValueInput{MultiSelectOptionIDs: []string{"a", "b"}}, want: []string{"a", "b"}},
+		{name: "clear", key: "delete", want: true, clear: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{func(query string, vars map[string]interface{}, response interface{}) error {
+				if !strings.Contains(query, "setIssueFieldValue") || strings.Contains(query, "updateProjectV2ItemFieldValue") {
+					t.Fatal(query)
+				}
+				want := map[string]interface{}{"issueId": "issue", "issueFields": []interface{}{map[string]interface{}{"fieldId": "issue-field", tc.key: tc.want}}}
+				if !reflect.DeepEqual(vars["input"], want) {
+					t.Fatalf("input=%#v", vars["input"])
+				}
+				return json.Unmarshal([]byte(`{"setIssueFieldValue":{"issue":{"id":"issue"}}}`), response)
+			}}}
+			c := newClient(api, &fakeREST{})
+			var err error
+			if tc.clear {
+				err = c.ClearItemFieldValue(context.Background(), ItemFieldValueClear{IssueID: "issue", IssueFieldID: "issue-field"})
+			} else {
+				err = c.UpdateItemFieldValue(context.Background(), ItemFieldValueUpdate{IssueID: "issue", IssueFieldID: "issue-field", Value: tc.value})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	for _, payload := range []string{`{}`, `{"setIssueFieldValue":{"issue":{"id":"other"}}}`} {
+		api := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{func(_ string, _ map[string]interface{}, r interface{}) error {
+			return json.Unmarshal([]byte(payload), r)
+		}}}
+		err := newClient(api, &fakeREST{}).ClearItemFieldValue(context.Background(), ItemFieldValueClear{IssueID: "issue", IssueFieldID: "field"})
+		if err == nil || !IsAmbiguousMutationError(err) {
+			t.Fatalf("wrong confirmation: %v", err)
+		}
+	}
+}
