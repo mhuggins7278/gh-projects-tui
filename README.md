@@ -178,7 +178,9 @@ the saved state. Use `r` to pick up external changes.
 | `q` or `ctrl+c` | Quit |
 
 In item details, `j/k` scrolls, `f` toggles all fields (including unset/unavailable
-values), and `esc` closes the panel. For GitHub issues on boards and tables, `c` opens a comment
+values), and `esc` closes the panel. For GitHub issues on writable boards and tables,
+`e` edits an available project field, including fields outside the saved columns.
+`c` opens a comment
 composer (`enter` submits, `esc` cancels), and `x` prompts to close or reopen the
 issue (`enter` confirms, `esc` cancels). Pull requests and draft issues do not
 offer these issue actions.

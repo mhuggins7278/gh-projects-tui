@@ -28,13 +28,14 @@ const (
 )
 
 type boardMutationIntent struct {
-	field       github.Field
-	value       github.FieldValueInput
-	clear       bool
-	kind        boardMutationKind
-	itemID      string
-	direction   int
-	description string
+	field           github.Field
+	value           github.FieldValueInput
+	clear           bool
+	forceFieldWrite bool
+	kind            boardMutationKind
+	itemID          string
+	direction       int
+	description     string
 	// Final column requested by a burst of unsent lane moves. Row identity is
 	// still resolved from current canonical state at dispatch.
 	destination string
@@ -388,6 +389,7 @@ func (m *Model) updateBoardMutation(msg boardMutationMsg) (tea.Model, tea.Cmd) {
 		session.plan = nil
 		session.attempt = nil
 		refresh := m.showReconciledItems(session)
+		detailRefresh := m.refreshMutationDetail(session, intent.itemID)
 		status := session.notice
 		if status == "" {
 			status = mutationCompletionStatus(session)
@@ -397,7 +399,7 @@ func (m *Model) updateBoardMutation(msg boardMutationMsg) (tea.Model, tea.Cmd) {
 		if status != "" && sameMutationProjectByModel(session, m) {
 			m.status = status
 		}
-		return *m, refresh
+		return *m, tea.Batch(refresh, detailRefresh)
 	}
 	session.attempt = &result
 	return *m, m.startMutationReadback()
@@ -433,7 +435,8 @@ func (m *Model) updateMutationReadback(msg mutationReadbackMsg) (tea.Model, tea.
 		session.intents = session.intents[1:]
 		session.plan = nil
 		session.attempt = nil
-		return *m, m.dispatchNextMutation()
+		detailRefresh := m.refreshMutationDetail(session, intent.itemID)
+		return *m, tea.Batch(m.dispatchNextMutation(), detailRefresh)
 	}
 	if attempt.err != nil && attempt.ambiguous && verification.known && (verification.unchanged || verification.stablePartial) {
 		observation, known := mutationPlanObservation(*session.plan, session.canonicalItems)
@@ -470,6 +473,16 @@ func (m *Model) updateMutationReadback(msg mutationReadbackMsg) (tea.Model, tea.
 	session.plan = nil
 	session.attempt = nil
 	return *m, m.dispatchNextMutation()
+}
+
+func (m *Model) refreshMutationDetail(session *boardMutationSession, itemID string) tea.Cmd {
+	if !m.detailVisible || m.detailItemID != itemID || !sameMutationViewByModel(session, m) || session.generation != m.generation {
+		return nil
+	}
+	m.detailLoading = true
+	m.detailErr = nil
+	m.detailRequestID++
+	return m.loadItemDetailCmd(itemID, m.detailRequestID, m.currentBoardReadScope())
 }
 
 func (m *Model) dispatchNextMutation() tea.Cmd {
@@ -679,7 +692,7 @@ func resolveBoardMutationPlan(view github.View, items []github.Item, intent boar
 		}
 		plan.field, plan.fieldValue, plan.clearField, plan.hasField = intent.field, intent.value, intent.clear, true
 		satisfied, known := mutationFieldSatisfied(plan, items[itemIndex])
-		plan.noOp = known && satisfied
+		plan.noOp = !intent.forceFieldWrite && known && satisfied
 		return plan, nil
 	}
 

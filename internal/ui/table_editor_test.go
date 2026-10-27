@@ -298,3 +298,116 @@ func TestFieldEditRemovedItemAndStaleScopeCannotSubmit(t *testing.T) {
 		t.Fatal("stale editor wrote to a changed view")
 	}
 }
+
+func TestDetailFieldEditorUsesAllProjectFieldsAndDetailValue(t *testing.T) {
+	field := github.Field{ID: "hidden", Name: "Hidden field", DataType: "TEXT"}
+	m, _ := editorModel(field)
+	m.view.Fields = nil
+	m.detailVisible = true
+	m.detailItemID = "one"
+	m.detail = &github.ItemDetail{Content: m.items[0].Content, Fields: []github.DetailField{{Field: field, Value: &github.FieldValue{FieldID: field.ID, Value: "current detail", Available: true}}}}
+	m, _ = editorKey(m, "e")
+	if m.tableEditor == nil || !m.tableEditor.detail || len(m.tableEditor.fields) != 1 {
+		t.Fatalf("detail field editor not opened: %#v", m.tableEditor)
+	}
+	m, _ = editorKey(m, "enter")
+	if m.tableEditor.draft != "current detail" {
+		t.Fatalf("got draft %q", m.tableEditor.draft)
+	}
+	m, _ = editorKey(m, "esc")
+	m.detail.Fields[0].Value.Available = false
+	m, _ = editorKey(m, "e")
+	if m.tableEditor != nil {
+		t.Fatal("unavailable field must not be editable")
+	}
+}
+
+func TestDetailFieldEditorRespectsProjectAndIssuePermissions(t *testing.T) {
+	field := github.Field{ID: "f", Name: "Field", DataType: "TEXT", IsIssueField: true, IssueFieldID: "issue-field"}
+	m, _ := editorModel(field)
+	m.detailVisible, m.detailItemID = true, "one"
+	m.detail = &github.ItemDetail{Content: m.items[0].Content, Fields: []github.DetailField{{Field: field}}}
+	denied := false
+	m.detail.Content.ViewerCanSetFields = &denied
+	m, _ = editorKey(m, "e")
+	if m.tableEditor != nil {
+		t.Fatal("issue field permission was ignored")
+	}
+	m.detail.Content.ViewerCanSetFields = nil
+	m.view.ViewerCanUpdate = false
+	m, _ = editorKey(m, "e")
+	if m.tableEditor != nil {
+		t.Fatal("read-only project was ignored")
+	}
+}
+
+type refreshedDetailSource struct {
+	*fieldEditorSource
+	detail github.ItemDetail
+	err    error
+}
+
+func (s *refreshedDetailSource) LoadItemDetail(context.Context, github.Owner, int, string) (github.ItemDetail, error) {
+	return s.detail, s.err
+}
+
+func TestDetailFieldRefreshAfterSaveAndReconciliation(t *testing.T) {
+	for _, reconciled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "reconciled"}[reconciled], func(t *testing.T) {
+			field := github.Field{ID: "f", Name: "Notes", DataType: "TEXT"}
+			m, base := editorModel(field)
+			m.view.Layout = github.BoardLayout
+			m.view.GroupByFields = writableStatusView().GroupByFields
+			newValue := "new"
+			updatedItem := cloneItems(m.items)[0]
+			updatedItem.FieldValues[0].Value = newValue
+			source := &refreshedDetailSource{fieldEditorSource: base, detail: github.ItemDetail{ID: "one", Content: updatedItem.Content, Fields: []github.DetailField{{Field: field, Value: &updatedItem.FieldValues[0]}}}}
+			m.source = source
+			m.detailVisible, m.detailItemID = true, "one"
+			m.detail = &github.ItemDetail{ID: "one", Content: m.items[0].Content, Fields: []github.DetailField{{Field: field, Value: &m.items[0].FieldValues[0]}}}
+			intent := boardMutationIntent{kind: boardMutationSetField, itemID: "one", field: field, value: github.FieldValueInput{Text: &newValue}, description: "Edit Notes"}
+			plan := boardMutationPlan{intent: intent, projectID: m.view.ProjectID, field: field, fieldValue: intent.value, hasField: true, beforeItems: cloneItems(m.items)}
+			m.mutationSession = &boardMutationSession{id: 1, writeID: 1, readID: 1, generation: m.generation, owner: *m.selectedOwner, projectNumber: m.selectedProject.Number, projectID: m.view.ProjectID, view: *m.view, intents: []boardMutationIntent{intent}, plan: &plan, fieldEdited: true}
+			var cmd tea.Cmd
+			if reconciled {
+				m.mutationSession.attempt = &mutationAttemptResult{err: errors.New("timeout"), ambiguous: true}
+				updated, next := m.updateMutationReadback(mutationReadbackMsg{sessionID: 1, readID: 1, items: []github.Item{updatedItem}})
+				m, cmd = updated.(Model), next
+			} else {
+				updated, next := m.updateBoardMutation(boardMutationMsg{sessionID: 1, writeID: 1})
+				m, cmd = updated.(Model), next
+			}
+			if !m.detailLoading || cmd == nil {
+				t.Fatal("save did not start a detail refresh")
+			}
+			// A table refresh also blocks edits; isolate the detail loading guard.
+			m.itemsLoading = false
+			m, _ = editorKey(m, "e")
+			if m.tableEditor != nil {
+				t.Fatal("stale detail was editable during refresh")
+			}
+			m = runMembershipReads(t, m, cmd)
+			if m.detailLoading || m.detailErr != nil || m.detail.Fields[0].Value.Value != newValue {
+				t.Fatalf("detail not refreshed: loading=%v err=%v detail=%#v", m.detailLoading, m.detailErr, m.detail)
+			}
+			m.itemsLoading = false
+			m, _ = editorKey(m, "e")
+			m, _ = editorKey(m, "enter")
+			if m.tableEditor == nil || m.tableEditor.draft != newValue {
+				t.Fatal("editor did not use refreshed value")
+			}
+		})
+	}
+}
+
+func TestDetailFieldEditBlockedWhenRefreshFails(t *testing.T) {
+	field := github.Field{ID: "f", Name: "Notes", DataType: "TEXT"}
+	m, _ := editorModel(field)
+	m.detailVisible, m.detailItemID = true, "one"
+	m.detail = &github.ItemDetail{Content: m.items[0].Content, Fields: []github.DetailField{{Field: field}}}
+	m.detailErr = errors.New("refresh failed")
+	m, _ = editorKey(m, "e")
+	if m.tableEditor != nil {
+		t.Fatal("stale detail was editable after failed refresh")
+	}
+}

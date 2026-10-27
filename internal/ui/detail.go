@@ -60,6 +60,9 @@ func (m Model) renderDetailPanel() string {
 	if m.detail == nil {
 		return frame.Render(mutedStyle.Render("No item selected."))
 	}
+	if m.tableEditor != nil && m.tableEditor.detail {
+		return frame.Render(m.renderTableEditor())
+	}
 	if m.commentEditing {
 		target := "issue"
 		if m.detail.Content.Number > 0 {

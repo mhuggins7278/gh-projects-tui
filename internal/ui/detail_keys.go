@@ -30,6 +30,9 @@ func (m Model) updateDetailKey(key string) (tea.Model, tea.Cmd) {
 		return m, m.finishIssueViewReload()
 	case "o":
 		return m, m.openBrowserCmd()
+	case "e":
+		m.beginDetailFieldEdit()
+		return m, nil
 	case "c":
 		if m.tableAction != nil || m.mutationSession != nil || m.issueActionPending != nil {
 			m.status = "Finish or reconcile the pending project change before another issue write"

@@ -1495,7 +1495,7 @@ func (m Model) footerHints() string {
 		}
 		return "saving issue action... · q quit" + m.debugHint()
 	}
-	if m.isTable() && m.tableEditor != nil {
+	if m.tableEditor != nil {
 		return "j/k choose · space toggle multi-select · ctrl+u clear text · enter save · esc cancel" + m.debugHint()
 	}
 	if m.isTable() && m.tableMove != nil {
@@ -1520,7 +1520,7 @@ func (m Model) footerHints() string {
 		}
 		hints := "j/k scroll · f fields · o browser · esc close · q quit"
 		if !m.isTimeline() && m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
-			hints = "j/k scroll · f fields · c comment · x close/reopen · o browser · esc close · q quit"
+			hints = "j/k scroll · f fields · e edit fields · c comment · x close/reopen · o browser · esc close · q quit"
 		}
 		return hints + m.debugHint()
 	}
@@ -1817,6 +1817,9 @@ func resolveSelection(source DiscoverySource, ctx context.Context, selection Sel
 }
 
 func (m *Model) clearDetail() {
+	if m.tableEditor != nil && m.tableEditor.detail {
+		m.tableEditor = nil
+	}
 	m.detailVisible = false
 	m.detailLoading = false
 	m.detail = nil
