@@ -63,6 +63,9 @@ func (m Model) renderDetailPanel() string {
 	if m.tableEditor != nil && m.tableEditor.detail {
 		return frame.Render(m.renderTableEditor())
 	}
+	if m.issueMetadataEditor != nil {
+		return frame.Render(m.renderIssueMetadataEditor())
+	}
 	if m.commentEditing {
 		target := "issue"
 		if m.detail.Content.Number > 0 {

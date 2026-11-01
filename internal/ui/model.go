@@ -135,6 +135,7 @@ func (m *Model) abandonReads() {
 	m.refreshFocusID = ""
 	m.tableSubIssues = nil
 	m.tableEditor = nil
+	m.issueMetadataEditor = nil
 }
 
 type screen int
@@ -220,6 +221,7 @@ type Model struct {
 	issueActionClosing    bool
 	issueActionRefreshing bool
 	issueActionPending    *issueActionState
+	issueMetadataEditor   *issueMetadataEditor
 	nextIssueAction       uint64
 	mutationLoading       bool
 	mutationSession       *boardMutationSession
@@ -436,6 +438,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateIssueAction(msg)
 	case issueReadbackMsg:
 		return m.updateIssueReadback(msg)
+	case metadataLoadedMsg:
+		return m.updateMetadataLoaded(msg)
+	case metadataWriteMsg:
+		return m.updateMetadataWrite(msg)
+	case metadataReadbackMsg:
+		return m.updateMetadataReadback(msg)
 	case tableActionMsg:
 		return m.updateTableAction(msg)
 	case tableActionReadbackMsg:
@@ -698,6 +706,7 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	}
 	m.detailVisible = false
 	m.detailLoading = false
+	m.issueMetadataEditor = nil
 	m.detailItemID = ""
 	m.detail = nil
 	m.detailCache = nil
@@ -1512,6 +1521,9 @@ func (m Model) footerHints() string {
 		}
 	}
 	if m.screen == screenBoard && m.detailVisible {
+		if m.issueMetadataEditor != nil {
+			return "/ search · space toggle · enter save · esc cancel" + m.debugHint()
+		}
 		if m.commentEditing {
 			return "type comment · enter submit · esc cancel" + m.debugHint()
 		}
@@ -1520,7 +1532,7 @@ func (m Model) footerHints() string {
 		}
 		hints := "j/k scroll · f fields · o browser · esc close · q quit"
 		if !m.isTimeline() && m.detail != nil && m.detail.Content != nil && m.detail.Content.Kind == "Issue" {
-			hints = "j/k scroll · f fields · e edit fields · c comment · x close/reopen · o browser · esc close · q quit"
+			hints = "j/k scroll · f fields · e project fields · l labels · a assignees · c comment · x close/reopen · esc close"
 		}
 		return hints + m.debugHint()
 	}
@@ -1571,11 +1583,11 @@ func (m Model) layoutHelpText() string {
 			"l/right expands sub-issues; h/left collapses or selects the parent; space toggles expansion.\n" +
 			"e edits saved text/number/date/select/iteration columns; multi-select uses space to toggle values.\n" +
 			"m changes writable groups; J/K reorders position-sorted top-level rows. Multi-select group moves/reordering are read-only.\n" +
-			"In issue detail, c comments and x closes/reopens; j/k scrolls, f toggles fields, and esc returns to the table."
+			"In issue detail, e edits project fields, l edits labels, a edits assignees, c comments, and x closes/reopens."
 	}
 	return "On the board, h/l changes lanes, j/k changes cards, / searches loaded cards, and enter opens detail.\n" +
 		"H/L moves cards and J/K reorders cards when the view is writable and fully loaded.\n" +
-		"In detail, j/k scrolls, f toggles all project fields, and esc returns to the board."
+		"In issue detail, e edits project fields, l edits labels, a edits assignees, c comments, and x closes/reopens."
 }
 
 func (m Model) apiInspector() string {
@@ -1817,6 +1829,7 @@ func resolveSelection(source DiscoverySource, ctx context.Context, selection Sel
 }
 
 func (m *Model) clearDetail() {
+	m.issueMetadataEditor = nil
 	if m.tableEditor != nil && m.tableEditor.detail {
 		m.tableEditor = nil
 	}

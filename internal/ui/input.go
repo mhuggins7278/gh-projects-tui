@@ -8,6 +8,13 @@ import (
 
 func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+	if m.issueMetadataEditor != nil && key != "ctrl+c" {
+		if m.issueMetadataEditor.searching && msg.Text != "" {
+			m.appendInputText(msg.Text)
+			return m, nil
+		}
+		return m.updateMetadataEditorKey(key)
+	}
 	// Text payloads belong to the focused editor before printable shortcuts.
 	if (m.filtering || m.commentEditing || (m.tableEditor != nil && m.tableEditor.acceptsText())) && msg.Text != "" && key != "ctrl+c" {
 		m.appendInputText(msg.Text)
@@ -127,6 +134,13 @@ var singleLineInput = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 
 // appendInputText consumes text and paste payloads before printable shortcuts.
 func (m *Model) appendInputText(text string) {
+	if m.issueMetadataEditor != nil {
+		if m.issueMetadataEditor.searching {
+			m.issueMetadataEditor.filter += singleLineInput.Replace(text)
+			m.issueMetadataEditor.index = 0
+		}
+		return
+	}
 	if m.tableEditor != nil {
 		if m.tableEditor.acceptsText() {
 			m.tableEditor.draft += singleLineInput.Replace(text)

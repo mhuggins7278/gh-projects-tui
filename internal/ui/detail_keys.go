@@ -33,6 +33,10 @@ func (m Model) updateDetailKey(key string) (tea.Model, tea.Cmd) {
 	case "e":
 		m.beginDetailFieldEdit()
 		return m, nil
+	case "l":
+		return m, m.beginIssueMetadataEdit(github.IssueLabels)
+	case "a":
+		return m, m.beginIssueMetadataEdit(github.IssueAssignees)
 	case "c":
 		if m.tableAction != nil || m.mutationSession != nil || m.issueActionPending != nil {
 			m.status = "Finish or reconcile the pending project change before another issue write"

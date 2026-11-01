@@ -15,6 +15,7 @@ type issueActionState struct {
 	scope           boardReadScope
 	closed, blocked bool
 	readID          uint64
+	metadata        *metadataPending
 }
 type issueReadbackMsg struct {
 	actionID, readID uint64
@@ -34,6 +35,9 @@ func (m *Model) startIssueReadback() tea.Cmd {
 	pending := m.issueActionPending
 	if pending == nil || m.issueActionRefreshing {
 		return nil
+	}
+	if pending.metadata != nil {
+		return m.startMetadataReadback(pending)
 	}
 	pending.readID++
 	actionID, readID, issueID := pending.id, pending.readID, pending.issueID

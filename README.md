@@ -180,8 +180,11 @@ the saved state. Use `r` to pick up external changes.
 In item details, `j/k` scrolls, `f` toggles all fields (including unset/unavailable
 values), and `esc` closes the panel. For GitHub issues on writable boards and tables,
 `e` edits an available project field, including fields outside the saved columns.
-`c` opens a comment
-composer (`enter` submits, `esc` cancels), and `x` prompts to close or reopen the
+`l` edits labels and `a` edits assignees when permitted. In either picker, `j/k`
+moves, `space` toggles, `enter` saves, and `/` searches; press `enter` to finish
+searching. After a save, the app checks the issue state before allowing another
+write. If the outcome is uncertain, `r` retries the check without resubmitting.
+`c` opens a comment composer (`enter` submits, `esc` cancels), and `x` prompts to close or reopen the
 issue (`enter` confirms, `esc` cancels). Pull requests and draft issues do not
 offer these issue actions.
 
