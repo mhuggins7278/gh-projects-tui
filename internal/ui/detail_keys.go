@@ -11,9 +11,10 @@ import (
 
 func (m Model) updateDetailKey(key string) (tea.Model, tea.Cmd) {
 	if m.mutationLoading {
-		if key == "esc" && m.issueActionPending != nil && m.issueActionPending.blocked {
-			m.detailVisible, m.detailLoading = false, false
+		if key == "esc" && (m.mutationSession != nil || m.issueActionPending != nil) {
 			m.detailRequestID++
+			m.clearDetail()
+			return m, m.finishIssueViewReload()
 		}
 		return m, nil
 	}

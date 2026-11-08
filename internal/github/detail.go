@@ -12,8 +12,8 @@ fragment ItemDetailFields on ProjectV2Item {
   id
   content @include(if: $includeBody) {
     __typename
-    ... on Issue { id number title url body state viewerCanSetFields viewerCanClose viewerCanReopen }
-    ... on PullRequest { id number title url body state }
+    ... on Issue { id number title url body state repository { name nameWithOwner } viewerCanSetFields viewerCanClose viewerCanReopen }
+    ... on PullRequest { id number title url body state repository { name nameWithOwner } }
     ... on DraftIssue { id title body }
   }
   fieldValues(first: 100, after: $valuesAfter) @include(if: $includeValues) { ...DetailFieldValuesPage }

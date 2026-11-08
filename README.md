@@ -120,6 +120,77 @@ go build -o gh-projects-tui ./cmd/gh-projects-tui
 
 After pulling updates, rerun `go run` or rebuild your local binary.
 
+### Custom actions
+
+You can bind commands to issue or pull request keys in
+`~/.config/gh-projects-tui/config.yml` (the `gh-projects-tui/config.yml` file
+under your platform's user configuration directory). For example:
+
+```yaml
+actions:
+  - key: ctrl+p
+    name: Pin issue
+    on: issue
+    run: [gh, issue, pin, "{{.IssueNumber}}", --repo, "{{.RepoName}}"]
+  - key: ctrl+t
+    name: View pull request
+    on: pr
+    run: [gh, pr, view, "{{.PrNumber}}", --repo, "{{.RepoName}}"]
+```
+
+Use `--config PATH` to select a different file, and restart the app after
+editing it. The app reports invalid
+configuration, duplicate keys, and keys reserved for built-in controls at
+startup. Actions appear in `?` help and work on the selected issue or PR in a
+board, table, or detail panel. Project-only drafts have no repository issue and
+cannot run these actions. Run actions after pending reads and writes finish.
+Keys can be a letter or digit, `ctrl+` or `alt+` followed by a lowercase letter,
+or `f1` through `f12`; built-in and terminal-control keys are reserved.
+
+Each `run` entry is one executable or argument; the app expands templates in
+each argument separately and does not invoke a shell automatically. An
+executable path beginning with `~/` is expanded to your home directory.
+Available values are `RepoName` (owner/repository), `Host`, `Number`, `URL`, `Title`,
+`ContentID`, `ProjectOwner`, `ProjectNumber`, `ProjectID`, `ProjectItemID`, and
+`RepoPath`.
+Issue actions also have `IssueNumber` and `IssueTitle`; PR actions have
+`PrNumber` (or `PRNumber`). `ProjectItemID` is unavailable for nested issues
+outside the project. Commands inherit the selected GitHub host through
+`GH_HOST` and run in the app's current working directory.
+
+To pass a local checkout to an action, configure repository paths or search
+roots alongside your actions:
+
+```yaml
+repoPaths:
+  "glg/*": "~/github/glg/*"
+  "Learn-Build-Teach/*": "~/github/mhuggins7278/*"
+  "example/special": "~/Projects/special-checkout"
+repoSearchRoots:
+  - "~/Projects"
+actions:
+  - key: ctrl+w
+    name: Work on issue
+    on: issue
+    run: [/absolute/path/to/agent-fix, "{{.IssueNumber}}", "{{.RepoName}}", "{{.RepoPath}}"]
+```
+
+Exact mappings take precedence over `owner/*` mappings; `*` in the destination
+is replaced by the repository name. If no mapping applies, the app checks its
+current checkout, then the search roots themselves, their immediate children,
+and children of an owner-named directory. It verifies a Git remote matches the
+selected repository and host, resolving aliases from your local SSH configuration
+for SSH remotes. Multiple matching checkouts require an exact
+mapping. Existing mapped paths must also match; a missing mapped path is passed
+through so an action such as `agent-fix` can decide whether to clone it. The app
+does not clone repositories. Resolution runs only for actions using
+`{{.RepoPath}}`, and `esc` cancels it.
+
+Commands take over the terminal until they exit, so interactive tools work. The
+app reports the exit status and refreshes GitHub data afterward, even if the
+command fails; when details are open, the saved view refreshes after closing
+them. Command output is not retained by the app after the terminal is restored.
+
 ## Current features
 
 - Owner, project, and saved-view pickers with filtering.
@@ -180,9 +251,11 @@ the saved state. Use `r` to pick up external changes.
 In item details, `j/k` scrolls, `f` toggles all fields (including unset/unavailable
 values), and `esc` closes the panel. For GitHub issues on writable boards and tables,
 `e` edits an available project field, including fields outside the saved columns.
-`l` edits labels and `a` edits assignees when permitted. In either picker, `j/k`
-moves, `space` toggles, `enter` saves, and `/` searches; press `enter` to finish
-searching. After a save, the app checks the issue state before allowing another
+`l` edits labels and `a` edits assignees when permitted. The assignee picker
+searches GitHub as you type, while the label picker searches loaded labels.
+In either picker, `j/k` moves, `space` toggles, `enter` saves, and `/` searches;
+press `enter` to finish searching. Assignee results load more when you move past
+the last result. After a save, the app checks the issue state before allowing another
 write. If the outcome is uncertain, `r` retries the check without resubmitting.
 `c` opens a comment composer (`enter` submits, `esc` cancels), and `x` prompts to close or reopen the
 issue (`enter` confirms, `esc` cancels). Pull requests and draft issues do not

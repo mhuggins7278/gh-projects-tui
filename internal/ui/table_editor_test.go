@@ -347,6 +347,11 @@ type refreshedDetailSource struct {
 	err    error
 }
 
+type detailFieldActionSource struct{ *refreshedDetailSource }
+
+func (*detailFieldActionSource) IssueComment(context.Context, string, string) error { return nil }
+func (*detailFieldActionSource) SetIssueClosed(context.Context, string, bool) error { return nil }
+
 func (s *refreshedDetailSource) LoadItemDetail(context.Context, github.Owner, int, string) (github.ItemDetail, error) {
 	return s.detail, s.err
 }
@@ -409,5 +414,121 @@ func TestDetailFieldEditBlockedWhenRefreshFails(t *testing.T) {
 	m, _ = editorKey(m, "e")
 	if m.tableEditor != nil {
 		t.Fatal("stale detail was editable after failed refresh")
+	}
+}
+
+// Field edits must keep the issue detail in control until the user dismisses it,
+// even when the saved view needs a fresh membership read after the write.
+func TestDetailFieldSaveKeepsPanelAndFocusUntilDismissed(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		layout    github.ViewLayout
+		filter    string
+		ambiguous bool
+	}{
+		{"table", github.TableLayout, "", false},
+		{"filtered board", github.BoardLayout, "is:open", false},
+		{"board", github.BoardLayout, "", false},
+		{"table reconciled", github.TableLayout, "", true},
+		{"filtered board reconciled", github.BoardLayout, "is:open", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			field := github.Field{ID: "notes", Name: "Notes", DataType: "TEXT"}
+			m, base := editorModel(field)
+			if tc.ambiguous {
+				base.err = &github.MutationError{Err: errors.New("timeout"), Ambiguous: true}
+				base.apply = true
+			}
+			m.view.Layout, m.view.Filter = tc.layout, tc.filter
+			if tc.layout == github.BoardLayout {
+				m.view.GroupByFields = writableStatusView().GroupByFields
+			}
+			newFieldValue := github.FieldValue{FieldID: field.ID, Value: "new", Available: true}
+			source := &detailFieldActionSource{&refreshedDetailSource{fieldEditorSource: base, detail: github.ItemDetail{ID: "one", Content: m.items[0].Content, Fields: []github.DetailField{{Field: field, Value: &newFieldValue}}}}}
+			m.source = source
+			m.detailVisible, m.detailItemID = true, "one"
+			m.detail = &github.ItemDetail{ID: "one", Content: m.items[0].Content, Fields: []github.DetailField{{Field: field, Value: &m.items[0].FieldValues[0]}}}
+			m, _ = editorKey(m, "e")
+			m, _ = editorKey(m, "enter")
+			m, _ = editorKey(m, "ctrl+u")
+			m, _ = editorKey(m, "n")
+			m, _ = editorKey(m, "e")
+			m, _ = editorKey(m, "w")
+			m, cmd := editorKey(m, "enter")
+			m = runMembershipReads(t, m, cmd)
+			if !m.detailVisible || m.detail == nil || m.detailItemID != "one" || m.detailLoading || m.detail.Fields[0].Value.Value != "new" {
+				t.Fatalf("detail lost or stale: visible=%v loading=%v item=%q status=%s", m.detailVisible, m.detailLoading, m.detailItemID, m.status)
+			}
+			if m.mutationSession != nil || m.mutationLoading {
+				t.Fatal("save remained locked after completion")
+			}
+			m, _ = editorKey(m, "x")
+			if !m.issueActionConfirm {
+				t.Fatal("issue close action lost focus after saving a field")
+			}
+			m, _ = editorKey(m, "esc") // Cancel the close confirmation.
+			m, closeCmd := editorKey(m, "esc")
+			if m.detailVisible {
+				t.Fatal("Escape did not close detail")
+			}
+			if tc.layout == github.TableLayout || tc.filter != "" {
+				if closeCmd == nil {
+					t.Fatal("membership refresh was not deferred until close")
+				}
+				m = runMembershipReads(t, m, closeCmd)
+				if selected, ok := m.selectedItem(); !ok || selected.ID != "one" {
+					t.Fatalf("selection lost after reload: %#v", selected)
+				}
+			}
+		})
+	}
+}
+
+func TestDetailCanCloseWhileFieldSaveIsPending(t *testing.T) {
+	field := github.Field{ID: "notes", Name: "Notes", DataType: "TEXT"}
+	m, _ := editorModel(field)
+	m.detailVisible, m.detailItemID = true, "one"
+	m.detail = &github.ItemDetail{ID: "one", Content: m.items[0].Content}
+	m.mutationLoading = true
+	m.mutationSession = &boardMutationSession{}
+	m, _ = editorKey(m, "esc")
+	if m.detailVisible || m.mutationSession == nil {
+		t.Fatal("Escape must dismiss detail without cancelling the save")
+	}
+}
+
+func TestClosingDetailDuringSaveRetainsBoardSelectionAfterRefresh(t *testing.T) {
+	field := github.Field{ID: "notes", Name: "Notes", DataType: "TEXT"}
+	m, base := editorModel(field)
+	m.view.Layout, m.view.Filter = github.BoardLayout, "is:open"
+	m.view.GroupByFields = writableStatusView().GroupByFields
+	other := github.Item{ID: "other", Content: &github.Content{ID: "other-issue", Kind: "Issue", State: "OPEN"}}
+	m.items = append([]github.Item{other}, m.items...)
+	base.canonical = cloneItems(m.items)
+	m.boardFocusID, m.boardCard = "one", 1
+	m.detailVisible, m.detailItemID = true, "one"
+	m.detail = &github.ItemDetail{ID: "one", Content: m.items[1].Content, Fields: []github.DetailField{{Field: field, Value: &m.items[1].FieldValues[0]}}}
+	m.source = &refreshedDetailSource{fieldEditorSource: base}
+	m, _ = editorKey(m, "e")
+	m, _ = editorKey(m, "enter")
+	m, _ = editorKey(m, "ctrl+u")
+	m, _ = editorKey(m, "n")
+	m, settle := editorKey(m, "enter")
+	if settle == nil {
+		t.Fatal("save was not queued")
+	}
+	updated, read := m.Update(settle())
+	m = updated.(Model)
+	if !m.mutationLoading {
+		t.Fatal("save did not start")
+	}
+	m, _ = editorKey(m, "esc")
+	if m.detailVisible {
+		t.Fatal("could not close detail during save")
+	}
+	m = runMembershipReads(t, m, read)
+	item, ok := m.selectedItem()
+	if !ok || item.ID != "one" || m.mutationSession != nil || len(base.writes) != 1 {
+		t.Fatalf("lost focus or save: selected=%#v writes=%d status=%s", item, len(base.writes), m.status)
 	}
 }

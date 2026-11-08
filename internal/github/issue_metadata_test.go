@@ -75,3 +75,29 @@ func TestIssueMetadataMutationTargetsOnlyRequestedIDs(t *testing.T) {
 		t.Fatalf("timeout not ambiguous: %v", err)
 	}
 }
+
+func TestSearchIssueAssigneesUsesServerQueryAndReturnsOnePage(t *testing.T) {
+	g := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+		func(query string, variables map[string]interface{}, response interface{}) error {
+			if !strings.Contains(query, "assignableUsers(first: 30, query: $query, after: $after)") || variables["id"] != "issue" || variables["query"] != "Ada" || variables["after"] != nil {
+				t.Fatalf("query=%s vars=%#v", query, variables)
+			}
+			return json.Unmarshal([]byte(`{"node":{"id":"issue","viewerCanAssign":true,"repository":{"assignableUsers":{"nodes":[{"id":"u","name":"adalovelace"}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}`), response)
+		},
+		func(_ string, variables map[string]interface{}, response interface{}) error {
+			if variables["after"] != "next" || variables["query"] != "Ada" {
+				t.Fatalf("vars=%#v", variables)
+			}
+			return json.Unmarshal([]byte(`{"node":{"id":"issue","viewerCanAssign":true,"repository":{"assignableUsers":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}`), response)
+		},
+	}}
+	client := newClient(g, &fakeREST{})
+	page, err := client.SearchIssueAssignees(context.Background(), "issue", "Ada", "")
+	if err != nil || !page.CanEdit || !page.HasNext || page.EndCursor != "next" || len(page.Options) != 1 {
+		t.Fatalf("page=%#v err=%v", page, err)
+	}
+	page, err = client.SearchIssueAssignees(context.Background(), "issue", "Ada", page.EndCursor)
+	if err != nil || page.HasNext || len(g.queries) != 2 {
+		t.Fatalf("page=%#v err=%v queries=%d", page, err, len(g.queries))
+	}
+}

@@ -171,3 +171,59 @@ func (c *Client) ChangeIssueMetadata(ctx context.Context, issueID string, kind I
 	}
 	return nil
 }
+
+// SearchIssueAssignees retrieves a single page of users assignable to the
+// issue's repository. Current issue assignees are read separately.
+type AssigneeSearchPage struct {
+	Options   []IssueMetadataOption
+	EndCursor string
+	HasNext   bool
+	CanEdit   bool
+}
+
+func (c *Client) SearchIssueAssignees(ctx context.Context, issueID, search, after string) (AssigneeSearchPage, error) {
+	if err := validateMutationIDs(issueID); err != nil {
+		return AssigneeSearchPage{}, err
+	}
+	const query = `query SearchIssueAssignees($id: ID!, $query: String!, $after: String) {
+  node(id: $id) { ... on Issue { id viewerCanAssign repository {
+    assignableUsers(first: 30, query: $query, after: $after) {
+      nodes { id name: login } pageInfo { hasNextPage endCursor }
+    }
+  } } }
+}`
+	var response struct {
+		Node *struct {
+			ID         string `json:"id"`
+			CanEdit    *bool  `json:"viewerCanAssign"`
+			Repository *struct {
+				Users *metadataConnection `json:"assignableUsers"`
+			} `json:"repository"`
+		} `json:"node"`
+	}
+	var cursor interface{}
+	if after != "" {
+		cursor = after
+	}
+	if err := c.graphql.DoWithContext(ctx, query, map[string]interface{}{"id": issueID, "query": search, "after": cursor}, &response); err != nil {
+		return AssigneeSearchPage{}, err
+	}
+	if response.Node == nil || response.Node.ID != issueID || response.Node.CanEdit == nil || response.Node.Repository == nil || response.Node.Repository.Users == nil {
+		return AssigneeSearchPage{}, fmt.Errorf("assignable users are unavailable")
+	}
+	connection := response.Node.Repository.Users
+	page := AssigneeSearchPage{CanEdit: *response.Node.CanEdit, HasNext: connection.PageInfo.HasNextPage}
+	for _, option := range connection.Nodes {
+		if option == nil || option.ID == "" || option.Name == "" {
+			return AssigneeSearchPage{}, fmt.Errorf("assignable users contain an unavailable entry")
+		}
+		page.Options = append(page.Options, *option)
+	}
+	if page.HasNext {
+		if connection.PageInfo.EndCursor == nil || *connection.PageInfo.EndCursor == "" || *connection.PageInfo.EndCursor == after {
+			return AssigneeSearchPage{}, fmt.Errorf("assignee search pagination did not advance")
+		}
+		page.EndCursor = *connection.PageInfo.EndCursor
+	}
+	return page, nil
+}

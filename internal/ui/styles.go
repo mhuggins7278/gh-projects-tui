@@ -156,6 +156,9 @@ func (m Model) renderFooter() string {
 }
 
 func (m Model) renderScreen() string {
+	if m.showHelp {
+		return bodyFrameStyle.Width(m.frameContentWidth()).Render(m.renderHelpContent())
+	}
 	content := &strings.Builder{}
 	switch {
 	case m.screen == screenLoading && m.loading:
@@ -177,13 +180,61 @@ func (m Model) renderScreen() string {
 		content.WriteString("\n" + statusStyle.Render(m.status))
 	}
 	body := content.String()
-	if m.showHelp {
-		body = lipgloss.JoinVertical(lipgloss.Left, body, helpStyle.Width(m.frameContentWidth()-2).Render(m.helpText()))
-	}
 	if m.showAPI && m.debug {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, helpStyle.Width(m.frameContentWidth()-2).Render(m.apiInspector()))
 	}
 	return bodyFrameStyle.Width(m.frameContentWidth()).Render(body)
+}
+
+func (m Model) helpLines() []string {
+	width := m.frameContentWidth() - 2
+	if width < 1 {
+		width = 1
+	}
+	return strings.Split(lipgloss.NewStyle().Width(width).Render(m.helpText()), "\n")
+}
+
+func (m Model) helpRows() int {
+	if m.height <= 0 {
+		return 24
+	}
+	rows := m.height - lipgloss.Height(m.renderHeader()) - lipgloss.Height(m.renderFooter()) - bodyFrameStyle.GetVerticalFrameSize() - 2
+	if rows < 1 {
+		return 1
+	}
+	return rows
+}
+
+func (m Model) helpMaxOffset() int {
+	maximum := len(m.helpLines()) - m.helpRows()
+	if maximum < 0 {
+		return 0
+	}
+	return maximum
+}
+
+func (m Model) renderHelpContent() string {
+	lines := m.helpLines()
+	start := m.helpOffset
+	if start > m.helpMaxOffset() {
+		start = m.helpMaxOffset()
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + m.helpRows()
+	if end > len(lines) {
+		end = len(lines)
+	}
+	var b strings.Builder
+	if start > 0 {
+		b.WriteString(mutedStyle.Render("↑ more") + "\n")
+	}
+	b.WriteString(strings.Join(lines[start:end], "\n"))
+	if end < len(lines) {
+		b.WriteString("\n" + mutedStyle.Render("↓ more · j/k scroll"))
+	}
+	return b.String()
 }
 
 func (m Model) pickerHeading(title, hint string) string {

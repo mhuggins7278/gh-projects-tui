@@ -125,7 +125,7 @@ func selectedItemFields(fields []Field, content bool, variables map[string]inter
 	}
 	contentSelection := ""
 	if content {
-		contentSelection = `content { __typename ... on Issue { id number title url repository { name } state viewerCanSetFields subIssuesSummary { total completed } } ... on PullRequest { id number title url repository { name } state isDraft merged } ... on DraftIssue { id title } }`
+		contentSelection = `content { __typename ... on Issue { id number title url repository { name nameWithOwner } state viewerCanSetFields subIssuesSummary { total completed } } ... on PullRequest { id number title url repository { name nameWithOwner } state isDraft merged } ... on DraftIssue { id title } }`
 	}
 	return definitions.String(), "id " + contentSelection + " " + selections.String(), names
 }

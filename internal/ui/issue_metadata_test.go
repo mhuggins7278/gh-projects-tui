@@ -12,14 +12,17 @@ import (
 
 type metadataTestSource struct {
 	*fieldEditorSource
-	current    map[string]github.IssueMetadataOption
-	options    []github.IssueMetadataOption
-	canEdit    bool
-	readErr    error
-	writeErr   error
-	failWrite  int
-	writeApply bool
-	writes     []string
+	current        map[string]github.IssueMetadataOption
+	options        []github.IssueMetadataOption
+	canEdit        bool
+	readErr        error
+	writeErr       error
+	failWrite      int
+	writeApply     bool
+	writes         []string
+	candidateReads int
+	searches       []string
+	pageSize       int
 }
 
 func (s *metadataTestSource) ReadIssueMetadata(_ context.Context, _ string, _ github.IssueMetadataKind, candidates bool) (github.IssueMetadata, error) {
@@ -31,9 +34,99 @@ func (s *metadataTestSource) ReadIssueMetadata(_ context.Context, _ string, _ gi
 		data.Current = append(data.Current, option)
 	}
 	if candidates {
+		s.candidateReads++
 		data.Candidates = append([]github.IssueMetadataOption(nil), s.options...)
 	}
 	return data, nil
+}
+func (s *metadataTestSource) SearchIssueAssignees(_ context.Context, _ string, query, after string) (github.AssigneeSearchPage, error) {
+	s.searches = append(s.searches, query)
+	page := github.AssigneeSearchPage{CanEdit: s.canEdit}
+	for _, option := range s.options {
+		if strings.Contains(strings.ToLower(option.Name), strings.ToLower(query)) {
+			page.Options = append(page.Options, option)
+		}
+	}
+	if s.pageSize > 0 && len(page.Options) > s.pageSize {
+		if after == "" {
+			page.Options = page.Options[:s.pageSize]
+			page.HasNext, page.EndCursor = true, "next"
+		} else {
+			page.Options = page.Options[s.pageSize:]
+		}
+	}
+	return page, nil
+}
+
+func TestAssigneeSearchRetainsSelectionsAcrossQueries(t *testing.T) {
+	m, s := metadataModel()
+	s.options = append(s.options, github.IssueMetadataOption{ID: "c", Name: "Charlie"})
+	m = openMetadata(t, m, "a")
+	if s.candidateReads != 0 || !reflect.DeepEqual(s.searches, []string{""}) || !m.issueMetadataEditor.searching {
+		t.Fatalf("unexpected initial load: candidates=%d searches=%#v", s.candidateReads, s.searches)
+	}
+	m, _ = editorKey(m, "enter")
+	m, _ = editorKey(m, "j")
+	m, _ = editorKey(m, "space") // Beta
+	m, _ = editorKey(m, "/")
+	m, search := editorKey(m, "C")
+	m = runMembershipReads(t, m, search)
+	m, _ = editorKey(m, "enter")
+	m, _ = editorKey(m, "space") // Charlie
+	m, cmd := editorKey(m, "enter")
+	m = runMembershipReads(t, m, cmd)
+	if !reflect.DeepEqual(s.writes, []string{"add:b,c"}) || s.current["a"].ID != "a" {
+		t.Fatalf("hidden selection lost: writes=%#v current=%#v", s.writes, s.current)
+	}
+}
+
+func TestAssigneeToggleKeepsCursorOnUser(t *testing.T) {
+	m, s := metadataModel()
+	s.options = append(s.options, github.IssueMetadataOption{ID: "c", Name: "Charlie"})
+	m = openMetadata(t, m, "a")
+	for _, key := range []string{"enter", "j", "j", "space"} {
+		m, _ = editorKey(m, key)
+	}
+	editor := m.issueMetadataEditor
+	if got := editor.visibleOptions()[editor.index].ID; got != "c" {
+		t.Fatalf("cursor moved to %q after selecting Charlie", got)
+	}
+	m, _ = editorKey(m, "space")
+	if got := editor.visibleOptions()[editor.index].ID; got != "c" {
+		t.Fatalf("cursor moved to %q after deselecting Charlie", got)
+	}
+	m, cmd := editorKey(m, "enter")
+	if cmd != nil || m.status != "No changes" {
+		t.Fatalf("toggling Charlie twice should leave no changes, got %q", m.status)
+	}
+}
+
+func TestAssigneeSearchIgnoresStaleResponses(t *testing.T) {
+	m, _ := metadataModel()
+	m = openMetadata(t, m, "a")
+	editor := m.issueMetadataEditor
+	oldRevision := editor.searchRevision
+	m, _ = editorKey(m, "z")
+	updated, _ := m.Update(assigneeSearchMsg{editorID: editor.id, revision: oldRevision, page: github.AssigneeSearchPage{CanEdit: true, Options: []github.IssueMetadataOption{{ID: "stale", Name: "stale"}}}})
+	m = updated.(Model)
+	if len(m.issueMetadataEditor.options) != 0 || !m.issueMetadataEditor.searchLoading {
+		t.Fatal("stale results replaced newer search")
+	}
+}
+
+func TestAssigneeSearchLoadsNextPageAtEnd(t *testing.T) {
+	m, s := metadataModel()
+	s.pageSize = 1
+	m = openMetadata(t, m, "a")
+	if len(m.issueMetadataEditor.options) != 1 || !m.issueMetadataEditor.searchHasNext {
+		t.Fatal("initial page was not bounded")
+	}
+	m, _ = editorKey(m, "enter")
+	m, next := editorKey(m, "j")
+	m = runMembershipReads(t, m, next)
+	if len(m.issueMetadataEditor.options) != 2 || m.issueMetadataEditor.searchHasNext || len(s.searches) != 2 {
+		t.Fatalf("next page missing: %#v", m.issueMetadataEditor)
+	}
 }
 func (s *metadataTestSource) ChangeIssueMetadata(_ context.Context, _ string, _ github.IssueMetadataKind, add bool, ids []string) error {
 	verb := "remove:"
@@ -86,9 +179,14 @@ func TestIssueMetadataEditSearchAndDelta(t *testing.T) {
 			if m.issueMetadataEditor == nil {
 				t.Fatalf("editor did not open: %s", m.status)
 			}
-			m, _ = editorKey(m, "/")
+			if key == "l" {
+				m, _ = editorKey(m, "/")
+			}
 			m, _ = editorKey(m, "B")
-			m, _ = editorKey(m, "e")
+			m, search := editorKey(m, "e")
+			if key == "a" {
+				m = runMembershipReads(t, m, search)
+			}
 			m, _ = editorKey(m, "enter")
 			if len(m.issueMetadataEditor.visibleOptions()) != 1 || m.issueMetadataEditor.visibleOptions()[0].ID != "b" {
 				t.Fatal("search did not filter options")
@@ -132,6 +230,7 @@ func TestIssueMetadataDeniedOrCancelledDoesNotWrite(t *testing.T) {
 	}
 	s.canEdit = true
 	m = openMetadata(t, m, "a")
+	m, _ = editorKey(m, "enter")
 	m, _ = editorKey(m, "space")
 	m, _ = editorKey(m, "esc")
 	if m.issueMetadataEditor != nil || len(s.writes) != 0 {

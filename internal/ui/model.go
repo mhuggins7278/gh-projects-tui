@@ -135,7 +135,7 @@ func (m *Model) abandonReads() {
 	m.refreshFocusID = ""
 	m.tableSubIssues = nil
 	m.tableEditor = nil
-	m.issueMetadataEditor = nil
+	m.clearIssueMetadataEditor()
 }
 
 type screen int
@@ -171,6 +171,7 @@ type Model struct {
 	filter                string
 	filtering             bool
 	showHelp              bool
+	helpOffset            int
 	showAPI               bool
 	selectedOwner         *github.Owner
 	selectedProject       *github.Project
@@ -222,6 +223,13 @@ type Model struct {
 	issueActionRefreshing bool
 	issueActionPending    *issueActionState
 	issueMetadataEditor   *issueMetadataEditor
+	customActions         []config.Action
+	repoPaths             map[string]string
+	repoSearchRoots       []string
+	actionRunning         bool
+	actionPreparing       bool
+	actionPrepareID       uint64
+	actionCancel          context.CancelFunc
 	nextIssueAction       uint64
 	mutationLoading       bool
 	mutationSession       *boardMutationSession
@@ -292,6 +300,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, apiStatusTick()
 	case tea.PasteMsg:
 		m.appendInputText(msg.Content)
+		if m.issueMetadataEditor != nil && m.issueMetadataEditor.searching && m.issueMetadataEditor.kind == github.IssueAssignees {
+			return m, m.scheduleAssigneeSearch()
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
@@ -440,10 +451,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateIssueReadback(msg)
 	case metadataLoadedMsg:
 		return m.updateMetadataLoaded(msg)
+	case assigneeSearchDebounceMsg:
+		if editor := m.issueMetadataEditor; editor != nil && editor.id == msg.editorID && editor.searchRevision == msg.revision && editor.scope.matches(m) {
+			return m, m.startAssigneeSearch("")
+		}
+		return m, nil
+	case assigneeSearchMsg:
+		return m.updateAssigneeSearch(msg)
 	case metadataWriteMsg:
 		return m.updateMetadataWrite(msg)
 	case metadataReadbackMsg:
 		return m.updateMetadataReadback(msg)
+	case customActionDoneMsg:
+		return m.updateCustomActionDone(msg)
+	case customActionPreparedMsg:
+		return m.updateCustomActionPrepared(msg)
 	case tableActionMsg:
 		return m.updateTableAction(msg)
 	case tableActionReadbackMsg:
@@ -706,7 +728,7 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	}
 	m.detailVisible = false
 	m.detailLoading = false
-	m.issueMetadataEditor = nil
+	m.clearIssueMetadataEditor()
 	m.detailItemID = ""
 	m.detail = nil
 	m.detailCache = nil
@@ -720,6 +742,18 @@ func (m *Model) startItemsLoadWithSpinner() tea.Cmd {
 		return nil
 	}
 	return tea.Batch(itemsLoadingTick(m.generation), load)
+}
+
+func (m *Model) startItemsLoadPreservingFocus() tea.Cmd {
+	focusID := ""
+	if item, ok := m.selectedItem(); ok {
+		focusID = item.ID
+	}
+	load := m.startItemsLoadWithSpinner()
+	if load != nil {
+		m.refreshFocusID = focusID
+	}
+	return load
 }
 
 func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
@@ -819,7 +853,11 @@ func (m *Model) finishMutationReload() tea.Cmd {
 	scope := m.pendingMutationReload
 	m.pendingMutationReload = nil
 	if scope != nil && scope.matches(*m) {
-		return m.startItemsLoadWithSpinner()
+		if m.detailVisible {
+			m.pendingIssueReload = scope
+			return nil
+		}
+		return m.startItemsLoadPreservingFocus()
 	}
 	return nil
 }
@@ -1498,6 +1536,9 @@ func (m Model) filterLine() string {
 }
 
 func (m Model) footerHints() string {
+	if m.actionPreparing {
+		return "finding checkout · esc cancel" + m.debugHint()
+	}
 	if m.issueActionPending != nil && !m.filtering {
 		if m.issueActionPending.blocked {
 			return "issue outcome unknown · r check state · esc close/back · q quit" + m.debugHint()
@@ -1522,6 +1563,9 @@ func (m Model) footerHints() string {
 	}
 	if m.screen == screenBoard && m.detailVisible {
 		if m.issueMetadataEditor != nil {
+			if m.issueMetadataEditor.searching {
+				return "type search · enter choose · esc stop searching" + m.debugHint()
+			}
 			return "/ search · space toggle · enter save · esc cancel" + m.debugHint()
 		}
 		if m.commentEditing {
@@ -1568,7 +1612,11 @@ func (m Model) helpText() string {
 	if m.debug {
 		debugKey = " · A api inspector"
 	}
-	return "Keys: j/k or up/down move · enter select · / filter/search (enter done, esc clear) ·\n" +
+	actions := m.customActionHelp()
+	if actions != "" {
+		actions = strings.TrimSpace(actions) + "\n\n"
+	}
+	return actions + "Keys: j/k or up/down move · enter select · / filter/search (enter done, esc clear) ·\n" +
 		"esc/backspace back · p projects · v reload views · r refresh · o open selected item/project in browser ·\n" +
 		"? toggle help" + debugKey + " · q quit.\n" +
 		m.layoutHelpText()
@@ -1829,7 +1877,7 @@ func resolveSelection(source DiscoverySource, ctx context.Context, selection Sel
 }
 
 func (m *Model) clearDetail() {
-	m.issueMetadataEditor = nil
+	m.clearIssueMetadataEditor()
 	if m.tableEditor != nil && m.tableEditor.detail {
 		m.tableEditor = nil
 	}

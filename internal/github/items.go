@@ -146,8 +146,8 @@ fragment ItemsPage on ProjectV2ItemConnection {
     id type
     content {
       __typename
-      ... on Issue { id number title url repository { name } state viewerCanSetFields subIssuesSummary { total completed } }
-      ... on PullRequest { id number title url repository { name } state isDraft merged }
+      ... on Issue { id number title url repository { name nameWithOwner } state viewerCanSetFields subIssuesSummary { total completed } }
+      ... on PullRequest { id number title url repository { name nameWithOwner } state isDraft merged }
       ... on DraftIssue { id title }
     }
     fieldValues(first: 100) { ...FieldValuesPage }
@@ -197,6 +197,7 @@ type Content struct {
 	Title              string
 	URL                string
 	Repository         string
+	RepositoryFullName string
 	State              string
 	IsDraft            bool
 	Merged             bool
@@ -465,6 +466,7 @@ func projectContent(content *rawContent) *Content {
 	}
 	if content.Repository != nil {
 		projected.Repository = content.Repository.Name
+		projected.RepositoryFullName = content.Repository.NameWithOwner
 	}
 	if content.SubIssues != nil {
 		projected.SubIssueTotal = content.SubIssues.Total

@@ -597,19 +597,34 @@ func (m *Model) showReconciledItems(session *boardMutationSession) tea.Cmd {
 	if !sameMutationProjectByModel(session, m) || m.screen != screenBoard {
 		return nil
 	}
+	// A field edit from details can change saved-filter membership or table
+	// ordering. Keep the panel in control until it is dismissed, then reload
+	// the view instead of silently closing the issue during the save.
+	if m.detailVisible && session.fieldEdited && sameMutationViewByModel(session, m) && session.generation == m.generation &&
+		(m.itemsLoading || strings.TrimSpace(session.view.Filter) != "" || (session.lastSuccess != "" && session.view.Layout == github.TableLayout)) {
+		if !m.itemsLoading && strings.TrimSpace(session.view.Filter) == "" {
+			m.showCanonicalWithoutOptimism(session)
+		}
+		if session.lastSuccess != "" && !m.isTable() && strings.TrimSpace(session.view.Filter) != "" {
+			m.pendingFilteredMove = &session.filteredFocus
+		}
+		scope := m.currentBoardReadScope()
+		m.pendingIssueReload = &scope
+		return nil
+	}
 	if m.itemsLoading {
 		scope := m.currentBoardReadScope()
 		m.pendingMutationReload = &scope
 		return nil
 	}
 	if !sameMutationViewByModel(session, m) || session.generation != m.generation {
-		return m.startItemsLoadWithSpinner()
+		return m.startItemsLoadPreservingFocus()
 	}
 	if m.view != nil && (strings.TrimSpace(m.view.Filter) != "" || (session.lastSuccess != "" && session.fieldEdited && session.view.Layout == github.TableLayout)) {
 		if session.lastSuccess != "" && !m.isTable() {
 			m.pendingFilteredMove = &session.filteredFocus
 		}
-		return m.startItemsLoadWithSpinner()
+		return m.startItemsLoadPreservingFocus()
 	}
 	m.showCanonicalWithoutOptimism(session)
 	return nil

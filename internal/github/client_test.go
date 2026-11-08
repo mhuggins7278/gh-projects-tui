@@ -469,7 +469,7 @@ func TestListViewsPaginates(t *testing.T) {
 func TestPageItemsProjectsContentAndValues(t *testing.T) {
 	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
 		func(query string, variables map[string]interface{}, response interface{}) error {
-			if variables["filter"] != `status:"Done" assignee:@me` || variables["after"] != "cursor" || !strings.Contains(query, "ProjectV2ItemFieldDateValue") || !strings.Contains(query, "IssueFieldSingleSelectValue") || !strings.Contains(query, "users(first: 10) { nodes { login }") || !strings.Contains(query, "repository { name }") || !strings.Contains(query, "subIssuesSummary { total completed }") || !strings.Contains(query, "isDraft merged") {
+			if variables["filter"] != `status:"Done" assignee:@me` || variables["after"] != "cursor" || !strings.Contains(query, "ProjectV2ItemFieldDateValue") || !strings.Contains(query, "IssueFieldSingleSelectValue") || !strings.Contains(query, "users(first: 10) { nodes { login }") || !strings.Contains(query, "repository { name nameWithOwner }") || !strings.Contains(query, "subIssuesSummary { total completed }") || !strings.Contains(query, "isDraft merged") {
 				t.Fatalf("item query or variables invalid: %q %#v", query, variables)
 			}
 			result := response.(*itemsResponse)
@@ -477,7 +477,7 @@ func TestPageItemsProjectsContentAndValues(t *testing.T) {
 				Items rawItemsPage `json:"items"`
 			}{Items: rawItemsPage{
 				Nodes: []*rawItem{{
-					ID: "item-1", Type: "ISSUE", Content: &rawContent{Kind: "Issue", ID: "issue-1", Number: 42, Title: "Fix it", URL: "https://example.invalid/42", Repository: &rawRepository{Name: "example"}, State: "OPEN", SubIssues: &rawSubIssues{Total: 8, Completed: 3}},
+					ID: "item-1", Type: "ISSUE", Content: &rawContent{Kind: "Issue", ID: "issue-1", Number: 42, Title: "Fix it", URL: "https://example.invalid/42", Repository: &rawRepository{Name: "example", NameWithOwner: "me/example"}, State: "OPEN", SubIssues: &rawSubIssues{Total: 8, Completed: 3}},
 					FieldValues: rawFieldValuePage{Nodes: []*rawFieldValue{
 						{Kind: "ProjectV2ItemFieldSingleSelectValue", Field: rawFieldRef{ID: "status", Name: "Status"}, OptionID: "todo", Name: "Todo"},
 						{Kind: "ProjectV2ItemFieldNumberValue", Field: rawFieldRef{ID: "estimate", Name: "Estimate"}, Number: floatPtr(2.5)},
@@ -510,7 +510,7 @@ func TestPageItemsProjectsContentAndValues(t *testing.T) {
 	if !page.HasNext || page.EndCursor != "next" || len(page.Items) != 1 || len(page.Items[0].FieldValues) != 5 {
 		t.Fatalf("page = %#v", page)
 	}
-	if page.Items[0].Content == nil || page.Items[0].Content.Title != "Fix it" || page.Items[0].Content.Repository != "example" || page.Items[0].Content.State != "OPEN" || page.Items[0].Content.SubIssueTotal != 8 || page.Items[0].Content.SubIssueDone != 3 || page.Items[0].FieldValues[1].Value != "2.5" || page.Items[0].FieldValues[2].FieldName != "Priority" || page.Items[0].FieldValues[2].OptionID != "medium" || page.Items[0].FieldValues[2].Value != "Medium" || !page.Items[0].FieldValues[2].Available {
+	if page.Items[0].Content == nil || page.Items[0].Content.Title != "Fix it" || page.Items[0].Content.Repository != "example" || page.Items[0].Content.RepositoryFullName != "me/example" || page.Items[0].Content.State != "OPEN" || page.Items[0].Content.SubIssueTotal != 8 || page.Items[0].Content.SubIssueDone != 3 || page.Items[0].FieldValues[1].Value != "2.5" || page.Items[0].FieldValues[2].FieldName != "Priority" || page.Items[0].FieldValues[2].OptionID != "medium" || page.Items[0].FieldValues[2].Value != "Medium" || !page.Items[0].FieldValues[2].Available {
 		t.Fatalf("item = %#v", page.Items[0])
 	}
 	if got := page.Items[0].FieldValues[3]; got.FieldName != "Assignees" || got.Value != "octocat, hubot" || !got.Available {

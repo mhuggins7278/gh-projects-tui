@@ -4,13 +4,28 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
 
 func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+	if m.actionPreparing && key != "ctrl+c" {
+		if key == "esc" {
+			if m.actionCancel != nil {
+				m.actionCancel()
+			}
+			m.actionCancel = nil
+			m.actionPreparing, m.actionRunning = false, false
+			m.status = "Action cancelled"
+		}
+		return m, nil
+	}
 	if m.issueMetadataEditor != nil && key != "ctrl+c" {
 		if m.issueMetadataEditor.searching && msg.Text != "" {
 			m.appendInputText(msg.Text)
+			if m.issueMetadataEditor.kind == github.IssueAssignees {
+				return m, m.scheduleAssigneeSearch()
+			}
 			return m, nil
 		}
 		return m.updateMetadataEditorKey(key)
@@ -22,6 +37,22 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.tableEditor != nil && key != "ctrl+c" {
 		return m.updateTableEditorKey(key)
+	}
+	if m.showHelp && key != "ctrl+c" && key != "q" {
+		switch key {
+		case "?", "esc":
+			m.showHelp = false
+			m.helpOffset = 0
+		case "j", "down":
+			if m.helpOffset < m.helpMaxOffset() {
+				m.helpOffset++
+			}
+		case "k", "up":
+			if m.helpOffset > 0 {
+				m.helpOffset--
+			}
+		}
+		return m, nil
 	}
 	// Global keys.
 	switch key {
@@ -56,6 +87,13 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if m.filtering {
 		return m.updateSearchKey(key)
+	}
+	if m.screen == screenBoard && !m.showHelp && !m.showAPI && !m.commentEditing && !m.issueActionConfirm && m.tableMove == nil && m.tableAction == nil {
+		for _, action := range m.customActions {
+			if action.Key == key {
+				return m, m.startCustomAction(action)
+			}
+		}
 	}
 	if m.screen == screenBoard {
 		if m.isTable() && m.tableAction != nil && m.tableAction.phase == "confirm" {

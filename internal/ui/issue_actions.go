@@ -177,5 +177,5 @@ func (m *Model) finishIssueViewReload() tea.Cmd {
 		m.pendingMutationReload = scope
 		return nil
 	}
-	return m.startItemsLoadWithSpinner()
+	return m.startItemsLoadPreservingFocus()
 }

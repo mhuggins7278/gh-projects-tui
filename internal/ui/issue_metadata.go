@@ -3,7 +3,9 @@ package ui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
@@ -12,6 +14,10 @@ import (
 type issueMetadataSource interface {
 	ReadIssueMetadata(context.Context, string, github.IssueMetadataKind, bool) (github.IssueMetadata, error)
 	ChangeIssueMetadata(context.Context, string, github.IssueMetadataKind, bool, []string) error
+}
+
+type assigneeSearchSource interface {
+	SearchIssueAssignees(context.Context, string, string, string) (github.AssigneeSearchPage, error)
 }
 
 type issueMetadataEditor struct {
@@ -25,6 +31,14 @@ type issueMetadataEditor struct {
 	index             int
 	searching         bool
 	filter            string
+	known             map[string]github.IssueMetadataOption
+	searchRevision    uint64
+	searchLoading     bool
+	searchError       error
+	searchCursor      string
+	searchHasNext     bool
+	searchSeen        map[string]bool
+	searchCancel      context.CancelFunc
 }
 
 type metadataPending struct {
@@ -39,6 +53,13 @@ type metadataLoadedMsg struct {
 	data github.IssueMetadata
 	err  error
 }
+type assigneeSearchDebounceMsg struct{ editorID, revision uint64 }
+type assigneeSearchMsg struct {
+	editorID, revision uint64
+	after              string
+	page               github.AssigneeSearchPage
+	err                error
+}
 type metadataWriteMsg struct {
 	actionID    uint64
 	add, remove []string
@@ -49,6 +70,13 @@ type metadataReadbackMsg struct {
 	actionID, readID uint64
 	data             github.IssueMetadata
 	err              error
+}
+
+func (m *Model) clearIssueMetadataEditor() {
+	if m.issueMetadataEditor != nil && m.issueMetadataEditor.searchCancel != nil {
+		m.issueMetadataEditor.searchCancel()
+	}
+	m.issueMetadataEditor = nil
 }
 
 func (m *Model) beginIssueMetadataEdit(kind github.IssueMetadataKind) tea.Cmd {
@@ -65,6 +93,12 @@ func (m *Model) beginIssueMetadataEdit(kind github.IssueMetadataKind) tea.Cmd {
 		m.status = "Issue metadata editing is unavailable for this client"
 		return nil
 	}
+	if kind == github.IssueAssignees {
+		if _, ok := m.source.(assigneeSearchSource); !ok {
+			m.status = "Assignee search is unavailable for this client"
+			return nil
+		}
+	}
 	m.nextIssueAction++
 	editor := &issueMetadataEditor{id: m.nextIssueAction, scope: m.currentBoardReadScope(), issueID: m.detail.Content.ID, itemID: m.detailItemID, kind: kind, loading: true}
 	m.issueMetadataEditor = editor
@@ -72,7 +106,7 @@ func (m *Model) beginIssueMetadataEdit(kind github.IssueMetadataKind) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
 		defer cancel()
-		data, err := source.ReadIssueMetadata(ctx, editor.issueID, editor.kind, true)
+		data, err := source.ReadIssueMetadata(ctx, editor.issueID, editor.kind, editor.kind != github.IssueAssignees)
 		return metadataLoadedMsg{id: editor.id, data: data, err: err}
 	}
 }
@@ -95,8 +129,18 @@ func (m Model) updateMetadataLoaded(msg metadataLoadedMsg) (tea.Model, tea.Cmd) 
 	editor.loading = false
 	editor.options = msg.data.Candidates
 	editor.initial, editor.selected = map[string]bool{}, map[string]bool{}
+	editor.known = map[string]github.IssueMetadataOption{}
 	for _, option := range msg.data.Current {
 		editor.initial[option.ID], editor.selected[option.ID] = true, true
+		editor.known[option.ID] = option
+	}
+	for _, option := range msg.data.Candidates {
+		editor.known[option.ID] = option
+	}
+	if editor.kind == github.IssueAssignees {
+		editor.searching = true
+		m.status = "Type to search · enter selects results · space toggles"
+		return m, m.scheduleAssigneeSearch()
 	}
 	m.status = "Space toggles · / searches · enter saves · esc cancels"
 	return m, nil
@@ -105,6 +149,26 @@ func (m Model) updateMetadataLoaded(msg metadataLoadedMsg) (tea.Model, tea.Cmd) 
 func (editor *issueMetadataEditor) visibleOptions() []github.IssueMetadataOption {
 	var options []github.IssueMetadataOption
 	filter := strings.ToLower(strings.TrimSpace(editor.filter))
+	if editor.kind == github.IssueAssignees {
+		seen := map[string]bool{}
+		// Keep assigned and newly selected users reachable, even when GitHub no
+		// longer returns them as assignable candidates.
+		var pinned []github.IssueMetadataOption
+		for id, selected := range editor.selected {
+			option, ok := editor.known[id]
+			if (selected || editor.initial[id]) && ok && (filter == "" || strings.Contains(strings.ToLower(option.Name), filter)) {
+				pinned = append(pinned, option)
+			}
+		}
+		sort.Slice(pinned, func(i, j int) bool { return strings.ToLower(pinned[i].Name) < strings.ToLower(pinned[j].Name) })
+		for _, option := range append(pinned, editor.options...) {
+			if !seen[option.ID] {
+				seen[option.ID] = true
+				options = append(options, option)
+			}
+		}
+		return options
+	}
 	for _, option := range editor.options {
 		if filter == "" || strings.Contains(strings.ToLower(option.Name), filter) {
 			options = append(options, option)
@@ -113,12 +177,103 @@ func (editor *issueMetadataEditor) visibleOptions() []github.IssueMetadataOption
 	return options
 }
 
+func (m *Model) scheduleAssigneeSearch() tea.Cmd {
+	editor := m.issueMetadataEditor
+	if editor == nil || editor.kind != github.IssueAssignees {
+		return nil
+	}
+	if editor.searchCancel != nil {
+		editor.searchCancel()
+		editor.searchCancel = nil
+	}
+	editor.searchRevision++
+	editor.searchLoading = true
+	editor.searchError = nil
+	editor.searchCursor, editor.searchHasNext = "", false
+	editor.searchSeen = map[string]bool{}
+	editor.options = nil
+	editor.index = 0
+	id, revision := editor.id, editor.searchRevision
+	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg { return assigneeSearchDebounceMsg{editorID: id, revision: revision} })
+}
+
+func (m *Model) startAssigneeSearch(after string) tea.Cmd {
+	editor := m.issueMetadataEditor
+	if editor == nil || editor.kind != github.IssueAssignees {
+		return nil
+	}
+	source, ok := m.source.(assigneeSearchSource)
+	if !ok {
+		editor.searchLoading = false
+		editor.searchError = fmt.Errorf("assignee search is unavailable")
+		return nil
+	}
+	if editor.searchCancel != nil {
+		editor.searchCancel()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
+	editor.searchCancel = cancel
+	editor.searchLoading = true
+	editor.searchError = nil
+	id, revision, issueID, query := editor.id, editor.searchRevision, editor.issueID, editor.filter
+	return func() tea.Msg {
+		defer cancel()
+		page, err := source.SearchIssueAssignees(ctx, issueID, query, after)
+		return assigneeSearchMsg{editorID: id, revision: revision, after: after, page: page, err: err}
+	}
+}
+
+func (m Model) updateAssigneeSearch(msg assigneeSearchMsg) (tea.Model, tea.Cmd) {
+	editor := m.issueMetadataEditor
+	if editor == nil || editor.id != msg.editorID || editor.searchRevision != msg.revision || !editor.scope.matches(m) || !m.detailVisible || m.detailItemID != editor.itemID {
+		return m, nil
+	}
+	editor.searchCancel = nil
+	editor.searchLoading = false
+	if msg.err != nil {
+		editor.searchError = msg.err
+		return m, nil
+	}
+	if !msg.page.CanEdit {
+		m.issueMetadataEditor = nil
+		m.status = "You do not have permission to edit assignees"
+		return m, nil
+	}
+	if msg.page.HasNext && (msg.page.EndCursor == "" || editor.searchSeen[msg.page.EndCursor]) {
+		editor.searchError = fmt.Errorf("assignee search pagination did not advance")
+		editor.searchHasNext = false
+		return m, nil
+	}
+	if msg.after == "" {
+		editor.options = nil
+	}
+	seen := map[string]bool{}
+	for _, option := range editor.options {
+		seen[option.ID] = true
+	}
+	for _, option := range msg.page.Options {
+		editor.known[option.ID] = option
+		if !seen[option.ID] {
+			editor.options = append(editor.options, option)
+			seen[option.ID] = true
+		}
+	}
+	editor.searchCursor, editor.searchHasNext = msg.page.EndCursor, msg.page.HasNext
+	if msg.page.HasNext {
+		editor.searchSeen[msg.page.EndCursor] = true
+	}
+	return m, nil
+}
+
 func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 	editor := m.issueMetadataEditor
 	if key == "esc" {
 		if editor.searching {
 			editor.searching = false
 			return m, nil
+		}
+		if editor.searchCancel != nil {
+			editor.searchCancel()
 		}
 		m.issueMetadataEditor = nil
 		m.status = "Edit cancelled"
@@ -134,9 +289,15 @@ func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 		case "backspace":
 			editor.filter = deleteLastRune(editor.filter)
 			editor.index = 0
+			if editor.kind == github.IssueAssignees {
+				return m, m.scheduleAssigneeSearch()
+			}
 		case "ctrl+u":
 			editor.filter = ""
 			editor.index = 0
+			if editor.kind == github.IssueAssignees {
+				return m, m.scheduleAssigneeSearch()
+			}
 		}
 		return m, nil
 	}
@@ -147,6 +308,8 @@ func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 	case "j", "down":
 		if editor.index+1 < len(options) {
 			editor.index++
+		} else if editor.kind == github.IssueAssignees && editor.searchHasNext && !editor.searchLoading {
+			return m, m.startAssigneeSearch(editor.searchCursor)
 		}
 	case "k", "up":
 		if editor.index > 0 {
@@ -156,6 +319,17 @@ func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 		if editor.index < len(options) {
 			id := options[editor.index].ID
 			editor.selected[id] = !editor.selected[id]
+			if editor.kind == github.IssueAssignees {
+				// Toggling a user can move them into or out of the pinned rows.
+				options = editor.visibleOptions()
+				editor.index = min(editor.index, max(0, len(options)-1))
+				for i, option := range options {
+					if option.ID == id {
+						editor.index = i
+						break
+					}
+				}
+			}
 		}
 	case "enter":
 		if !editor.scope.matches(m) || !m.detailVisible || m.detailItemID != editor.itemID {
@@ -164,13 +338,18 @@ func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		var add, remove []string
-		for _, option := range editor.options {
-			if editor.selected[option.ID] && !editor.initial[option.ID] {
-				add = append(add, option.ID)
+		for id := range editor.known {
+			if editor.selected[id] && !editor.initial[id] {
+				add = append(add, id)
 			}
-			if editor.initial[option.ID] && !editor.selected[option.ID] {
-				remove = append(remove, option.ID)
+			if editor.initial[id] && !editor.selected[id] {
+				remove = append(remove, id)
 			}
+		}
+		sort.Strings(add)
+		sort.Strings(remove)
+		if editor.searchCancel != nil {
+			editor.searchCancel()
 		}
 		m.issueMetadataEditor = nil
 		if len(add) == 0 && len(remove) == 0 {
@@ -231,8 +410,11 @@ func (m Model) renderIssueMetadataEditor() string {
 		search += "_"
 	}
 	fmt.Fprintf(&b, "Search: %s\n", search)
+	if editor.kind == github.IssueAssignees && editor.searchError != nil {
+		b.WriteString(truncateText("Search failed: "+editor.searchError.Error(), m.detailPanelWidth()-4) + "\n")
+	}
 	options := editor.visibleOptions()
-	if len(options) == 0 {
+	if len(options) == 0 && !editor.searchLoading && editor.searchError == nil {
 		b.WriteString("No matching options\n")
 	}
 	start, end := m.tableWindow(len(options), editor.index)
@@ -247,7 +429,17 @@ func (m Model) renderIssueMetadataEditor() string {
 		}
 		b.WriteString(truncateText(marker+check+options[index].Name, m.detailPanelWidth()-4) + "\n")
 	}
-	b.WriteString(mutedStyle.Render("/ search · space toggle · enter save · esc cancel"))
+	if editor.kind == github.IssueAssignees && editor.searchLoading {
+		b.WriteString(mutedStyle.Render("Searching...\n"))
+	}
+	if editor.kind == github.IssueAssignees && editor.searchHasNext {
+		b.WriteString(mutedStyle.Render("↓ at end loads more\n"))
+	}
+	if editor.searching {
+		b.WriteString(mutedStyle.Render("type search · enter choose · esc stop searching"))
+	} else {
+		b.WriteString(mutedStyle.Render("/ search · space toggle · enter save · esc cancel"))
+	}
 	return b.String()
 }
 
