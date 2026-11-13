@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/glamour"
+	glamouransi "github.com/charmbracelet/glamour/ansi"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
@@ -129,9 +131,9 @@ func (m Model) renderDetailPanel() string {
 
 func (m Model) detailPanelWidth() int {
 	if m.detailVisible {
-		width := m.frameContentWidth() - 4
-		if width > 96 {
-			width = 96
+		width := (m.frameContentWidth() - 4) * 85 / 100
+		if width > 160 {
+			width = 160
 		}
 		if width < 12 {
 			return 12
@@ -416,13 +418,36 @@ func newMarkdownRenderer(width int) *markdownRenderer {
 	return &markdownRenderer{width: width}
 }
 
+func markdownStyle() glamouransi.StyleConfig {
+	style := styles.DarkStyleConfig
+	margin := uint(0)
+	headingColor := "#58a6ff"
+	codeColor := "#d2a8ff"
+	linkColor := "#58a6ff"
+	style.Document.Margin = &margin
+	style.CodeBlock.Margin = &margin
+	style.Heading.Color = &headingColor
+	style.H1.BackgroundColor = nil
+	style.H1.Prefix, style.H1.Suffix = "", ""
+	style.H2.Prefix, style.H3.Prefix = "", ""
+	style.H4.Prefix, style.H5.Prefix, style.H6.Prefix = "", "", ""
+	style.Code.Color = &codeColor
+	style.Code.BackgroundColor = nil
+	style.Code.Prefix, style.Code.Suffix = "", ""
+	style.Link.Color = &linkColor
+	style.LinkText.Color = &linkColor
+	return style
+}
+
 func (r *markdownRenderer) render(body string) []string {
 	// Empty/unavailable body and comment sections need no Markdown renderer.
 	if !r.initialized {
 		r.term, _ = glamour.NewTermRenderer(
-			glamour.WithStandardStyle("dark"),
+			glamour.WithStyles(markdownStyle()),
 			glamour.WithWordWrap(r.width),
 			glamour.WithPreservedNewLines(),
+			glamour.WithTableWrap(false),
+			glamour.WithEmoji(),
 		)
 		r.initialized = true
 	}
@@ -433,7 +458,14 @@ func (r *markdownRenderer) render(body string) []string {
 			if rendered == "" {
 				return []string{""}
 			}
-			return strings.Split(rendered, "\n")
+			var lines []string
+			for _, line := range strings.Split(rendered, "\n") {
+				if r.width > 0 && ansi.StringWidth(line) > r.width {
+					line = ansi.Hardwrap(line, r.width, true)
+				}
+				lines = append(lines, strings.Split(line, "\n")...)
+			}
+			return lines
 		}
 	}
 	return renderMarkdownFallback(body, r.width)

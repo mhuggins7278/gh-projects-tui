@@ -103,7 +103,7 @@ func TestDetailOverlaysCurrentViewAtAnyWidth(t *testing.T) {
 	model.height = 42
 	model.detailVisible = true
 	model.detail = &github.ItemDetail{ID: "issue-item", Content: &github.Content{Kind: "Issue", Number: 42, Title: "Detail title", Body: "Issue body", BodyAvailable: true}}
-	for _, width := range []int{150, 90} {
+	for _, width := range []int{300, 150, 90} {
 		model.width = width
 		baseModel := model
 		baseModel.detailVisible = false
@@ -139,7 +139,7 @@ func TestDetailOverlaysCurrentViewAtAnyWidth(t *testing.T) {
 	model.view.Layout = github.TableLayout
 	model.view.Fields = []github.Field{{Name: "Title", DataType: "TITLE"}}
 	table := ansi.Strip(model.View().Content)
-	if !strings.Contains(table, "Roadmap") || !strings.Contains(table, "Detail title") || !strings.Contains(table, "Fix it") {
+	if !strings.Contains(table, "Roadmap") || !strings.Contains(table, "Detail title") {
 		t.Fatalf("table detail overlay omitted table or details: %q", table)
 	}
 	if !strings.Contains(model.footerHints(), "esc close") {
