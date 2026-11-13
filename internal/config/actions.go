@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"text/template"
 
@@ -43,11 +44,28 @@ var actionTemplateFields = map[string]string{
 }
 
 func DefaultActionsPath() (string, error) {
-	dir, err := os.UserConfigDir()
+	dir, err := actionsConfigDir(runtime.GOOS)
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "gh-projects-tui", "config.yml"), nil
+}
+
+func actionsConfigDir(goos string) (string, error) {
+	if goos != "darwin" {
+		return os.UserConfigDir()
+	}
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		if !filepath.IsAbs(dir) {
+			return "", fmt.Errorf("XDG_CONFIG_HOME must be an absolute path")
+		}
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config"), nil
 }
 
 // LoadActions reads an optional default config, or requires an explicitly
