@@ -1549,10 +1549,10 @@ func TestDetailCacheClearsWhenBoardReloads(t *testing.T) {
 func TestDetailPanelWidthIsBoundedForCenteredModal(t *testing.T) {
 	model := NewModel(nil)
 	model.detailVisible = true
-	for _, width := range []int{120, 300} {
-		model.width = width
-		if got := model.detailPanelWidth(); got != 96 {
-			t.Fatalf("terminal width %d produced detail content width %d, want 96", width, got)
+	for _, tc := range []struct{ width, want int }{{120, 93}, {300, 160}} {
+		model.width = tc.width
+		if got := model.detailPanelWidth(); got != tc.want {
+			t.Fatalf("terminal width %d produced detail content width %d, want %d", tc.width, got, tc.want)
 		}
 	}
 }
@@ -1606,6 +1606,39 @@ func TestMarkdownRendererWrapsGitHubBody(t *testing.T) {
 	joined := strings.Join(strings.Fields(ansi.Strip(strings.Join(lines, " "))), " ")
 	if !strings.Contains(joined, "terminal detail popover") {
 		t.Fatalf("markdown content was lost: %q", joined)
+	}
+}
+
+func TestMarkdownStylesPreserveReadableContent(t *testing.T) {
+	body := "## Question\n\nSee [the issue](https://example.com/issues/123) and `inline code`.\n\n- first\n- second"
+	lines := renderMarkdown(body, 50)
+	plain := ansi.Strip(strings.Join(lines, "\n"))
+	for _, expected := range []string{"Question", "the issue", "https://example.com/issues/123", "inline code", "first", "second"} {
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("rendered markdown omitted %q: %q", expected, plain)
+		}
+	}
+	if strings.Contains(plain, "## Question") {
+		t.Fatalf("heading retained markdown markers: %q", plain)
+	}
+	for _, line := range lines {
+		if ansi.StringWidth(line) > 50 {
+			t.Fatalf("rendered line exceeds width: %q", ansi.Strip(line))
+		}
+	}
+}
+
+func TestMarkdownLongLinkStaysWithinWidth(t *testing.T) {
+	url := "https://github.com/example/repository/blob/" + strings.Repeat("abcdef", 30) + "/file.go"
+	body := "See [source](" + url + ")."
+	lines := renderMarkdown(body, 50)
+	for _, line := range lines {
+		if ansi.StringWidth(line) > 50 {
+			t.Fatalf("long link exceeds markdown width: %d: %q", ansi.StringWidth(line), ansi.Strip(line))
+		}
+	}
+	if joined := strings.ReplaceAll(ansi.Strip(strings.Join(lines, "")), " ", ""); !strings.Contains(joined, url) {
+		t.Fatalf("wrapped link lost content: %q", joined)
 	}
 }
 
