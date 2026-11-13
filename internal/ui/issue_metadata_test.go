@@ -80,6 +80,39 @@ func TestAssigneeSearchRetainsSelectionsAcrossQueries(t *testing.T) {
 	}
 }
 
+func TestMetadataSelectionAppearsBeforeWrite(t *testing.T) {
+	m, _ := metadataModel()
+	m.detail.Fields = []github.DetailField{{Field: github.Field{ID: "labels", Name: "Labels"}, Value: &github.FieldValue{Value: "Alpha", Available: true}}}
+	m = openMetadata(t, m, "l")
+	m, _ = editorKey(m, "j")
+	m, _ = editorKey(m, "space")
+	m, cmd := editorKey(m, "enter")
+	if cmd == nil || m.detail.Fields[0].Value.Value != "Alpha, Beta" {
+		t.Fatalf("selection was not projected: %#v", m.detail.Fields)
+	}
+}
+
+func TestMetadataEditorDoesNotDiscardPendingViewRefresh(t *testing.T) {
+	for _, finish := range []string{"esc", "enter"} {
+		t.Run(finish, func(t *testing.T) {
+			m, source := metadataModel()
+			m.view.Filter = "label:visible"
+			source.canonical = nil
+			refresh := m.startMutationViewRefresh()
+			m = openMetadata(t, m, "l")
+			updated, _ := m.Update(refresh())
+			m = updated.(Model)
+			if len(m.items) != 0 || m.issueMetadataEditor == nil {
+				t.Fatal("pending view refresh was discarded while editor was open")
+			}
+			m, _ = editorKey(m, finish)
+			if m.issueMetadataEditor != nil || len(m.items) != 0 {
+				t.Fatal("closing editor lost refreshed membership")
+			}
+		})
+	}
+}
+
 func TestAssigneeToggleKeepsCursorOnUser(t *testing.T) {
 	m, s := metadataModel()
 	s.options = append(s.options, github.IssueMetadataOption{ID: "c", Name: "Charlie"})

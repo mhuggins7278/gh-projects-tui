@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -109,6 +110,7 @@ func (m *Model) enqueueBoardMutation(intent boardMutationIntent) tea.Cmd {
 	}
 
 	if m.mutationSession == nil {
+		m.mutationRefreshID++
 		m.nextMutationSession++
 		view := *m.view
 		filteredFocus := filteredMoveFocus{}
@@ -244,6 +246,7 @@ func (m *Model) startMutationReadback() tea.Cmd {
 	sessionID := session.id
 	owner := session.owner
 	projectNumber := session.projectNumber
+	projectID := session.projectID
 	source := m.source
 	ctx := context.Background()
 	baseline := cloneItems(session.canonicalItems)
@@ -256,6 +259,11 @@ func (m *Model) startMutationReadback() tea.Cmd {
 
 	var verifyField *github.Field
 	var verifyItem string
+	preflight := session.attempt == nil && len(session.intents) == 1 && session.intents[0].kind == boardMutationSetField
+	if preflight {
+		field := session.intents[0].field
+		verifyField, verifyItem = &field, session.intents[0].itemID
+	}
 	if session.attempt != nil && session.plan != nil && session.plan.hasField && !session.plan.hasPosition {
 		field := session.plan.field
 		verifyField, verifyItem = &field, session.plan.intent.itemID
@@ -269,8 +277,35 @@ func (m *Model) startMutationReadback() tea.Cmd {
 		var items []github.Item
 		var err error
 		if reader, ok := source.(interface {
-			ReadMutationItem(context.Context, string, github.Field) (github.Item, error)
+			ReadMutationItemForProject(context.Context, string, string, github.Field) (github.Item, error)
 		}); ok && verifyField != nil {
+			ctx, cancel := context.WithTimeout(ctx, mutationRequestTimeout)
+			defer cancel()
+			item, readErr := reader.ReadMutationItemForProject(ctx, projectID, verifyItem, *verifyField)
+			if readErr != nil {
+				return mutationReadbackMsg{sessionID: sessionID, readID: readID, err: readErr}
+			}
+			items = cloneItems(baseline)
+			for index := range items {
+				if items[index].ID == item.ID {
+					if verifyField.IsIssueField && (item.Content == nil || item.Content.Kind != "Issue" || item.Content.ID == "") {
+						return mutationReadbackMsg{sessionID: sessionID, readID: readID, err: fmt.Errorf("issue identity is unavailable")}
+					}
+					items[index] = mergeMutationItems([]github.Item{items[index]}, []github.Item{item}, []github.Field{*verifyField})[0]
+					if item.Content != nil && item.Content.Kind == "Issue" && items[index].Content != nil {
+						content := *items[index].Content
+						content.ID = item.Content.ID
+						content.ViewerCanSetFields = item.Content.ViewerCanSetFields
+						items[index].Content = &content
+					}
+					break
+				}
+			}
+			return mutationReadbackMsg{sessionID: sessionID, readID: readID, items: items}
+		}
+		if reader, ok := source.(interface {
+			ReadMutationItem(context.Context, string, github.Field) (github.Item, error)
+		}); ok && verifyField != nil && !preflight {
 			item, readErr := reader.ReadMutationItem(ctx, verifyItem, *verifyField)
 			if readErr != nil {
 				return mutationReadbackMsg{sessionID: sessionID, readID: readID, err: readErr}
@@ -385,6 +420,9 @@ func (m *Model) updateBoardMutation(msg boardMutationMsg) (tea.Model, tea.Cmd) {
 		delete(m.detailCache, intent.itemID)
 		session.canonicalItems = cloneItems(session.plan.beforeItems)
 		applyBoardMutationPlan(&session.canonicalItems, *session.plan)
+		if intent.kind == boardMutationSetField {
+			m.syncSubIssueField(session, intent.itemID, intent.field)
+		}
 		session.intents = session.intents[1:]
 		session.plan = nil
 		session.attempt = nil
@@ -412,6 +450,16 @@ func (m *Model) updateMutationReadback(msg mutationReadbackMsg) (tea.Model, tea.
 	}
 	m.mutationLoading = false
 	if msg.err != nil {
+		if session.attempt == nil && errors.Is(msg.err, github.ErrMutationItemUnavailable) {
+			m.mutationSession = nil
+			m.mutationLoading = false
+			m.setMutationStatus(session, "Item is no longer active in this project; refreshing the view")
+			if sameMutationViewByModel(session, m) && session.generation == m.generation {
+				refresh := m.startMutationViewRefresh()
+				return *m, refresh
+			}
+			return *m, nil
+		}
 		session.blocked = true
 		if session.attempt != nil {
 			m.setMutationStatus(session, fmt.Sprintf("Outcome of %s is unknown: readback failed: %v; press r to reconcile, queued writes are blocked", session.plan.intent.description, msg.err))
@@ -430,6 +478,9 @@ func (m *Model) updateMutationReadback(msg mutationReadbackMsg) (tea.Model, tea.
 	attempt := *session.attempt
 	intent := session.plan.intent
 	if verification.complete {
+		if intent.kind == boardMutationSetField {
+			m.syncSubIssueField(session, intent.itemID, intent.field)
+		}
 		session.lastSuccess = intent.description + " saved"
 		delete(m.detailCache, intent.itemID)
 		session.intents = session.intents[1:]
@@ -473,6 +524,30 @@ func (m *Model) updateMutationReadback(msg mutationReadbackMsg) (tea.Model, tea.
 	session.plan = nil
 	session.attempt = nil
 	return *m, m.dispatchNextMutation()
+}
+
+func (m *Model) syncSubIssueField(session *boardMutationSession, itemID string, field github.Field) {
+	if !sameMutationViewByModel(session, m) || session.generation != m.generation {
+		return
+	}
+	index := projectItemIndex(session.canonicalItems, itemID)
+	if index < 0 {
+		return
+	}
+	item := session.canonicalItems[index]
+	update := github.Item{ID: itemID}
+	for _, value := range item.FieldValues {
+		if matchesField(value, field) {
+			update.FieldValues = append(update.FieldValues, value)
+		}
+	}
+	for _, children := range m.tableSubIssues {
+		for i := range children.items {
+			if children.items[i].ID == itemID {
+				children.items[i] = mergeMutationItems([]github.Item{children.items[i]}, []github.Item{update}, []github.Field{field})[0]
+			}
+		}
+	}
 }
 
 func (m *Model) refreshMutationDetail(session *boardMutationSession, itemID string) tea.Cmd {
@@ -584,6 +659,15 @@ func (m *Model) projectPendingMutations() {
 			applyBoardMutationPlan(&items, plan)
 		}
 	}
+	if strings.TrimSpace(session.view.Filter) != "" {
+		visible := items[:0]
+		for _, item := range items {
+			if session.visibleItemIDs[item.ID] {
+				visible = append(visible, item)
+			}
+		}
+		items = visible
+	}
 	m.items = items
 	m.boardFocusID = session.intents[len(session.intents)-1].itemID
 	m.clampBoardCursor()
@@ -620,6 +704,13 @@ func (m *Model) showReconciledItems(session *boardMutationSession) tea.Cmd {
 	if !sameMutationViewByModel(session, m) || session.generation != m.generation {
 		return m.startItemsLoadPreservingFocus()
 	}
+	if session.fieldEdited && session.lastSuccess != "" {
+		m.showCanonicalWithoutOptimism(session)
+		if strings.TrimSpace(session.view.Filter) != "" {
+			return m.startMutationViewRefresh()
+		}
+		return nil
+	}
 	if m.view != nil && (strings.TrimSpace(m.view.Filter) != "" || (session.lastSuccess != "" && session.fieldEdited && session.view.Layout == github.TableLayout)) {
 		if session.lastSuccess != "" && !m.isTable() {
 			m.pendingFilteredMove = &session.filteredFocus
@@ -628,6 +719,69 @@ func (m *Model) showReconciledItems(session *boardMutationSession) tea.Cmd {
 	}
 	m.showCanonicalWithoutOptimism(session)
 	return nil
+}
+
+type mutationViewRefreshMsg struct {
+	scope         boardReadScope
+	id            uint64
+	issueActionID uint64
+	items         []github.Item
+	err           error
+}
+
+func (m *Model) startMutationViewRefresh() tea.Cmd {
+	m.mutationRefreshID++
+	id, scope, issueActionID := m.mutationRefreshID, m.currentBoardReadScope(), m.nextIssueAction
+	owner, project, filter := *m.selectedOwner, m.selectedProject.Number, m.view.Filter
+	fields, source := boardReadFields(*m.view), m.source
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
+		defer cancel()
+		result := mutationViewRefreshMsg{scope: scope, id: id, issueActionID: issueActionID}
+		seen := map[string]bool{}
+		after := ""
+		for {
+			var page github.ItemsPage
+			if loader, ok := source.(BoardItemsSource); ok {
+				page, result.err = loader.PageBoardItems(ctx, owner, project, filter, after, fields)
+			} else if loader, ok := source.(ItemsSource); ok {
+				page, result.err = loader.PageItems(ctx, owner, project, filter, after)
+			} else {
+				result.err = fmt.Errorf("view refresh unavailable")
+			}
+			if result.err != nil {
+				return result
+			}
+			result.items = append(result.items, page.Items...)
+			if !page.HasNext {
+				return result
+			}
+			if page.EndCursor == "" || seen[page.EndCursor] {
+				result.err = fmt.Errorf("view refresh pagination did not advance")
+				return result
+			}
+			seen[page.EndCursor] = true
+			after = page.EndCursor
+		}
+	}
+}
+
+func (m Model) updateMutationViewRefresh(msg mutationViewRefreshMsg) (tea.Model, tea.Cmd) {
+	if msg.id != m.mutationRefreshID || msg.issueActionID != m.nextIssueAction || !msg.scope.matches(m) || m.itemsLoading || m.mutationSession != nil || m.tableAction != nil || m.actionRunning {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.status = "Saved; view refresh failed: " + msg.err.Error()
+		return m, nil
+	}
+	m.items = msg.items
+	if m.isTable() {
+		m.clampTableRow(!m.subIssuesPending())
+	} else {
+		m.clampBoardCursor()
+	}
+	m.reconcileFilteredMoveFocus()
+	return m, nil
 }
 
 func filteredMoveFocusFor(m *Model, itemID string) filteredMoveFocus {
@@ -657,6 +811,15 @@ func (m *Model) showCanonicalWithoutOptimism(session *boardMutationSession) {
 		return
 	}
 	m.items = cloneItems(session.canonicalItems)
+	if strings.TrimSpace(session.view.Filter) != "" {
+		visible := m.items[:0]
+		for _, item := range m.items {
+			if session.visibleItemIDs[item.ID] {
+				visible = append(visible, item)
+			}
+		}
+		m.items = visible
+	}
 	m.itemsHasNext = false
 	m.itemsCursor = ""
 	m.itemsErr = nil

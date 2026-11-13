@@ -23,6 +23,88 @@ type fieldEditorSource struct {
 	reads     int
 }
 
+type targetedFieldSource struct {
+	*fieldEditorSource
+	targetedReads int
+}
+
+func (s *targetedFieldSource) ReadMutationItemForProject(_ context.Context, projectID, itemID string, _ github.Field) (github.Item, error) {
+	s.targetedReads++
+	if projectID != "project" {
+		return github.Item{}, errors.New("wrong project")
+	}
+	for _, item := range s.canonical {
+		if item.ID == itemID {
+			return item, nil
+		}
+	}
+	return github.Item{}, github.ErrMutationItemUnavailable
+}
+
+func TestTargetedPreflightRemovedItemDoesNotBlockWrites(t *testing.T) {
+	m, base := editorModel(github.Field{ID: "notes", Name: "Notes", DataType: "TEXT"})
+	base.canonical = nil
+	m.source = &targetedFieldSource{fieldEditorSource: base}
+	for _, key := range []string{"e", "enter", "ctrl+u", "n"} {
+		m, _ = editorKey(m, key)
+	}
+	m, cmd := editorKey(m, "enter")
+	m = runMembershipReads(t, m, cmd)
+	if m.mutationSession != nil || m.mutationLoading || len(base.writes) != 0 || len(m.items) != 0 {
+		t.Fatalf("removed item left the editor blocked: session=%#v status=%s items=%#v", m.mutationSession, m.status, m.items)
+	}
+}
+
+func TestFieldEditUsesTargetedPreflightAndKeepsFilteredRows(t *testing.T) {
+	m, base := editorModel(github.Field{ID: "notes", Name: "Notes", DataType: "TEXT"})
+	m.view.Filter = "label:visible"
+	base.canonical = append(base.canonical, github.Item{ID: "hidden", Content: &github.Content{Title: "Hidden"}})
+	source := &targetedFieldSource{fieldEditorSource: base}
+	m.source = source
+	for _, key := range []string{"e", "enter", "ctrl+u", "n"} {
+		m, _ = editorKey(m, key)
+	}
+	m, settle := editorKey(m, "enter")
+	if len(m.items) != 1 || m.items[0].FieldValues[0].Value != "n" {
+		t.Fatal("edited value was not projected immediately")
+	}
+	updated, read := m.Update(settle())
+	m = updated.(Model)
+	updated, write := m.Update(read())
+	m = updated.(Model)
+	if source.targetedReads != 1 || source.reads != 0 || len(m.items) != 1 || m.items[0].Content.Title != "One" {
+		t.Fatalf("preflight reads=%d project reads=%d items=%#v", source.targetedReads, source.reads, m.items)
+	}
+	if write == nil {
+		t.Fatal("write was not dispatched")
+	}
+}
+
+func TestMutationViewRefreshKeepsRowsUntilCompleteAndRejectsStaleResult(t *testing.T) {
+	m, source := editorModel(github.Field{ID: "notes", Name: "Notes", DataType: "TEXT"})
+	m.view.Filter = "label:visible"
+	source.canonical = []github.Item{{ID: "new", Content: &github.Content{Title: "New"}}}
+	refresh := m.startMutationViewRefresh()
+	if len(m.items) != 1 || m.items[0].ID != "one" {
+		t.Fatal("existing rows disappeared while refresh was pending")
+	}
+	message := refresh()
+	updated, _ := m.Update(message)
+	m = updated.(Model)
+	if len(m.items) != 1 || m.items[0].ID != "new" {
+		t.Fatalf("completed refresh not applied: %#v", m.items)
+	}
+	refresh = m.startMutationViewRefresh()
+	message = refresh()
+	m.mutationRefreshID++
+	m.items = []github.Item{{ID: "current"}}
+	updated, _ = m.Update(message)
+	m = updated.(Model)
+	if len(m.items) != 1 || m.items[0].ID != "current" {
+		t.Fatal("stale refresh replaced current rows")
+	}
+}
+
 func (s *fieldEditorSource) PageItems(context.Context, github.Owner, int, string, string) (github.ItemsPage, error) {
 	s.reads++
 	return github.ItemsPage{Items: cloneItems(s.canonical)}, nil
@@ -262,7 +344,7 @@ func TestNestedIssueFieldEditRetainsIssueIdentityThroughCanonicalRead(t *testing
 	parent := github.Item{ID: "parent", Content: &github.Content{ID: "parent-issue", Kind: "Issue", Title: "Parent", SubIssueTotal: 1}}
 	s.canonical = []github.Item{parent, child}
 	m.items = []github.Item{parent}
-	m.tableSubIssues = map[string]*subIssueState{"parent": {expanded: true, complete: true, items: []github.Item{child}}}
+	m.tableSubIssues = map[string]*subIssueState{"parent": {expanded: true, complete: true, items: cloneItems([]github.Item{child})}}
 	m.tableRow = 1
 	m.tableFocusID = "one"
 	m, _ = editorKey(m, "e")
@@ -271,6 +353,9 @@ func TestNestedIssueFieldEditRetainsIssueIdentityThroughCanonicalRead(t *testing
 	m, _ = editorKey(m, "n")
 	m, cmd := editorKey(m, "enter")
 	m = runMembershipReads(t, m, cmd)
+	if got := m.tableSubIssues["parent"].items[0].FieldValues[0].Value; got != "n" {
+		t.Fatalf("nested row field = %q, want saved value", got)
+	}
 	if len(s.writes) != 1 || s.writes[0].IssueID != "issue" || s.writes[0].ItemID != "one" {
 		t.Fatalf("nested routing: %#v %s", s.writes, m.status)
 	}

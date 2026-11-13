@@ -313,6 +313,7 @@ func (m Model) updateCustomActionPrepared(msg customActionPreparedMsg) (tea.Mode
 }
 
 func (m Model) updateCustomActionDone(msg customActionDoneMsg) (tea.Model, tea.Cmd) {
+	m.mutationRefreshID++
 	m.actionRunning = false
 	if msg.err != nil {
 		m.status = fmt.Sprintf("%s failed: %v", msg.name, msg.err)

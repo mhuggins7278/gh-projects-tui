@@ -167,7 +167,7 @@ func (c *Client) subIssueProjectItemID(ctx context.Context, projectID string, ch
 
 // LoadIssueDetail supports nested issues which are not project items.
 func (c *Client) LoadIssueDetail(ctx context.Context, issueID string) (ItemDetail, error) {
-	query := `query NestedIssueDetail($id: ID!) { node(id: $id) { ... on Issue { ` + subIssueContentFields + ` body } } }`
+	query := `query NestedIssueDetail($id: ID!) { node(id: $id) { ... on Issue { ` + subIssueContentFields + ` body author { login } } } }`
 	var response struct{ Node *rawContent }
 	if err := c.graphql.DoWithContext(ctx, query, map[string]interface{}{"id": issueID}, &response); err != nil {
 		return ItemDetail{}, err

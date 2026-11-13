@@ -193,6 +193,7 @@ type Model struct {
 	itemsErr              error
 	itemsLoadFrame        int
 	pendingMutationReload *boardReadScope
+	mutationRefreshID     uint64
 	pendingIssueReload    *boardReadScope
 	refreshFocusID        string
 	boardLane             int
@@ -231,6 +232,7 @@ type Model struct {
 	actionPrepareID       uint64
 	actionCancel          context.CancelFunc
 	nextIssueAction       uint64
+	nextMetadataEditor    uint64
 	mutationLoading       bool
 	mutationSession       *boardMutationSession
 	nextMutationSession   uint64
@@ -404,6 +406,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.startItemsLoadWithSpinner()
 	case itemsPageMsg:
 		return m.updateItems(msg)
+	case mutationViewRefreshMsg:
+		return m.updateMutationViewRefresh(msg)
 	case subIssuesMsg:
 		return m.updateSubIssues(msg)
 	case viewRefreshMsg:
@@ -1827,6 +1831,7 @@ type issueActionMsg struct {
 	err        error
 	status     string
 	closed     *bool
+	commentID  string
 }
 
 func itemsLoadingTick(generation uint64) tea.Cmd {

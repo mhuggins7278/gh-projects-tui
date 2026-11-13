@@ -195,6 +195,7 @@ type Content struct {
 	ID                 string
 	Number             int
 	Title              string
+	Author             string
 	URL                string
 	Repository         string
 	RepositoryFullName string
@@ -248,20 +249,23 @@ type rawItem struct {
 }
 
 type rawContent struct {
-	ViewerCanSetFields *bool          `json:"viewerCanSetFields"`
-	ViewerCanClose     *bool          `json:"viewerCanClose"`
-	ViewerCanReopen    *bool          `json:"viewerCanReopen"`
-	Kind               string         `json:"__typename"`
-	ID                 string         `json:"id"`
-	Number             int            `json:"number"`
-	Title              string         `json:"title"`
-	URL                string         `json:"url"`
-	Repository         *rawRepository `json:"repository"`
-	State              string         `json:"state"`
-	IsDraft            bool           `json:"isDraft"`
-	Merged             bool           `json:"merged"`
-	SubIssues          *rawSubIssues  `json:"subIssuesSummary"`
-	Body               *string        `json:"body"`
+	ViewerCanSetFields *bool  `json:"viewerCanSetFields"`
+	ViewerCanClose     *bool  `json:"viewerCanClose"`
+	ViewerCanReopen    *bool  `json:"viewerCanReopen"`
+	Kind               string `json:"__typename"`
+	ID                 string `json:"id"`
+	Number             int    `json:"number"`
+	Title              string `json:"title"`
+	Author             *struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	URL        string         `json:"url"`
+	Repository *rawRepository `json:"repository"`
+	State      string         `json:"state"`
+	IsDraft    bool           `json:"isDraft"`
+	Merged     bool           `json:"merged"`
+	SubIssues  *rawSubIssues  `json:"subIssuesSummary"`
+	Body       *string        `json:"body"`
 }
 
 type rawRepository struct {
@@ -467,6 +471,9 @@ func projectContent(content *rawContent) *Content {
 	if content.Repository != nil {
 		projected.Repository = content.Repository.Name
 		projected.RepositoryFullName = content.Repository.NameWithOwner
+	}
+	if content.Author != nil {
+		projected.Author = content.Author.Login
 	}
 	if content.SubIssues != nil {
 		projected.SubIssueTotal = content.SubIssues.Total

@@ -126,14 +126,17 @@ func (m Model) updateIssueConfirmationKey(key string) (tea.Model, tea.Cmd) {
 		}
 		closed := m.issueActionClosing
 		m.nextIssueAction++
-		pending := &issueActionState{id: m.nextIssueAction, itemID: m.detailItemID, issueID: m.detail.Content.ID, scope: m.currentBoardReadScope(), closed: closed}
+		pending := &issueActionState{id: m.nextIssueAction, itemID: m.detailItemID, issueID: m.detail.Content.ID, scope: m.currentBoardReadScope(), closed: closed, previousState: m.detail.Content.State}
 		m.issueActionPending = pending
 		id, itemID, gen := m.detail.Content.ID, m.detailItemID, m.generation
 		m.mutationLoading = true
 		label := "Issue reopened."
+		state := "OPEN"
 		if closed {
 			label = "Issue closed."
+			state = "CLOSED"
 		}
+		m.applyIssueState(itemID, id, state)
 		return m, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
 			defer cancel()
@@ -171,15 +174,22 @@ func (m Model) updateCommentKey(key string) (tea.Model, tea.Cmd) {
 		}
 		m.commentEditing = false
 		m.commentDraft = ""
+		m.mutationRefreshID++
 		m.mutationLoading = true
 		id, itemID, gen := m.detail.Content.ID, m.detailItemID, m.generation
+		commentID := fmt.Sprintf("pending-comment-%d", m.mutationRefreshID)
+		if m.detail.CommentsLoaded {
+			m.detail.Comments = append(m.detail.Comments, github.IssueComment{ID: commentID, Author: "You (sending)", Body: body})
+		}
 		return m, func() tea.Msg {
-			err := source.IssueComment(context.Background(), id, body)
+			ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
+			defer cancel()
+			err := source.IssueComment(ctx, id, body)
 			status := "Comment added."
 			if github.IsAmbiguousMutationError(err) {
 				status = "Comment submission outcome is uncertain; check GitHub before retrying."
 			}
-			return issueActionMsg{generation: gen, itemID: itemID, err: err, status: status}
+			return issueActionMsg{generation: gen, itemID: itemID, err: err, status: status, commentID: commentID}
 		}
 	case "backspace":
 		m.commentDraft = deleteLastRune(m.commentDraft)

@@ -3,9 +3,12 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
+
+var ErrMutationItemUnavailable = errors.New("mutation item is unavailable in the active project")
 
 // PageBoardItems selects only the fields needed by this view. Field names are
 // variables, never interpolated into GraphQL source.
@@ -37,6 +40,32 @@ func (c *Client) ReadMutationItem(ctx context.Context, itemID string, field Fiel
 	item := Item{ID: itemID}
 	if response.Node.Value != nil {
 		item.FieldValues = []FieldValue{response.Node.Value.project()}
+	}
+	return item, nil
+}
+
+// ReadMutationItemForProject validates an active item before a field write.
+func (c *Client) ReadMutationItemForProject(ctx context.Context, projectID, itemID string, field Field) (Item, error) {
+	query := `query MutationItemForProject($id: ID!, $name: String!) { node(id: $id) { ... on ProjectV2Item { id isArchived project { id } content { __typename ... on Issue { id viewerCanSetFields } } value: fieldValueByName(name: $name) { ...FieldValue } } } }` + fieldValueFragment
+	var response struct {
+		Node *struct {
+			ID         string
+			IsArchived bool
+			Project    *struct{ ID string }
+			Content    *rawContent
+			Value      *rawFieldValue
+		}
+	}
+	if err := c.graphql.DoWithContext(ctx, query, map[string]interface{}{"id": itemID, "name": field.Name}, &response); err != nil {
+		return Item{}, err
+	}
+	node := response.Node
+	if node == nil || node.ID != itemID || node.IsArchived || node.Project == nil || node.Project.ID != projectID {
+		return Item{}, ErrMutationItemUnavailable
+	}
+	item := Item{ID: itemID, Content: projectContent(node.Content)}
+	if node.Value != nil {
+		item.FieldValues = []FieldValue{node.Value.project()}
 	}
 	return item, nil
 }

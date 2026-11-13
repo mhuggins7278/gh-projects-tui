@@ -8,6 +8,31 @@ import (
 	"testing"
 )
 
+func TestReadMutationItemForProjectValidatesActiveMembership(t *testing.T) {
+	for _, tc := range []struct {
+		name, response string
+		wantErr        bool
+	}{
+		{"active", `{"node":{"id":"item","isArchived":false,"project":{"id":"project"},"content":{"__typename":"Issue","id":"issue","viewerCanSetFields":true}}}`, false},
+		{"archived", `{"node":{"id":"item","isArchived":true,"project":{"id":"project"}}}`, true},
+		{"wrong project", `{"node":{"id":"item","project":{"id":"other"}}}`, true},
+		{"missing", `{"node":null}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newClient(reviewGraphQLFunc(func(_ context.Context, _ string, _ map[string]interface{}, result interface{}) error {
+				return json.Unmarshal([]byte(tc.response), result)
+			}), &fakeREST{})
+			item, err := client.ReadMutationItemForProject(context.Background(), "project", "item", Field{Name: "Notes"})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("item=%#v err=%v", item, err)
+			}
+			if err == nil && (item.Content == nil || item.Content.ID != "issue") {
+				t.Fatalf("issue identity missing: %#v", item)
+			}
+		})
+	}
+}
+
 func TestIDOnlyProjectReadAvoidsFieldPagination(t *testing.T) {
 	for _, lean := range []bool{false, true} {
 		calls := 0

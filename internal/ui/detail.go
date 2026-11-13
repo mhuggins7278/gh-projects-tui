@@ -277,6 +277,9 @@ func detailLines(detail github.ItemDetail, width int, showAllFields bool) []stri
 	if detail.Content.Kind == "Issue" && detail.Content.State != "" {
 		lines = append(lines, "State: "+detail.Content.State)
 	}
+	if detail.Content.Kind == "Issue" && detail.Content.Author != "" {
+		lines = append(lines, "Author: @"+detail.Content.Author)
+	}
 	if detail.Content.URL != "" {
 		lines = append(lines, mutedStyle.Render(truncateText(detail.Content.URL, width-4)))
 	}

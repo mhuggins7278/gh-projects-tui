@@ -1708,6 +1708,9 @@ func TestSubmittedCommentAppearsAfterDetailRefresh(t *testing.T) {
 	if submitCmd == nil {
 		t.Fatal("comment submission did not start")
 	}
+	if len(model.detail.Comments) != 1 || model.detail.Comments[0].Author != "You (sending)" || model.detail.Comments[0].Body != "posted from the TUI" {
+		t.Fatal("pending comment was not displayed before submission")
+	}
 	updated, refreshCmd := model.Update(submitCmd())
 	model = updated.(Model)
 	if refreshCmd == nil {

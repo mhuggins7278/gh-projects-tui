@@ -58,7 +58,7 @@ func TestTableActionsConfirmSelectedItemAndRefresh(t *testing.T) {
 			}
 			updated, _ = m.Update(cmd())
 			m = updated.(Model)
-			if m.tableAction != nil || !m.itemsLoading || m.tableFocusID != "one" {
+			if m.tableAction != nil || m.itemsLoading || m.tableFocusID != "one" {
 				t.Fatalf("save/readback = action:%#v loading:%v focus:%q", m.tableAction, m.itemsLoading, m.tableFocusID)
 			}
 			if tc.remove {
@@ -104,6 +104,21 @@ func TestTableActionsCancelAndBlockUncertainRetries(t *testing.T) {
 	}
 }
 
+func TestTableActionOptimisticallyRemovesAndRestoresRejectedRow(t *testing.T) {
+	source := &fakeTableActionSource{err: &github.MutationError{Err: errors.New("denied"), Ambiguous: false}}
+	m := tableActionModel(source)
+	m, _ = editorKey(m, "a")
+	m, cmd := editorKey(m, "enter")
+	if len(m.items) != 1 || m.items[0].ID != "two" {
+		t.Fatal("row was not hidden while saving")
+	}
+	updated, _ := m.Update(cmd())
+	m = updated.(Model)
+	if len(m.items) != 2 || m.items[0].ID != "one" || m.tableAction != nil {
+		t.Fatal("rejected action did not restore the row")
+	}
+}
+
 func TestTableActionCompletionSurvivesReadGenerationChange(t *testing.T) {
 	source := &fakeTableActionSource{}
 	m := tableActionModel(source)
@@ -115,7 +130,7 @@ func TestTableActionCompletionSurvivesReadGenerationChange(t *testing.T) {
 	m.generation++
 	updated, next := m.Update(result)
 	m = updated.(Model)
-	if next == nil || m.tableAction != nil || !m.itemsLoading {
+	if next == nil || m.tableAction != nil || m.itemsLoading {
 		t.Fatalf("stale completion changed view: action=%#v status=%q", m.tableAction, m.status)
 	}
 }

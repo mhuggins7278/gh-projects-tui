@@ -99,8 +99,8 @@ func (m *Model) beginIssueMetadataEdit(kind github.IssueMetadataKind) tea.Cmd {
 			return nil
 		}
 	}
-	m.nextIssueAction++
-	editor := &issueMetadataEditor{id: m.nextIssueAction, scope: m.currentBoardReadScope(), issueID: m.detail.Content.ID, itemID: m.detailItemID, kind: kind, loading: true}
+	m.nextMetadataEditor++
+	editor := &issueMetadataEditor{id: m.nextMetadataEditor, scope: m.currentBoardReadScope(), issueID: m.detail.Content.ID, itemID: m.detailItemID, kind: kind, loading: true}
 	m.issueMetadataEditor = editor
 	m.status = "Loading " + string(kind) + "..."
 	return func() tea.Msg {
@@ -364,6 +364,13 @@ func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 		m.nextIssueAction++
 		pending := &issueActionState{id: m.nextIssueAction, issueID: editor.issueID, itemID: editor.itemID, scope: editor.scope, metadata: &metadataPending{kind: editor.kind}}
 		m.issueActionPending = pending
+		var selected []github.IssueMetadataOption
+		for id, enabled := range editor.selected {
+			if enabled {
+				selected = append(selected, editor.known[id])
+			}
+		}
+		m.applyIssueMetadata(editor.itemID, editor.kind, selected)
 		m.mutationLoading = true
 		m.status = "Saving " + string(editor.kind) + "..."
 		return m, func() tea.Msg {
@@ -499,6 +506,9 @@ func (m Model) updateMetadataReadback(msg metadataReadbackMsg) (tea.Model, tea.C
 		m.status = "Issue outcome unknown; press r to check again, esc returns to the board. Further writes are blocked."
 		return m, nil
 	}
+	if pending.scope.sameProject(m) {
+		m.applyIssueMetadata(pending.itemID, pending.metadata.kind, msg.data.Current)
+	}
 	delete(m.detailCache, pending.itemID)
 	if invalidator, ok := m.source.(interface{ InvalidateReads() }); ok {
 		invalidator.InvalidateReads()
@@ -520,10 +530,43 @@ func (m Model) updateMetadataReadback(msg metadataReadbackMsg) (tea.Model, tea.C
 		m.pendingIssueReload = &scope
 	}
 	if m.detailVisible && m.detailItemID == pending.itemID && pending.scope.matches(m) {
-		m.detailLoading = true
-		m.detailErr = nil
-		m.detailRequestID++
-		return m, m.loadItemDetailCmd(pending.itemID, m.detailRequestID, m.currentBoardReadScope())
+		return m, nil
 	}
 	return m, m.finishIssueViewReload()
+}
+
+func (m *Model) applyIssueMetadata(itemID string, kind github.IssueMetadataKind, options []github.IssueMetadataOption) {
+	names := make([]string, 0, len(options))
+	for _, option := range options {
+		names = append(names, option.Name)
+	}
+	sort.Strings(names)
+	value := strings.Join(names, ", ")
+	update := func(items []github.Item) {
+		for index := range items {
+			if items[index].ID != itemID {
+				continue
+			}
+			fields := append([]github.FieldValue(nil), items[index].FieldValues...)
+			for i := range fields {
+				if strings.EqualFold(fields[i].FieldName, string(kind)) {
+					fields[i].Value, fields[i].Available = value, true
+				}
+			}
+			items[index].FieldValues = fields
+		}
+	}
+	update(m.items)
+	for _, children := range m.tableSubIssues {
+		update(children.items)
+	}
+	if m.detailItemID != itemID || m.detail == nil {
+		return
+	}
+	for i := range m.detail.Fields {
+		field := &m.detail.Fields[i]
+		if strings.EqualFold(field.Field.Name, string(kind)) {
+			field.Value = &github.FieldValue{FieldID: field.Field.ID, FieldName: field.Field.Name, Value: value, Available: true}
+		}
+	}
 }

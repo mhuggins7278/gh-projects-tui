@@ -26,6 +26,25 @@ func (s *issueMembershipSource) SetIssueClosed(_ context.Context, _ string, clos
 	return nil
 }
 func (s *issueMembershipSource) IssueComment(context.Context, string, string) error { return nil }
+
+func TestIssueCloseProjectsStateAndRollsBackDefiniteFailure(t *testing.T) {
+	source := &issueMembershipSource{}
+	m := tableActionModel(source)
+	m.detailVisible, m.detailItemID = true, "one"
+	m.detail = &github.ItemDetail{Content: &github.Content{ID: "issue", Kind: "Issue", State: "OPEN"}}
+	m.items = []github.Item{{ID: "one", Content: &github.Content{ID: "issue", Kind: "Issue", State: "OPEN"}}}
+	m.issueActionConfirm, m.issueActionClosing = true, true
+	m, cmd := editorKey(m, "enter")
+	if cmd == nil || m.detail.Content.State != "CLOSED" || m.items[0].Content.State != "CLOSED" {
+		t.Fatal("close was not projected before submission")
+	}
+	pending := m.issueActionPending
+	updated, _ := m.Update(issueActionMsg{actionID: pending.id, itemID: "one", err: &github.MutationError{Err: errors.New("denied"), Ambiguous: false}})
+	m = updated.(Model)
+	if m.detail.Content.State != "OPEN" || m.items[0].Content.State != "OPEN" {
+		t.Fatal("rejected close was not rolled back")
+	}
+}
 func (s *issueMembershipSource) ReadIssueState(context.Context, string) (github.IssueState, error) {
 	state := "OPEN"
 	if s.closed {

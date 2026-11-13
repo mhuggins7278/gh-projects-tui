@@ -14,6 +14,7 @@ type issueActionState struct {
 	itemID, issueID string
 	scope           boardReadScope
 	closed, blocked bool
+	previousState   string
 	readID          uint64
 	metadata        *metadataPending
 }
@@ -99,6 +100,9 @@ func (m Model) updateIssueAction(msg issueActionMsg) (tea.Model, tea.Cmd) {
 			m.status = "Issue outcome unknown; checking its state before another write."
 			return m, m.startIssueReadback()
 		}
+		if msg.err != nil && pending.scope.sameProject(m) {
+			m.applyIssueState(pending.itemID, pending.issueID, pending.previousState)
+		}
 		m.issueActionPending = nil
 		m.issueActionRefreshing = false
 		m.mutationLoading = false
@@ -117,6 +121,17 @@ func (m Model) updateIssueAction(msg issueActionMsg) (tea.Model, tea.Cmd) {
 	}
 	m.mutationLoading = false
 	if msg.err != nil {
+		if msg.commentID != "" && m.detail != nil && m.detailItemID == msg.itemID {
+			for index := range m.detail.Comments {
+				if m.detail.Comments[index].ID == msg.commentID {
+					if github.IsAmbiguousMutationError(msg.err) {
+						m.detail.Comments[index].Author = "You (outcome unknown)"
+					} else {
+						m.detail.Comments[index].Author = "You (not sent)"
+					}
+				}
+			}
+		}
 		if github.IsAmbiguousMutationError(msg.err) {
 			if msg.closed == nil {
 				m.status = msg.status
@@ -150,6 +165,27 @@ func (m Model) updateIssueAction(msg issueActionMsg) (tea.Model, tea.Cmd) {
 	return m, m.loadItemDetailCmd(m.detailItemID, m.detailRequestID, m.currentBoardReadScope())
 }
 
+func (m *Model) applyIssueState(itemID, issueID, state string) {
+	update := func(items []github.Item) {
+		for i := range items {
+			if items[i].ID == itemID && items[i].Content != nil && items[i].Content.ID == issueID {
+				content := *items[i].Content
+				content.State = state
+				items[i].Content = &content
+			}
+		}
+	}
+	update(m.items)
+	for _, children := range m.tableSubIssues {
+		update(children.items)
+	}
+	if m.detailItemID == itemID && m.detail != nil && m.detail.Content != nil && m.detail.Content.ID == issueID {
+		content := *m.detail.Content
+		content.State = state
+		m.detail.Content = &content
+	}
+}
+
 // Closing/reopening can change server-filter membership. Keep the detail open
 // while the user reads it, then re-run the saved filter on returning to the board.
 func (m *Model) queueIssueViewReload(origin boardReadScope) tea.Cmd {
@@ -177,5 +213,5 @@ func (m *Model) finishIssueViewReload() tea.Cmd {
 		m.pendingMutationReload = scope
 		return nil
 	}
-	return m.startItemsLoadPreservingFocus()
+	return m.startMutationViewRefresh()
 }

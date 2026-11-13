@@ -15,12 +15,14 @@ type tableItemActionSource interface {
 }
 
 type tableActionState struct {
-	scope  boardReadScope
-	readID uint64
-	itemID string
-	label  string
-	remove bool
-	phase  string // confirm, saving, reconciling, blocked
+	scope       boardReadScope
+	readID      uint64
+	itemID      string
+	label       string
+	remove      bool
+	phase       string // confirm, saving, reconciling, blocked
+	beforeItems []github.Item
+	beforeFocus string
 }
 
 type tableActionMsg struct {
@@ -200,6 +202,18 @@ func (m *Model) confirmTableAction() tea.Cmd {
 		return nil
 	}
 	state.phase = "saving"
+	m.mutationRefreshID++
+	state.beforeItems = cloneItems(m.items)
+	state.beforeFocus = m.tableFocusID
+	visible := make([]github.Item, 0, len(m.items))
+	for _, item := range m.items {
+		if item.ID != state.itemID {
+			visible = append(visible, item)
+		}
+	}
+	m.items = visible
+	m.tableFocusID = ""
+	m.clampTableRow(true)
 	projectID := m.view.ProjectID
 	itemID := state.itemID
 	remove := state.remove
@@ -229,6 +243,11 @@ func (m Model) updateTableAction(msg tableActionMsg) (tea.Model, tea.Cmd) {
 		verb = "Removed from project"
 	}
 	if msg.err != nil && !github.IsAmbiguousMutationError(msg.err) {
+		if state.scope.matches(m) {
+			m.items = state.beforeItems
+			m.tableFocusID = state.beforeFocus
+			m.clampTableRow(true)
+		}
 		m.status = "Project item action failed: " + msg.err.Error()
 		m.tableAction = nil
 		return m, nil
@@ -265,7 +284,7 @@ func (m Model) updateTableAction(msg tableActionMsg) (tea.Model, tea.Cmd) {
 		m.pendingMutationReload = &scope
 		return m, nil
 	}
-	return m, m.startItemsLoadWithSpinner()
+	return m, m.startMutationViewRefresh()
 }
 
 type tableActionReadbackMsg struct {
@@ -324,7 +343,7 @@ func (m Model) updateTableActionReadback(msg tableActionReadbackMsg) (tea.Model,
 			m.pendingMutationReload = &scope
 			return m, nil
 		}
-		return m, m.startItemsLoadWithSpinner()
+		return m, m.startMutationViewRefresh()
 	}
 	return m, nil
 }
