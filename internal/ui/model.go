@@ -1610,32 +1610,50 @@ func (m Model) debugHint() string {
 func (m Model) helpText() string {
 	debugKey := ""
 	if m.debug {
-		debugKey = " · A api inspector"
+		debugKey = "\n  A                 API inspector"
 	}
 	actions := m.customActionHelp()
 	if actions != "" {
-		actions = strings.TrimSpace(actions) + "\n\n"
+		actions += "\n\n"
 	}
-	return actions + "Keys: j/k or up/down move · enter select · / filter/search (enter done, esc clear) ·\n" +
-		"esc/backspace back · p projects · v reload views · r refresh · o open selected item/project in browser ·\n" +
-		"? toggle help" + debugKey + " · q quit.\n" +
+	return actions + "Navigation\n" +
+		"  j/k or up/down    Move selection\n" +
+		"  enter             Select or open details\n" +
+		"  /                 Filter or search (enter finishes, esc clears)\n" +
+		"  esc/backspace     Go back\n" +
+		"  p / v / r         Projects / views / refresh\n" +
+		"  o                 Open in browser\n" +
+		"  ? / q             Toggle help / quit" + debugKey + "\n\n" +
 		m.layoutHelpText()
 }
 
 func (m Model) layoutHelpText() string {
 	if m.isTimeline() {
-		return "Timeline is read-only. j/k selects rows; h/l shifts the local three-month range; g returns to this month.\n/ searches loaded rows; enter opens detail; f toggles fields in detail. Saved display settings are unavailable."
+		return "Timeline (read-only)\n" +
+			"  j/k               Select rows\n" +
+			"  h/l / g           Shift months / return to this month\n" +
+			"  / / enter         Search loaded rows / open details\n" +
+			"  f                 Toggle fields in details\n" +
+			"  Saved display settings are unavailable."
 	}
+	detail := "\n\nIssue details\n" +
+		"  e / l / a         Edit project fields / labels / assignees\n" +
+		"  c / x             Comment / close or reopen"
 	if m.isTable() {
-		return "In tables, j/k moves rows, / searches, and enter opens detail. a archives; D removes from the project (confirm each).\n" +
-			"l/right expands sub-issues; h/left collapses or selects the parent; space toggles expansion.\n" +
-			"e edits saved text/number/date/select/iteration columns; multi-select uses space to toggle values.\n" +
-			"m changes writable groups; J/K reorders position-sorted top-level rows. Multi-select group moves/reordering are read-only.\n" +
-			"In issue detail, e edits project fields, l edits labels, a edits assignees, c comments, and x closes/reopens."
+		return "Table\n" +
+			"  j/k               Move rows\n" +
+			"  l/right           Expand sub-issues\n" +
+			"  h/left            Collapse or select parent\n" +
+			"  space             Toggle expansion\n" +
+			"  e                 Edit saved field (space toggles multi-select)\n" +
+			"  a / D             Archive / remove from project (confirm first)\n" +
+			"  m / J/K           Change group / reorder top-level rows\n" +
+			"  Reordering requires position sorting; multi-select groups are read-only." + detail
 	}
-	return "On the board, h/l changes lanes, j/k changes cards, / searches loaded cards, and enter opens detail.\n" +
-		"H/L moves cards and J/K reorders cards when the view is writable and fully loaded.\n" +
-		"In issue detail, e edits project fields, l edits labels, a edits assignees, c comments, and x closes/reopens."
+	return "Board\n" +
+		"  h/l / j/k         Change lanes / cards\n" +
+		"  H/L / J/K         Move / reorder cards\n" +
+		"  Moving and reordering require a writable, fully loaded view." + detail
 }
 
 func (m Model) apiInspector() string {

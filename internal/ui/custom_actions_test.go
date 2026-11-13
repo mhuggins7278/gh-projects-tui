@@ -128,6 +128,10 @@ func TestCustomActionsAreVisibleAndHelpScrolls(t *testing.T) {
 	if !m.showHelp || !strings.Contains(m.View().Content, "Pin issue") {
 		t.Fatalf("custom action missing from visible help: visible=%v view=%q", m.showHelp, m.View().Content)
 	}
+	if help := m.helpText(); !strings.Contains(help, "Custom actions\n  ctrl+p") ||
+		!strings.Contains(help, "\nNavigation\n") || !strings.Contains(help, "\nTable\n") {
+		t.Fatalf("help sections missing: %q", help)
+	}
 	if height := lipgloss.Height(m.View().Content); height > m.height {
 		t.Fatalf("help extends past terminal: %d > %d", height, m.height)
 	}

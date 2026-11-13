@@ -123,8 +123,11 @@ After pulling updates, rerun `go run` or rebuild your local binary.
 ### Custom actions
 
 You can bind commands to issue or pull request keys in
-`~/.config/gh-projects-tui/config.yml` (the `gh-projects-tui/config.yml` file
-under your platform's user configuration directory). For example:
+`~/.config/gh-projects-tui/config.yml` on macOS and Linux, or
+`$XDG_CONFIG_HOME/gh-projects-tui/config.yml` when `XDG_CONFIG_HOME` is set.
+Other platforms use their standard user configuration directory. On macOS,
+move any existing config from `~/Library/Application Support/gh-projects-tui/`
+to the new location, or specify its path with `--config`. For example:
 
 ```yaml
 actions:

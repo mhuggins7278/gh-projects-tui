@@ -347,9 +347,9 @@ func (m Model) customActionHelp() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\nCustom actions:\n")
+	b.WriteString("Custom actions\n")
 	for _, action := range m.customActions {
-		fmt.Fprintf(&b, "%s  %s (%s)\n", action.Key, action.Name, action.On)
+		fmt.Fprintf(&b, "  %-16s  %s (%s)\n", action.Key, action.Name, action.On)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

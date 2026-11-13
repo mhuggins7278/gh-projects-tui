@@ -7,6 +7,31 @@ import (
 	"testing"
 )
 
+func TestDarwinActionsConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	dir, err := actionsConfigDir("darwin")
+	if err != nil || dir != filepath.Join(home, ".config") {
+		t.Fatalf("default dir=%q err=%v", dir, err)
+	}
+	xdg := filepath.Join(home, "custom-config")
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	dir, err = actionsConfigDir("darwin")
+	if err != nil || dir != xdg {
+		t.Fatalf("XDG dir=%q err=%v", dir, err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "relative")
+	if _, err := actionsConfigDir("darwin"); err == nil {
+		t.Fatal("relative XDG_CONFIG_HOME was accepted")
+	}
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	if _, err := actionsConfigDir("darwin"); err == nil {
+		t.Fatal("missing HOME was accepted")
+	}
+}
+
 func TestLoadActions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yml")
 	if actions, err := LoadActions(path, false); err != nil || len(actions) != 0 {
