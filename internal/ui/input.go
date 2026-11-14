@@ -69,8 +69,8 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.showHelp = !m.showHelp
 			return m, nil
 		}
-	case "A":
-		if !m.filtering && !m.commentEditing && m.debug {
+	case "F":
+		if !m.filtering && !m.commentEditing && m.debug && !m.detailVisible {
 			m.showAPI = !m.showAPI
 			return m, nil
 		}
@@ -96,7 +96,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if m.screen == screenBoard {
-		if m.isTable() && m.tableAction != nil && m.tableAction.phase == "confirm" {
+		if m.tableAction != nil && m.tableAction.phase == "confirm" {
 			return m.updateTableConfirmationKey(key)
 		}
 		if m.isTable() && m.tableMove != nil {
@@ -104,6 +104,22 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.detailVisible {
 			return m.updateDetailKey(key)
+		}
+		if !m.isTimeline() && !m.showAPI {
+			switch key {
+			case "a":
+				return m, m.beginIssueMetadataEdit(github.IssueAssignees)
+			case "t", ".":
+				return m, m.beginIssueMetadataEdit(github.IssueLabels)
+			case "A":
+				m.beginTableAction(false)
+				return m, nil
+			case "D", "delete":
+				m.beginTableAction(true)
+				return m, nil
+			case "e":
+				return m, m.beginSelectedFieldEdit()
+			}
 		}
 		if m.isTimeline() {
 			if cmd, handled := m.handleTimelineKey(key); handled {

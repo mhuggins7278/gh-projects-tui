@@ -204,6 +204,7 @@ type Model struct {
 	tableAction           *tableActionState
 	tableMove             *tableMoveState
 	tableEditor           *tableFieldEditor
+	nextFieldRequest      uint64
 	tableSubIssues        map[string]*subIssueState
 	width                 int
 	height                int
@@ -406,6 +407,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.startItemsLoadWithSpinner()
 	case itemsPageMsg:
 		return m.updateItems(msg)
+	case selectedFieldsLoadedMsg:
+		return m.updateSelectedFieldsLoaded(msg)
 	case mutationViewRefreshMsg:
 		return m.updateMutationViewRefresh(msg)
 	case subIssuesMsg:
@@ -1552,10 +1555,16 @@ func (m Model) footerHints() string {
 	if m.tableEditor != nil {
 		return "j/k choose · space toggle multi-select · ctrl+u clear text · enter save · esc cancel" + m.debugHint()
 	}
+	if m.issueMetadataEditor != nil {
+		if m.issueMetadataEditor.searching {
+			return "type search · enter choose · esc stop searching" + m.debugHint()
+		}
+		return "/ search · space toggle · enter save · esc cancel" + m.debugHint()
+	}
 	if m.isTable() && m.tableMove != nil {
 		return "j/k choose group · enter move · esc cancel" + m.debugHint()
 	}
-	if m.isTable() && m.tableAction != nil {
+	if m.tableAction != nil {
 		switch m.tableAction.phase {
 		case "confirm":
 			return "enter confirm · esc cancel" + m.debugHint()
@@ -1595,18 +1604,25 @@ func (m Model) footerHints() string {
 		if m.isTimeline() {
 			return "j/k rows · h/l months · g today · enter details · / search · r refresh · o browser · v views · ? help · q quit" + m.debugHint()
 		}
-		if m.isTable() {
-			return "j/k rows · h/l collapse/expand · enter details · e edit field · a archive · D remove · m group · J/K reorder · / search · r refresh · o browser · ? help · q quit" + m.debugHint()
+		labels := "t labels"
+		for _, action := range m.customActions {
+			if action.Key == "t" {
+				labels = ". labels"
+				break
+			}
 		}
-		return "h/l lanes · j/k cards · H/L move · J/K reorder · / search · enter details · v views · p projects · r refresh · o open in browser · ? help · q quit" + m.debugHint()
+		if m.isTable() {
+			return "j/k rows · h/l expand · enter details · e fields · a assign · " + labels + " · A archive · D remove · m group · ? help" + m.debugHint()
+		}
+		return "h/l lanes · j/k cards · H/L move · J/K reorder · e fields · a assign · " + labels + " · A archive · D remove · ? help" + m.debugHint()
 	default:
 		return "Loading... q to quit"
 	}
 }
 
 func (m Model) debugHint() string {
-	if m.debug {
-		return " · A api"
+	if m.debug && !m.detailVisible {
+		return " · F api"
 	}
 	return ""
 }
@@ -1614,7 +1630,7 @@ func (m Model) debugHint() string {
 func (m Model) helpText() string {
 	debugKey := ""
 	if m.debug {
-		debugKey = "\n  A                 API inspector"
+		debugKey = "\n  F                 API inspector"
 	}
 	actions := m.customActionHelp()
 	if actions != "" {
@@ -1649,14 +1665,16 @@ func (m Model) layoutHelpText() string {
 			"  l/right           Expand sub-issues\n" +
 			"  h/left            Collapse or select parent\n" +
 			"  space             Toggle expansion\n" +
-			"  e                 Edit saved field (space toggles multi-select)\n" +
-			"  a / D             Archive / remove from project (confirm first)\n" +
+			"  e / a / t (.)     Edit field / assignees / labels\n" +
+			"  A / D             Archive / remove from project (confirm first)\n" +
 			"  m / J/K           Change group / reorder top-level rows\n" +
 			"  Reordering requires position sorting; multi-select groups are read-only." + detail
 	}
 	return "Board\n" +
 		"  h/l / j/k         Change lanes / cards\n" +
 		"  H/L / J/K         Move / reorder cards\n" +
+		"  e / a / t (.)     Edit field / assignees / labels\n" +
+		"  A / D             Archive / remove from project (confirm first)\n" +
 		"  Moving and reordering require a writable, fully loaded view." + detail
 }
 

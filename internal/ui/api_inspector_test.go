@@ -37,10 +37,10 @@ func TestAPIToggleShowsLedgerBreakdown(t *testing.T) {
 	}
 	model := feedDiscovery(t, newPickerModel(source), source.fakePickerSource)
 	model.SetDebug(true)
-	updated, _ := model.Update(keyPress("A"))
+	updated, _ := model.Update(keyPress("F"))
 	result := updated.(Model)
 	if !result.showAPI {
-		t.Fatal("A did not open the API inspector")
+		t.Fatal("F did not open the API inspector")
 	}
 	content := ansi.Strip(result.View().Content)
 	if !strings.Contains(content, "HTTP requests this run: 700") {
@@ -52,16 +52,16 @@ func TestAPIToggleShowsLedgerBreakdown(t *testing.T) {
 	if !strings.Contains(content, "400 pts") || !strings.Contains(content, "700 query") || !strings.Contains(content, "points measured") {
 		t.Fatalf("inspector missing point telemetry: %q", content)
 	}
-	updated, _ = result.Update(keyPress("A"))
+	updated, _ = result.Update(keyPress("F"))
 	if updated.(Model).showAPI {
-		t.Fatal("second A did not close the inspector")
+		t.Fatal("second F did not close the inspector")
 	}
 }
 
 func TestAPIInspectorWithoutTelemetry(t *testing.T) {
 	model := feedDiscovery(t, newPickerModel(fakePickerSource{discovery: testDiscovery()}), fakePickerSource{discovery: testDiscovery()})
 	model.SetDebug(true)
-	updated, _ := model.Update(keyPress("A"))
+	updated, _ := model.Update(keyPress("F"))
 	content := ansi.Strip(updated.(Model).View().Content)
 	if !strings.Contains(content, "telemetry is unavailable") {
 		t.Fatalf("expected unavailable message, got: %q", content)
@@ -74,10 +74,10 @@ func TestAPIToggleIgnoredWithoutDebug(t *testing.T) {
 		status:           github.APIStatus{Requests: 700, Remaining: 4200},
 	}
 	model := feedDiscovery(t, newPickerModel(source), source.fakePickerSource)
-	updated, _ := model.Update(keyPress("A"))
+	updated, _ := model.Update(keyPress("F"))
 	result := updated.(Model)
 	if result.showAPI {
-		t.Fatal("A should do nothing without --debug")
+		t.Fatal("F should do nothing without --debug")
 	}
 	if strings.Contains(ansi.Strip(result.View().Content), "API requests this run") {
 		t.Fatal("inspector leaked without --debug")
@@ -89,9 +89,9 @@ func TestAPIToggleIgnoredWhileFiltering(t *testing.T) {
 	model := feedDiscovery(t, newPickerModel(source), source)
 	updated, _ := model.Update(keyPress("/"))
 	model = updated.(Model)
-	updated, _ = model.Update(keyPress("A"))
-	// While filtering, "A" is filter text, not the inspector toggle.
+	updated, _ = model.Update(keyPress("F"))
+	// While filtering, "F" is filter text, not the inspector toggle.
 	if updated.(Model).showAPI {
-		t.Fatal("A should not toggle the inspector while filtering")
+		t.Fatal("F should not toggle the inspector while filtering")
 	}
 }

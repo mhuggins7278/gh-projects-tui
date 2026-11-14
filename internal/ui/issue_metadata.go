@@ -25,6 +25,7 @@ type issueMetadataEditor struct {
 	scope             boardReadScope
 	issueID, itemID   string
 	kind              github.IssueMetadataKind
+	fromDetail        bool
 	loading           bool
 	options           []github.IssueMetadataOption
 	initial, selected map[string]bool
@@ -80,7 +81,8 @@ func (m *Model) clearIssueMetadataEditor() {
 }
 
 func (m *Model) beginIssueMetadataEdit(kind github.IssueMetadataKind) tea.Cmd {
-	if m.isTimeline() || m.detail == nil || m.detail.Content == nil || m.detail.Content.Kind != "Issue" || m.detail.Content.ID == "" {
+	item, ok := m.selectedItem()
+	if m.isTimeline() || !ok || item.Content == nil || item.Content.Kind != "Issue" || item.Content.ID == "" {
 		m.status = "This action is available for issues only"
 		return nil
 	}
@@ -100,7 +102,7 @@ func (m *Model) beginIssueMetadataEdit(kind github.IssueMetadataKind) tea.Cmd {
 		}
 	}
 	m.nextMetadataEditor++
-	editor := &issueMetadataEditor{id: m.nextMetadataEditor, scope: m.currentBoardReadScope(), issueID: m.detail.Content.ID, itemID: m.detailItemID, kind: kind, loading: true}
+	editor := &issueMetadataEditor{id: m.nextMetadataEditor, scope: m.currentBoardReadScope(), issueID: item.Content.ID, itemID: item.ID, kind: kind, loading: true, fromDetail: m.detailVisible}
 	m.issueMetadataEditor = editor
 	m.status = "Loading " + string(kind) + "..."
 	return func() tea.Msg {
@@ -111,9 +113,20 @@ func (m *Model) beginIssueMetadataEdit(kind github.IssueMetadataKind) tea.Cmd {
 	}
 }
 
+func (m Model) metadataEditorActive(editor *issueMetadataEditor) bool {
+	if editor == nil || !editor.scope.matches(m) {
+		return false
+	}
+	if editor.fromDetail {
+		return m.detailVisible && m.detailItemID == editor.itemID
+	}
+	item, ok := m.selectedItem()
+	return !m.detailVisible && ok && item.ID == editor.itemID && item.Content != nil && item.Content.ID == editor.issueID
+}
+
 func (m Model) updateMetadataLoaded(msg metadataLoadedMsg) (tea.Model, tea.Cmd) {
 	editor := m.issueMetadataEditor
-	if editor == nil || editor.id != msg.id || !editor.scope.matches(m) || !m.detailVisible || m.detailItemID != editor.itemID {
+	if !m.metadataEditorActive(editor) || editor.id != msg.id {
 		return m, nil
 	}
 	if msg.err != nil {
@@ -225,7 +238,7 @@ func (m *Model) startAssigneeSearch(after string) tea.Cmd {
 
 func (m Model) updateAssigneeSearch(msg assigneeSearchMsg) (tea.Model, tea.Cmd) {
 	editor := m.issueMetadataEditor
-	if editor == nil || editor.id != msg.editorID || editor.searchRevision != msg.revision || !editor.scope.matches(m) || !m.detailVisible || m.detailItemID != editor.itemID {
+	if !m.metadataEditorActive(editor) || editor.id != msg.editorID || editor.searchRevision != msg.revision {
 		return m, nil
 	}
 	editor.searchCancel = nil
@@ -332,7 +345,7 @@ func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "enter":
-		if !editor.scope.matches(m) || !m.detailVisible || m.detailItemID != editor.itemID {
+		if !m.metadataEditorActive(editor) {
 			m.issueMetadataEditor = nil
 			m.status = "View changed; select the issue again"
 			return m, nil
@@ -563,6 +576,9 @@ func (m *Model) applyIssueMetadata(itemID string, kind github.IssueMetadataKind,
 	if m.detailItemID != itemID || m.detail == nil {
 		return
 	}
+	detail := *m.detail
+	detail.Fields = append([]github.DetailField(nil), m.detail.Fields...)
+	m.detail = &detail
 	for i := range m.detail.Fields {
 		field := &m.detail.Fields[i]
 		if strings.EqualFold(field.Field.Name, string(kind)) {

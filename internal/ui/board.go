@@ -873,6 +873,16 @@ func (m *Model) moveBoardCard(delta int) {
 func (m Model) renderBoard(b *strings.Builder) {
 	board := &strings.Builder{}
 	m.renderBoardContent(board)
+	if !m.detailVisible && !m.isTable() && m.tableEditor != nil {
+		panel := detailFrameStyle.Width(m.detailPanelWidth()).Height(m.detailPanelHeight()).Render(m.renderTableEditor())
+		b.WriteString(renderPopover(board.String(), panel, m.frameContentWidth(), m.bodyCanvasHeight()))
+		return
+	}
+	if !m.detailVisible && m.issueMetadataEditor != nil {
+		panel := detailFrameStyle.Width(m.detailPanelWidth()).Height(m.detailPanelHeight()).Render(m.renderIssueMetadataEditor())
+		b.WriteString(renderPopover(board.String(), panel, m.frameContentWidth(), m.bodyCanvasHeight()))
+		return
+	}
 	if m.detailVisible {
 		b.WriteString(renderPopover(board.String(), m.renderDetailPanel(), m.frameContentWidth(), m.bodyCanvasHeight()))
 		return

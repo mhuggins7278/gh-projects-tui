@@ -204,9 +204,9 @@ them. Command output is not retained by the app after the terminal is restored.
 - Saved visible fields, supported field sorting, and local card search.
 - Tables render saved fields, single-field groups, linked PRs, and expandable
   sub-issue hierarchies. Nested children load on demand, including children
-  outside the saved filter. Writable tables can archive or remove project items,
-  change groups, edit saved text/number/date/select/iteration columns, and
-  reorder position-sorted top-level rows. Standard columns include labels,
+  outside the saved filter. Writable boards and tables can archive or remove
+  project items and edit text/number/date/select/iteration fields. Tables can
+  change groups and reorder position-sorted top-level rows. Standard columns include labels,
   milestone, repository, reviewers, assignees, and linked PRs.
 - Issue, pull request, and draft details, including Markdown bodies and project
   fields. Details are cached in memory until refresh or view changes.
@@ -237,10 +237,11 @@ the saved state. Use `r` to pick up external changes.
 | `enter` | Select a picker entry or open item details |
 | `H/L` (uppercase) | Move the selected card to an adjacent lane |
 | `J/K` (uppercase) | Reorder the selected card within its lane |
-| `e` (table) | Choose a saved field to edit; enter saves, esc cancels; space toggles multi-select options |
+| `e` | Choose a project field to edit; enter saves, esc cancels; space toggles multi-select options |
 | `m` (table) | Pick a saved group for the selected row; `j/k` choose and `enter` moves |
 | `J/K` (table) | Reorder the selected top-level row within its group when project-position sorted |
-| `a` / `D` (table) | Archive / remove the selected item from this project (confirmation required) |
+| `a` / `t` | Edit assignees / labels on the selected issue |
+| `A` / `D` | Archive / remove the selected item from this project (confirmation required) |
 | `/` | Filter picker entries or search loaded cards |
 | `enter` / `esc` while searching | Finish search / clear search |
 | `esc` or `backspace` | Go back |
@@ -250,6 +251,10 @@ the saved state. Use `r` to pick up external changes.
 | `o` | Open the selected item or project in a browser |
 | `?` | Toggle help |
 | `q` or `ctrl+c` | Quit |
+
+On a board or table, `.` also opens labels. This remains available when a custom
+action uses `t`. With `--debug`, `F` opens the API inspector outside the
+detail panel.
 
 In item details, `j/k` scrolls, `f` toggles all fields (including unset/unavailable
 values), and `esc` closes the panel. For GitHub issues on writable boards and tables,
@@ -298,7 +303,7 @@ offer these issue actions.
   API cooldowns pace writes; `--debug` shows their countdown and request telemetry.
 - Table support is an early preview; full parity with GitHub's table UI is not
   implemented. Table actions require update access, a complete item load, and
-  no local search. Field editing uses the saved visible columns; empty text,
+  no local search. Field editing loads the available project fields; empty text,
   number, or date input clears the field. Dates must be `YYYY-MM-DD`, and
   numbers must be finite. Issue-backed fields require issue field permissions
   and are saved on the issue; project-only fields use project permissions.

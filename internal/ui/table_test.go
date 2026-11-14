@@ -51,7 +51,7 @@ func TestTableActionsRespectProjectPermissions(t *testing.T) {
 	if cmd != nil || result.mutationLoading || result.status != "This project is read-only" {
 		t.Fatalf("table mutation state = %#v, cmd nil = %v", result, cmd == nil)
 	}
-	for _, key := range []string{"H", "L", "K", "a", "D", "h", "l", "left", "right"} {
+	for _, key := range []string{"H", "L", "K", "A", "D", "h", "l", "left", "right"} {
 		updated, cmd = result.Update(keyPress(key))
 		result = updated.(Model)
 		if cmd != nil || result.mutationLoading || result.tableAction != nil || (result.status != "This project is read-only" && result.status != "") {

@@ -179,6 +179,9 @@ func (m Model) updateCommentKey(key string) (tea.Model, tea.Cmd) {
 		id, itemID, gen := m.detail.Content.ID, m.detailItemID, m.generation
 		commentID := fmt.Sprintf("pending-comment-%d", m.mutationRefreshID)
 		if m.detail.CommentsLoaded {
+			detail := *m.detail
+			detail.Comments = append([]github.IssueComment(nil), m.detail.Comments...)
+			m.detail = &detail
 			m.detail.Comments = append(m.detail.Comments, github.IssueComment{ID: commentID, Author: "You (sending)", Body: body})
 		}
 		return m, func() tea.Msg {

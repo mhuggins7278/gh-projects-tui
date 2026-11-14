@@ -43,11 +43,11 @@ func (s *targetedFieldSource) ReadMutationItemForProject(_ context.Context, proj
 
 func TestTargetedPreflightRemovedItemDoesNotBlockWrites(t *testing.T) {
 	m, base := editorModel(github.Field{ID: "notes", Name: "Notes", DataType: "TEXT"})
-	base.canonical = nil
 	m.source = &targetedFieldSource{fieldEditorSource: base}
 	for _, key := range []string{"e", "enter", "ctrl+u", "n"} {
 		m, _ = editorKey(m, key)
 	}
+	base.canonical = nil
 	m, cmd := editorKey(m, "enter")
 	m = runMembershipReads(t, m, cmd)
 	if m.mutationSession != nil || m.mutationLoading || len(base.writes) != 0 || len(m.items) != 0 {
@@ -109,6 +109,19 @@ func (s *fieldEditorSource) PageItems(context.Context, github.Owner, int, string
 	s.reads++
 	return github.ItemsPage{Items: cloneItems(s.canonical)}, nil
 }
+func (s *fieldEditorSource) LoadItemDetail(_ context.Context, _ github.Owner, _ int, id string) (github.ItemDetail, error) {
+	for _, item := range s.canonical {
+		if item.ID == id {
+			var value *github.FieldValue
+			if len(item.FieldValues) > 0 {
+				fieldValue := item.FieldValues[0]
+				value = &fieldValue
+			}
+			return github.ItemDetail{ID: id, Content: item.Content, Fields: []github.DetailField{{Field: s.field, Value: value}}}, nil
+		}
+	}
+	return github.ItemDetail{}, errors.New("item unavailable")
+}
 func (s *fieldEditorSource) UpdateItemFieldValue(ctx context.Context, r github.ItemFieldValueUpdate) error {
 	if _, ok := ctx.Deadline(); !ok {
 		return errors.New("write missing deadline")
@@ -149,6 +162,9 @@ func editorKey(m Model, key string) (Model, tea.Cmd) {
 		msg = tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl})
 	}
 	next, cmd := m.Update(msg)
+	if key == "e" && next.(Model).tableEditor != nil && next.(Model).tableEditor.loading && cmd != nil {
+		next, cmd = next.Update(cmd())
+	}
 	return next.(Model), cmd
 }
 
@@ -169,6 +185,57 @@ func TestTableFieldEditorTextAndPasteDoNotTriggerShortcuts(t *testing.T) {
 	m = runMembershipReads(t, m, cmd)
 	if len(s.writes) != 1 || s.writes[0].Value.Text == nil || *s.writes[0].Value.Text != "q?rAv  pasted" || m.tableEditor != nil || m.mutationSession != nil {
 		t.Fatalf("writes=%#v status=%s", s.writes, m.status)
+	}
+}
+
+func TestSelectedFieldEditorWorksOnBoardAndTable(t *testing.T) {
+	for _, layout := range []github.ViewLayout{github.BoardLayout, github.TableLayout} {
+		t.Run(string(layout), func(t *testing.T) {
+			field := github.Field{ID: "notes", Name: "Notes", DataType: "TEXT"}
+			m, source := editorModel(field)
+			m.view.Layout = layout
+			if layout == github.BoardLayout {
+				m.view.GroupByFields = writableStatusView().GroupByFields
+			}
+			m.view.Fields = nil
+			updated, load := m.Update(keyPress("e"))
+			m = updated.(Model)
+			if load == nil || m.detailVisible || m.tableEditor == nil || !m.tableEditor.loading {
+				t.Fatalf("field load did not start: %s", m.status)
+			}
+			updated, _ = m.Update(load())
+			m = updated.(Model)
+			if m.tableEditor == nil || len(m.tableEditor.fields) != 1 {
+				t.Fatalf("hidden field missing: %s", m.status)
+			}
+			m, _ = editorKey(m, "enter")
+			m, _ = editorKey(m, "ctrl+u")
+			m, _ = editorKey(m, "n")
+			m, cmd := editorKey(m, "enter")
+			m = runMembershipReads(t, m, cmd)
+			if len(source.writes) != 1 || m.detailVisible {
+				t.Fatalf("writes=%v status=%s", source.writes, m.status)
+			}
+		})
+	}
+}
+
+func TestSelectedFieldEditorIgnoresCancelledLoad(t *testing.T) {
+	m, _ := editorModel(github.Field{ID: "notes", Name: "Notes", DataType: "TEXT"})
+	updated, old := m.Update(keyPress("e"))
+	m = updated.(Model)
+	m, _ = editorKey(m, "esc")
+	updated, current := m.Update(keyPress("e"))
+	m = updated.(Model)
+	updated, _ = m.Update(old())
+	m = updated.(Model)
+	if m.tableEditor == nil || !m.tableEditor.loading {
+		t.Fatal("cancelled response replaced new editor")
+	}
+	updated, _ = m.Update(current())
+	m = updated.(Model)
+	if m.tableEditor == nil || m.tableEditor.loading {
+		t.Fatal("current response was not applied")
 	}
 }
 

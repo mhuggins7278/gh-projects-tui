@@ -836,6 +836,21 @@ func TestLoadItemDetailFetchesIssueCommentsOnDemand(t *testing.T) {
 	}
 }
 
+func TestLoadItemFieldsSkipsIssueComments(t *testing.T) {
+	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+		func(_ string, _ map[string]interface{}, response interface{}) error {
+			result := response.(*itemDetailResponse)
+			result.Organization = &detailOwner{Project: &detailProject{}}
+			result.Node = &rawDetailItem{ID: "project-item", Content: &rawContent{Kind: "Issue", ID: "issue-node"}}
+			return nil
+		},
+	}}
+	detail, err := newClient(graphql, &fakeREST{}).LoadItemFields(context.Background(), Owner{Login: "org", Kind: OrganizationOwner}, 1, "project-item")
+	if err != nil || detail.ID != "project-item" || detail.CommentsLoaded || len(graphql.queries) != 1 {
+		t.Fatalf("detail=%#v err=%v queries=%d", detail, err, len(graphql.queries))
+	}
+}
+
 func TestJSONFixtureSkipsNullNodes(t *testing.T) {
 	var response projectsResponse
 	if err := json.Unmarshal([]byte(`{"viewer":{"login":"me","projectsV2":{"nodes":[null,{"id":"p1","number":1,"closed":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`), &response); err != nil {

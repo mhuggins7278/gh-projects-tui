@@ -40,7 +40,7 @@ func TestTableActionsConfirmSelectedItemAndRefresh(t *testing.T) {
 	for _, tc := range []struct {
 		key    string
 		remove bool
-	}{{"a", false}, {"D", true}} {
+	}{{"A", false}, {"D", true}} {
 		t.Run(tc.key, func(t *testing.T) {
 			source := &fakeTableActionSource{}
 			m := tableActionModel(source)
@@ -72,18 +72,45 @@ func TestTableActionsConfirmSelectedItemAndRefresh(t *testing.T) {
 	}
 }
 
+func TestBoardArchiveAndRemoveShortcuts(t *testing.T) {
+	for _, key := range []string{"A", "D"} {
+		t.Run(key, func(t *testing.T) {
+			source := &fakeTableActionSource{}
+			m := tableActionModel(source)
+			m.view.Layout = github.BoardLayout
+			m.view.GroupByFields = writableStatusView().GroupByFields
+			m, _ = editorKey(m, key)
+			if m.tableAction == nil || m.tableAction.itemID != "one" || m.tableAction.phase != "confirm" {
+				t.Fatalf("confirmation missing: %s", m.status)
+			}
+			m, cmd := editorKey(m, "enter")
+			if cmd == nil || len(m.items) != 1 || m.items[0].ID != "two" {
+				t.Fatal("board item was not removed optimistically")
+			}
+			updated, _ := m.Update(cmd())
+			m = updated.(Model)
+			if m.tableAction != nil {
+				t.Fatal("action did not finish")
+			}
+			if key == "A" && len(source.archive) != 1 || key == "D" && len(source.remove) != 1 {
+				t.Fatalf("archive=%v remove=%v", source.archive, source.remove)
+			}
+		})
+	}
+}
+
 func TestTableActionsCancelAndBlockUncertainRetries(t *testing.T) {
 	source := &fakeTableActionSource{err: &github.MutationError{Err: errors.New("connection lost"), Ambiguous: true}}
 	m := tableActionModel(source)
 	original := cloneItems(m.items)
-	updated, _ := m.Update(keyPress("a"))
+	updated, _ := m.Update(keyPress("A"))
 	m = updated.(Model)
 	updated, _ = m.Update(keyPress("esc"))
 	m = updated.(Model)
 	if m.tableAction != nil || len(source.archive) != 0 {
 		t.Fatal("cancel submitted an action")
 	}
-	updated, _ = m.Update(keyPress("a"))
+	updated, _ = m.Update(keyPress("A"))
 	m = updated.(Model)
 	updated, cmd := m.Update(keyPress("enter"))
 	m = updated.(Model)
@@ -97,7 +124,7 @@ func TestTableActionsCancelAndBlockUncertainRetries(t *testing.T) {
 	if m.tableAction == nil || m.tableAction.phase != "blocked" {
 		t.Fatalf("uncertain result was not blocked: %#v", m.tableAction)
 	}
-	updated, cmd = m.Update(keyPress("a"))
+	updated, cmd = m.Update(keyPress("A"))
 	m = updated.(Model)
 	if cmd != nil || len(source.archive) != 1 {
 		t.Fatal("duplicate action was submitted")
@@ -107,7 +134,7 @@ func TestTableActionsCancelAndBlockUncertainRetries(t *testing.T) {
 func TestTableActionOptimisticallyRemovesAndRestoresRejectedRow(t *testing.T) {
 	source := &fakeTableActionSource{err: &github.MutationError{Err: errors.New("denied"), Ambiguous: false}}
 	m := tableActionModel(source)
-	m, _ = editorKey(m, "a")
+	m, _ = editorKey(m, "A")
 	m, cmd := editorKey(m, "enter")
 	if len(m.items) != 1 || m.items[0].ID != "two" {
 		t.Fatal("row was not hidden while saving")
@@ -122,7 +149,7 @@ func TestTableActionOptimisticallyRemovesAndRestoresRejectedRow(t *testing.T) {
 func TestTableActionCompletionSurvivesReadGenerationChange(t *testing.T) {
 	source := &fakeTableActionSource{}
 	m := tableActionModel(source)
-	updated, _ := m.Update(keyPress("a"))
+	updated, _ := m.Update(keyPress("A"))
 	m = updated.(Model)
 	updated, cmd := m.Update(keyPress("enter"))
 	m = updated.(Model)

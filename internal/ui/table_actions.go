@@ -170,8 +170,8 @@ func (m Model) tableActionUnavailable() string {
 	if m.issueActionPending != nil {
 		return "Reconcile the pending issue action first"
 	}
-	if !m.isTable() || m.view.ProjectID == "" || m.selectedOwner == nil || m.selectedProject == nil {
-		return "A loaded table and project identity are required"
+	if m.view == nil || m.view.ProjectID == "" || m.selectedOwner == nil || m.selectedProject == nil {
+		return "A loaded project and view are required"
 	}
 	if !m.view.ViewerCanUpdate {
 		return "This project is read-only"
@@ -213,7 +213,12 @@ func (m *Model) confirmTableAction() tea.Cmd {
 	}
 	m.items = visible
 	m.tableFocusID = ""
-	m.clampTableRow(true)
+	if m.isTable() {
+		m.clampTableRow(true)
+	} else {
+		m.boardFocusID = ""
+		m.clampBoardCursor()
+	}
 	projectID := m.view.ProjectID
 	itemID := state.itemID
 	remove := state.remove
@@ -394,9 +399,6 @@ func (m *Model) handleTableNavigationKey(key string) (tea.Cmd, bool) {
 			}
 		}
 		return m.expandTableRow(), true
-	case "e":
-		m.beginTableFieldEdit()
-		return nil, true
 	case "m":
 		m.beginTableMove()
 		return nil, true
@@ -408,12 +410,6 @@ func (m *Model) handleTableNavigationKey(key string) (tea.Cmd, bool) {
 			return m.reorderBoardItem(1), true
 		}
 		return m.reorderBoardItem(-1), true
-	case "a":
-		m.beginTableAction(false)
-		return nil, true
-	case "D", "delete":
-		m.beginTableAction(true)
-		return nil, true
 	case "j", "down":
 		m.moveTableRow(1)
 		return nil, true

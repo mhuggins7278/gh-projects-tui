@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mhuggins7278/gh-projects-tui/internal/config"
 	"github.com/mhuggins7278/gh-projects-tui/internal/github"
 )
 
@@ -83,12 +84,63 @@ func TestAssigneeSearchRetainsSelectionsAcrossQueries(t *testing.T) {
 func TestMetadataSelectionAppearsBeforeWrite(t *testing.T) {
 	m, _ := metadataModel()
 	m.detail.Fields = []github.DetailField{{Field: github.Field{ID: "labels", Name: "Labels"}, Value: &github.FieldValue{Value: "Alpha", Available: true}}}
+	_ = m.renderedDetailLines()
 	m = openMetadata(t, m, "l")
 	m, _ = editorKey(m, "j")
 	m, _ = editorKey(m, "space")
 	m, cmd := editorKey(m, "enter")
 	if cmd == nil || m.detail.Fields[0].Value.Value != "Alpha, Beta" {
 		t.Fatalf("selection was not projected: %#v", m.detail.Fields)
+	}
+	if !strings.Contains(strings.Join(m.renderedDetailLines(), "\n"), "Alpha, Beta") {
+		t.Fatal("cached detail did not reflect optimistic labels")
+	}
+}
+
+func TestSelectedItemMetadataShortcuts(t *testing.T) {
+	for _, layout := range []github.ViewLayout{github.BoardLayout, github.TableLayout} {
+		for _, key := range []string{"a", "t", "."} {
+			t.Run(string(layout)+"/"+key, func(t *testing.T) {
+				m, source := metadataModel()
+				m.view.Layout = layout
+				m.detailVisible, m.detail, m.detailItemID = false, nil, ""
+				m, cmd := editorKey(m, key)
+				m = runMembershipReads(t, m, cmd)
+				if m.issueMetadataEditor == nil || m.detailVisible {
+					t.Fatalf("shortcut did not open selected-item editor: %s", m.status)
+				}
+				if !strings.Contains(m.View().Content, "Edit "+string(m.issueMetadataEditor.kind)) {
+					t.Fatal("selected-item editor is not visible")
+				}
+				if key == "a" {
+					m, _ = editorKey(m, "enter")
+				}
+				m, _ = editorKey(m, "j")
+				m, _ = editorKey(m, "space")
+				m, cmd = editorKey(m, "enter")
+				m = runMembershipReads(t, m, cmd)
+				if !reflect.DeepEqual(source.writes, []string{"add:b"}) || m.detailVisible || m.issueMetadataEditor != nil {
+					t.Fatalf("writes=%v status=%s", source.writes, m.status)
+				}
+			})
+		}
+	}
+}
+
+func TestCustomLabelKeyPreservesActionAndAlternateShortcut(t *testing.T) {
+	m, _ := metadataModel()
+	m.detailVisible, m.detail, m.detailItemID = false, nil, ""
+	m.items[0].Content.Number = 1
+	m.items[0].Content.RepositoryFullName = "owner/repo"
+	m.customActions = []config.Action{{Key: "t", Name: "Custom", On: "issue", Run: []string{"true"}}}
+	updated, cmd := m.Update(keyPress("t"))
+	if cmd == nil || !updated.(Model).actionRunning {
+		t.Fatal("custom t binding was not preserved")
+	}
+	m, cmd = editorKey(m, ".")
+	m = runMembershipReads(t, m, cmd)
+	if m.issueMetadataEditor == nil || m.issueMetadataEditor.kind != github.IssueLabels {
+		t.Fatal("alternate label shortcut unavailable")
 	}
 }
 

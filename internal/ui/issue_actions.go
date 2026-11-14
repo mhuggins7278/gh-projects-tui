@@ -122,6 +122,9 @@ func (m Model) updateIssueAction(msg issueActionMsg) (tea.Model, tea.Cmd) {
 	m.mutationLoading = false
 	if msg.err != nil {
 		if msg.commentID != "" && m.detail != nil && m.detailItemID == msg.itemID {
+			detail := *m.detail
+			detail.Comments = append([]github.IssueComment(nil), m.detail.Comments...)
+			m.detail = &detail
 			for index := range m.detail.Comments {
 				if m.detail.Comments[index].ID == msg.commentID {
 					if github.IsAmbiguousMutationError(msg.err) {

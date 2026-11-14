@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -14,6 +15,9 @@ import (
 
 type tableFieldEditor struct {
 	detail      bool
+	loading     bool
+	requestID   uint64
+	values      []github.DetailField
 	scope       boardReadScope
 	itemID      string
 	fields      []github.Field
@@ -22,6 +26,100 @@ type tableFieldEditor struct {
 	draft       string
 	optionIndex int
 	selected    map[string]bool
+}
+
+type selectedFieldsLoadedMsg struct {
+	scope     boardReadScope
+	itemID    string
+	requestID uint64
+	detail    github.ItemDetail
+	err       error
+}
+
+func (m *Model) beginSelectedFieldEdit() tea.Cmd {
+	if reason := m.tableActionUnavailable(); reason != "" {
+		m.status = reason
+		return nil
+	}
+	if m.loadingDetail {
+		m.status = "Wait for view settings to finish refreshing"
+		return nil
+	}
+	item, ok := m.selectedItem()
+	if !ok || item.ID == "" {
+		m.status = "Select an item first"
+		return nil
+	}
+	loader, ok := m.source.(ItemDetailSource)
+	if !ok {
+		m.status = "Field editing is unavailable for this client"
+		return nil
+	}
+	if _, ok := m.source.(ItemMutationSource); !ok {
+		m.status = "Field editing is unavailable for this client"
+		return nil
+	}
+	scope, owner, project := m.currentBoardReadScope(), *m.selectedOwner, m.selectedProject.Number
+	source := m.source
+	m.nextFieldRequest++
+	requestID := m.nextFieldRequest
+	m.tableEditor = &tableFieldEditor{scope: scope, itemID: item.ID, requestID: requestID, loading: true, choosing: true}
+	m.status = "Loading project fields..."
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
+		defer cancel()
+		var detail github.ItemDetail
+		var err error
+		if fieldsLoader, ok := source.(interface {
+			LoadItemFields(context.Context, github.Owner, int, string) (github.ItemDetail, error)
+		}); ok {
+			detail, err = fieldsLoader.LoadItemFields(ctx, owner, project, item.ID)
+		} else {
+			detail, err = loader.LoadItemDetail(ctx, owner, project, item.ID)
+		}
+		return selectedFieldsLoadedMsg{scope: scope, itemID: item.ID, requestID: requestID, detail: detail, err: err}
+	}
+}
+
+func (m Model) updateSelectedFieldsLoaded(msg selectedFieldsLoadedMsg) (tea.Model, tea.Cmd) {
+	editor := m.tableEditor
+	if editor == nil || !editor.loading || editor.scope != msg.scope || editor.itemID != msg.itemID || editor.requestID != msg.requestID || !msg.scope.matches(m) {
+		return m, nil
+	}
+	item, ok := m.selectedItem()
+	if !ok || item.ID != editor.itemID {
+		m.tableEditor = nil
+		return m, nil
+	}
+	if msg.err != nil {
+		m.tableEditor = nil
+		m.status = "Could not load project fields: " + msg.err.Error()
+		return m, nil
+	}
+	if msg.detail.ID != msg.itemID {
+		m.tableEditor = nil
+		m.status = "Selected item details are unavailable; refresh and try again"
+		return m, nil
+	}
+	for _, detailField := range msg.detail.Fields {
+		field := detailField.Field
+		if !editableTableField(field) || (detailField.Value != nil && !detailField.Value.Available) {
+			continue
+		}
+		if field.IsIssueField && (msg.detail.Content == nil || msg.detail.Content.Kind != "Issue" || msg.detail.Content.ID == "" || (msg.detail.Content.ViewerCanSetFields != nil && !*msg.detail.Content.ViewerCanSetFields)) {
+			continue
+		}
+		editor.fields = append(editor.fields, field)
+	}
+	if len(editor.fields) == 0 {
+		m.tableEditor = nil
+		m.status = "No editable project fields for this item"
+		return m, nil
+	}
+	editor.values = msg.detail.Fields
+	editor.loading = false
+	m.status = "Choose a project field with j/k; enter edits, esc cancels"
+	return m, nil
 }
 
 func (m *Model) beginDetailFieldEdit() {
@@ -83,41 +181,6 @@ func editableTableField(field github.Field) bool {
 	return false
 }
 
-func (m *Model) beginTableFieldEdit() {
-	if reason := m.tableActionUnavailable(); reason != "" {
-		m.status = reason
-		return
-	}
-	if m.loadingDetail {
-		m.status = "Wait for view settings to finish refreshing"
-		return
-	}
-	if _, ok := m.source.(ItemMutationSource); !ok {
-		m.status = "Field editing is unavailable for this client"
-		return
-	}
-	item, ok := m.selectedItem()
-	if !ok {
-		return
-	}
-	fields := []github.Field{}
-	for _, field := range m.view.Fields {
-		if !editableTableField(field) {
-			continue
-		}
-		if field.IsIssueField && (item.Content == nil || item.Content.Kind != "Issue" || item.Content.ID == "" || (item.Content.ViewerCanSetFields != nil && !*item.Content.ViewerCanSetFields)) {
-			continue
-		}
-		fields = append(fields, field)
-	}
-	if len(fields) == 0 {
-		m.status = "No editable saved columns for this item"
-		return
-	}
-	m.tableEditor = &tableFieldEditor{scope: m.currentBoardReadScope(), itemID: item.ID, fields: fields, choosing: true}
-	m.status = "Choose a field with j/k; enter edits, esc cancels"
-}
-
 func (m *Model) chooseTableField() {
 	editor := m.tableEditor
 	field := editor.fields[editor.fieldIndex]
@@ -129,7 +192,15 @@ func (m *Model) chooseTableField() {
 		return
 	}
 	value, found := itemFieldValue(field, item)
-	if editor.detail && m.detail != nil {
+	if editor.values != nil {
+		found = false
+		for _, detailField := range editor.values {
+			if detailField.Field.ID == field.ID && detailField.Value != nil {
+				value, found = *detailField.Value, true
+				break
+			}
+		}
+	} else if editor.detail && m.detail != nil {
 		found = false
 		for _, detailField := range m.detail.Fields {
 			if detailField.Field.ID == field.ID && detailField.Value != nil {
@@ -171,7 +242,7 @@ func editorOptions(field github.Field) []github.FieldOption {
 }
 
 func (editor *tableFieldEditor) acceptsText() bool {
-	if editor == nil || editor.choosing {
+	if editor == nil || editor.loading || editor.choosing {
 		return false
 	}
 	field := editor.fields[editor.fieldIndex]
@@ -183,6 +254,9 @@ func (m Model) updateTableEditorKey(key string) (tea.Model, tea.Cmd) {
 	if key == "esc" {
 		m.tableEditor = nil
 		m.status = "Field edit cancelled"
+		return m, nil
+	}
+	if editor.loading {
 		return m, nil
 	}
 	if editor.choosing {
@@ -312,13 +386,12 @@ func optionIDs(options []github.FieldOption) []string {
 
 func (m Model) renderTableEditor() string {
 	editor := m.tableEditor
+	if editor.loading {
+		return sectionStyle.Render("Loading project fields...")
+	}
 	if editor.choosing {
 		var b strings.Builder
-		title := "Edit saved column"
-		if editor.detail {
-			title = "Edit project field"
-		}
-		b.WriteString(sectionStyle.Render(title) + "\n")
+		b.WriteString(sectionStyle.Render("Edit project field") + "\n")
 		start, end := m.tableWindow(len(editor.fields), editor.fieldIndex)
 		for index := start; index < end; index++ {
 			marker := "  "

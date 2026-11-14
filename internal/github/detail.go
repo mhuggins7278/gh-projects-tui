@@ -158,6 +158,15 @@ type itemDetailPage struct {
 // field values, and accessible issue/PR/draft body. Definitions and values
 // are paginated independently because either connection may exceed one page.
 func (c *Client) LoadItemDetail(ctx context.Context, owner Owner, projectNumber int, itemID string) (ItemDetail, error) {
+	return c.loadItemDetail(ctx, owner, projectNumber, itemID, true)
+}
+
+// LoadItemFields loads editable fields without fetching the issue conversation.
+func (c *Client) LoadItemFields(ctx context.Context, owner Owner, projectNumber int, itemID string) (ItemDetail, error) {
+	return c.loadItemDetail(ctx, owner, projectNumber, itemID, false)
+}
+
+func (c *Client) loadItemDetail(ctx context.Context, owner Owner, projectNumber int, itemID string, comments bool) (ItemDetail, error) {
 	key := fmt.Sprintf("%s/%s/%d", owner.Kind, owner.Login, projectNumber)
 	var cached *definitionCacheEntry
 	if value, ok := c.definitions.Load(key); ok {
@@ -174,7 +183,7 @@ func (c *Client) LoadItemDetail(ctx context.Context, owner Owner, projectNumber 
 		return ItemDetail{}, fmt.Errorf("project item %q was not found or is inaccessible", itemID)
 	}
 	detail := ItemDetail{ID: page.Item.ID, Content: projectContent(page.Item.Content)}
-	if detail.Content != nil && detail.Content.Kind == "Issue" {
+	if comments && detail.Content != nil && detail.Content.Kind == "Issue" {
 		detail.Comments, detail.CommentsError = c.loadIssueComments(ctx, detail.Content.ID)
 		detail.CommentsLoaded = detail.CommentsError == ""
 	}
