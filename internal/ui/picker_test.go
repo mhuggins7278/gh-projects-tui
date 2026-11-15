@@ -1473,12 +1473,18 @@ func TestEnterLoadsAndShowsItemDetail(t *testing.T) {
 		t.Fatalf("detail result = %#v", model)
 	}
 	content := model.View().Content
-	for _, expected := range []string{"Fix the thing", "Properties", "Priority: High", "Details", "one"} {
+	for _, expected := range []string{"Fix the thing", "Priority: High", "Details", "one"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("detail missing %q: %s", expected, content)
 		}
 	}
 	panel := model.renderDetailPanel()
+	for _, line := range detailLines(*model.detail, model.detailPanelWidth(), false) {
+		text := strings.TrimSpace(ansi.Strip(line))
+		if text == "Properties" || text == "Body" || text == "Comments" {
+			t.Fatalf("issue detail still shows %q heading", text)
+		}
+	}
 	if strings.Contains(panel, "Status: No value") {
 		t.Fatalf("unset fields should be hidden by default: %s", panel)
 	}

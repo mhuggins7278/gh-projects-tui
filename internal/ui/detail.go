@@ -285,15 +285,21 @@ func detailLines(detail github.ItemDetail, width int, showAllFields bool) []stri
 	}
 
 	if pills := detailFieldPills(detail.Fields, width-4, showAllFields); len(pills) > 0 {
-		propertyHeading := "Properties"
-		if showAllFields {
-			propertyHeading += " (all fields)"
+		lines = append(lines, "")
+		if detail.Content.Kind != "Issue" {
+			propertyHeading := "Properties"
+			if showAllFields {
+				propertyHeading += " (all fields)"
+			}
+			lines = append(lines, detailLabelStyle.Render(propertyHeading))
 		}
-		lines = append(lines, "", detailLabelStyle.Render(propertyHeading))
 		lines = append(lines, pills...)
 	}
 
-	lines = append(lines, "", sectionStyle.Render("Body"))
+	lines = append(lines, "")
+	if detail.Content.Kind != "Issue" {
+		lines = append(lines, sectionStyle.Render("Body"))
+	}
 	if !detail.Content.BodyAvailable {
 		lines = append(lines, statusStyle.Render("Body unavailable or inaccessible"))
 	} else if strings.TrimSpace(detail.Content.Body) == "" {
@@ -303,7 +309,7 @@ func detailLines(detail github.ItemDetail, width int, showAllFields bool) []stri
 	}
 
 	if detail.Content.Kind == "Issue" {
-		lines = append(lines, "", sectionStyle.Render("Comments"))
+		lines = append(lines, "")
 		switch {
 		case detail.CommentsError != "":
 			lines = append(lines, errorStyle.Render("Comments unavailable: "+detail.CommentsError))
