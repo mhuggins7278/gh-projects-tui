@@ -279,7 +279,9 @@ offer these issue actions.
   GitHub determines syntax and item membership; the TUI has no local filter
   allowlist or field-name/type restrictions. API errors are displayed without
   retrying as an unfiltered view. `/` searches only already-loaded cards and
-  does not change the saved GitHub query.
+  does not change the saved GitHub query. On boards, simple exclusions such as
+  `-status:Triage,Backlog` also hide empty lanes for those status options;
+  grouped expressions and filters using `OR` do not hide lanes locally.
   See [the filter contract and evidence](docs/api-contract.md#saved-filter-grammar-and-evidence)
   for observed server behavior and web/API differences. Grouping and sorting
   have separate compatibility checks because the TUI implements them locally.

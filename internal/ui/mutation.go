@@ -568,7 +568,11 @@ func (m *Model) dispatchNextMutation() tea.Cmd {
 	}
 	for len(session.intents) > 0 {
 		intent := session.intents[0]
-		plan, err := resolveBoardMutationPlan(session.view, session.canonicalItems, intent)
+		var visible map[string]bool
+		if strings.TrimSpace(session.view.Filter) != "" {
+			visible = session.visibleItemIDs
+		}
+		plan, err := resolveBoardMutationPlan(session.view, session.canonicalItems, intent, visible)
 		if err != nil {
 			if session.notice == "" {
 				session.notice = fmt.Sprintf("%s was not saved: %v; project state was refreshed", intent.description, err)

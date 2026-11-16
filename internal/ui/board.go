@@ -238,7 +238,7 @@ func lanesForView(view *github.View, items []github.Item) []boardLane {
 		return nil
 	}
 	if columnField, verticalField, combined := boardCombinedFields(view); combined {
-		return combinedLanesForView(columnField, verticalField, items)
+		return hideExcludedStatusLanes(view, combinedLanesForView(columnField, verticalField, items))
 	}
 	field, _, hasGroup := boardGroupField(view)
 	if !hasGroup {
@@ -273,7 +273,146 @@ func lanesForView(view *github.View, items []github.Item) []boardLane {
 			}
 		}
 	}
-	return withoutEmptyNoStatusLanes(lanes)
+	return hideExcludedStatusLanes(view, withoutEmptyNoStatusLanes(lanes))
+}
+
+// hideExcludedStatusLanes applies only unambiguous negative Status terms to
+// empty board lanes. GitHub remains authoritative for item membership.
+func hideExcludedStatusLanes(view *github.View, lanes []boardLane) []boardLane {
+	if view.Layout != github.BoardLayout || len(lanes) == 0 {
+		return lanes
+	}
+	excluded := excludedStatusValues(view.Filter)
+	if len(excluded) == 0 {
+		return lanes
+	}
+	column, row, combined := boardCombinedFields(view)
+	if !combined {
+		column, _, _ = boardGroupField(view)
+	}
+	statusColumn := isSingleSelectField(column) && strings.EqualFold(column.Name, "Status")
+	statusRow := combined && isSingleSelectField(row) && strings.EqualFold(row.Name, "Status")
+	if !statusColumn && !statusRow {
+		return lanes
+	}
+	populatedColumns, populatedRows := map[string]bool{}, map[string]bool{}
+	for _, lane := range lanes {
+		if len(lane.Items) > 0 {
+			populatedColumns[strings.ToLower(lane.Name)] = true
+			populatedRows[strings.ToLower(lane.RowName)] = true
+		}
+	}
+	visible := make([]boardLane, 0, len(lanes))
+	for _, lane := range lanes {
+		columnKey := lane.Key
+		if combined {
+			_, columnKey, _ = strings.Cut(lane.Key, "\x00")
+		}
+		columnName, rowName := strings.ToLower(lane.Name), strings.ToLower(lane.RowName)
+		if statusColumn && strings.HasPrefix(columnKey, "option:") && excluded[columnName] && !populatedColumns[columnName] {
+			continue
+		}
+		if statusRow && strings.HasPrefix(lane.RowKey, "option:") && excluded[rowName] && !populatedRows[rowName] {
+			continue
+		}
+		visible = append(visible, lane)
+	}
+	return visible
+}
+
+// The filter language is server-owned. Only interpret simple conjunctions;
+// expressions with grouping or OR may legitimately retain an excluded value.
+func excludedStatusValues(filter string) map[string]bool {
+	var tokens []string
+	var token strings.Builder
+	quoted, escaped := false, false
+	for _, r := range filter {
+		if escaped {
+			token.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if quoted && r == '\\' {
+			token.WriteRune(r)
+			escaped = true
+			continue
+		}
+		if r == '"' {
+			quoted = !quoted
+			token.WriteRune(r)
+			continue
+		}
+		if !quoted {
+			if r == '(' || r == ')' || r == '|' {
+				return nil
+			}
+			if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+				if token.Len() > 0 {
+					tokens = append(tokens, token.String())
+					token.Reset()
+				}
+				continue
+			}
+		}
+		token.WriteRune(r)
+	}
+	if quoted || escaped {
+		return nil
+	}
+	if token.Len() > 0 {
+		tokens = append(tokens, token.String())
+	}
+	excluded := map[string]bool{}
+	for _, term := range tokens {
+		if strings.EqualFold(term, "OR") {
+			return nil
+		}
+		key, values, ok := strings.Cut(term, ":")
+		if !ok || !strings.EqualFold(key, "-status") {
+			continue
+		}
+		var part strings.Builder
+		quoted, escaped = false, false
+		parts := []string{}
+		for _, r := range values {
+			if escaped {
+				part.WriteRune(r)
+				escaped = false
+				continue
+			}
+			if quoted && r == '\\' {
+				part.WriteRune(r)
+				escaped = true
+				continue
+			}
+			if r == '"' {
+				quoted = !quoted
+			}
+			if r == ',' && !quoted {
+				parts = append(parts, part.String())
+				part.Reset()
+				continue
+			}
+			part.WriteRune(r)
+		}
+		parts = append(parts, part.String())
+		for _, value := range parts {
+			if strings.HasPrefix(value, `"`) {
+				unquoted, err := strconv.Unquote(value)
+				if err != nil {
+					return nil
+				}
+				value = unquoted
+			} else if strings.Contains(value, `"`) {
+				return nil
+			}
+			if value == "" {
+				return nil
+			}
+			excluded[strings.ToLower(value)] = true
+		}
+	}
+	return excluded
 }
 
 func combinedLanesForView(columnField, verticalField github.Field, items []github.Item) []boardLane {
