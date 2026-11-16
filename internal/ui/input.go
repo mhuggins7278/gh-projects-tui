@@ -96,6 +96,9 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if m.screen == screenBoard {
+		if m.issueActionConfirm {
+			return m.updateIssueConfirmationKey(key)
+		}
 		if m.tableAction != nil && m.tableAction.phase == "confirm" {
 			return m.updateTableConfirmationKey(key)
 		}
@@ -119,6 +122,9 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "e":
 				return m, m.beginSelectedFieldEdit()
+			case "x":
+				m.beginIssueStateChange()
+				return m, nil
 			}
 		}
 		if m.isTimeline() {

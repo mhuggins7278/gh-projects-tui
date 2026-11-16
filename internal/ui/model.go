@@ -222,6 +222,7 @@ type Model struct {
 	commentDraft          string
 	issueActionConfirm    bool
 	issueActionClosing    bool
+	issueActionTarget     *issueActionState
 	issueActionRefreshing bool
 	issueActionPending    *issueActionState
 	issueMetadataEditor   *issueMetadataEditor
@@ -1552,6 +1553,9 @@ func (m Model) footerHints() string {
 		}
 		return "saving issue action... · q quit" + m.debugHint()
 	}
+	if m.issueActionConfirm {
+		return "enter confirm · esc cancel" + m.debugHint()
+	}
 	if m.tableEditor != nil {
 		return "j/k choose · space toggle multi-select · ctrl+u clear text · enter save · esc cancel" + m.debugHint()
 	}
@@ -1612,9 +1616,9 @@ func (m Model) footerHints() string {
 			}
 		}
 		if m.isTable() {
-			return "j/k rows · h/l expand · enter details · e fields · a assign · " + labels + " · A archive · D remove · m group · ? help" + m.debugHint()
+			return "j/k rows · h/l expand · enter details · e fields · a assign · " + labels + " · x close/reopen · A archive · D remove · m group · ? help" + m.debugHint()
 		}
-		return "h/l lanes · j/k cards · H/L move · J/K reorder · e fields · a assign · " + labels + " · A archive · D remove · ? help" + m.debugHint()
+		return "h/l lanes · j/k cards · H/L move · J/K reorder · e fields · a assign · " + labels + " · x close/reopen · A archive · D remove · ? help" + m.debugHint()
 	default:
 		return "Loading... q to quit"
 	}
@@ -1658,7 +1662,7 @@ func (m Model) layoutHelpText() string {
 	}
 	detail := "\n\nIssue details\n" +
 		"  e / l / a         Edit project fields / labels / assignees\n" +
-		"  c / x             Comment / close or reopen"
+		"  c                 Comment"
 	if m.isTable() {
 		return "Table\n" +
 			"  j/k               Move rows\n" +
@@ -1666,6 +1670,7 @@ func (m Model) layoutHelpText() string {
 			"  h/left            Collapse or select parent\n" +
 			"  space             Toggle expansion\n" +
 			"  e / a / t (.)     Edit field / assignees / labels\n" +
+			"  x                 Close or reopen issue (confirm first)\n" +
 			"  A / D             Archive / remove from project (confirm first)\n" +
 			"  m / J/K           Change group / reorder top-level rows\n" +
 			"  Reordering requires position sorting; multi-select groups are read-only." + detail
@@ -1674,6 +1679,7 @@ func (m Model) layoutHelpText() string {
 		"  h/l / j/k         Change lanes / cards\n" +
 		"  H/L / J/K         Move / reorder cards\n" +
 		"  e / a / t (.)     Edit field / assignees / labels\n" +
+		"  x                 Close or reopen issue (confirm first)\n" +
 		"  A / D             Archive / remove from project (confirm first)\n" +
 		"  Moving and reordering require a writable, fully loaded view." + detail
 }

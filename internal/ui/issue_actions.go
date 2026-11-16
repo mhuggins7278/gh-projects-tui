@@ -74,14 +74,7 @@ func (m Model) updateIssueReadback(msg issueReadbackMsg) (tea.Model, tea.Cmd) {
 	}
 	delete(m.detailCache, pending.itemID)
 	if pending.scope.sameProject(m) {
-		for i := range m.items {
-			if m.items[i].ID == pending.itemID && m.items[i].Content != nil {
-				m.items[i].Content.State = wanted
-			}
-		}
-		if m.detailItemID == pending.itemID && m.detail != nil && m.detail.Content != nil && m.detail.Content.ID == pending.issueID {
-			m.detail.Content.State = wanted
-		}
+		m.applyIssueState(pending.itemID, pending.issueID, wanted)
 	}
 	m.issueActionPending = nil
 	m.mutationLoading = false
@@ -111,6 +104,11 @@ func (m Model) updateIssueAction(msg issueActionMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !m.detailVisible || m.detailItemID != msg.itemID {
+			if msg.err != nil {
+				m.status = "Issue action failed: " + msg.err.Error()
+				return m, nil
+			}
+			m.status = msg.status
 			if msg.err == nil && msg.closed != nil {
 				return m, m.queueIssueViewReload(pending.scope)
 			}

@@ -146,7 +146,7 @@ fragment ItemsPage on ProjectV2ItemConnection {
     id type
     content {
       __typename
-      ... on Issue { id number title url repository { name nameWithOwner } state viewerCanSetFields subIssuesSummary { total completed } }
+      ... on Issue { id number title url repository { name nameWithOwner } state viewerCanSetFields viewerCanClose viewerCanReopen subIssuesSummary { total completed } }
       ... on PullRequest { id number title url repository { name nameWithOwner } state isDraft merged }
       ... on DraftIssue { id title }
     }

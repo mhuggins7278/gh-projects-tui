@@ -55,41 +55,7 @@ func (m Model) updateDetailKey(key string) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "x":
-		if m.tableAction != nil || m.mutationSession != nil || m.issueActionPending != nil {
-			m.status = "Finish or reconcile the pending project change before another issue write"
-			return m, nil
-		}
-		if m.isTimeline() {
-			return m, nil
-		}
-		if m.detail == nil || m.detail.Content == nil || m.detail.Content.Kind != "Issue" {
-			m.status = "Close/reopen is available for issues only"
-			return m, nil
-		}
-		if !strings.EqualFold(m.detail.Content.State, "OPEN") && !strings.EqualFold(m.detail.Content.State, "CLOSED") {
-			m.status = "Issue state is unavailable; refresh details before changing it"
-			return m, nil
-		}
-		if _, ok := m.source.(IssueActionSource); !ok {
-			m.status = "Issue actions are unavailable for this client"
-			return m, nil
-		}
-		m.issueActionClosing = strings.EqualFold(m.detail.Content.State, "OPEN")
-		permission := m.detail.Content.ViewerCanReopen
-		if m.issueActionClosing {
-			permission = m.detail.Content.ViewerCanClose
-		}
-		if permission != nil && !*permission {
-			m.status = "You do not have permission to change this issue's state"
-			return m, nil
-		}
-
-		m.issueActionConfirm = true
-		verb := "reopen"
-		if m.issueActionClosing {
-			verb = "close"
-		}
-		m.status = fmt.Sprintf("Press enter to %s issue #%d: %s · esc cancels", verb, m.detail.Content.Number, m.detail.Content.Title)
+		m.beginIssueStateChange()
 		return m, nil
 	case "j", "down", "J":
 		m.moveDetail(1)
@@ -108,6 +74,54 @@ func (m Model) updateDetailKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) beginIssueStateChange() {
+	if m.tableAction != nil || m.mutationSession != nil || m.issueActionPending != nil || m.mutationLoading || m.itemsLoading || m.detailLoading {
+		m.status = "Finish pending reads and writes before another issue change"
+		return
+	}
+	if m.isTimeline() {
+		return
+	}
+	var itemID string
+	var content *github.Content
+	if m.detailVisible {
+		itemID = m.detailItemID
+		if m.detail != nil {
+			content = m.detail.Content
+		}
+	} else if item, ok := m.selectedItem(); ok {
+		itemID, content = item.ID, item.Content
+	}
+	if content == nil || content.Kind != "Issue" || content.ID == "" || itemID == "" {
+		m.status = "Close/reopen is available for issues only"
+		return
+	}
+	if !strings.EqualFold(content.State, "OPEN") && !strings.EqualFold(content.State, "CLOSED") {
+		m.status = "Issue state is unavailable; refresh before changing it"
+		return
+	}
+	if _, ok := m.source.(IssueActionSource); !ok {
+		m.status = "Issue actions are unavailable for this client"
+		return
+	}
+	m.issueActionClosing = strings.EqualFold(content.State, "OPEN")
+	permission := content.ViewerCanReopen
+	if m.issueActionClosing {
+		permission = content.ViewerCanClose
+	}
+	if permission != nil && !*permission {
+		m.status = "You do not have permission to change this issue's state"
+		return
+	}
+	m.issueActionTarget = &issueActionState{itemID: itemID, issueID: content.ID, scope: m.currentBoardReadScope(), closed: m.issueActionClosing, previousState: content.State}
+	m.issueActionConfirm = true
+	verb := "reopen"
+	if m.issueActionClosing {
+		verb = "close"
+	}
+	m.status = fmt.Sprintf("Press enter to %s issue #%d: %s · esc cancels", verb, content.Number, content.Title)
+}
+
 func (m Model) updateIssueConfirmationKey(key string) (tea.Model, tea.Cmd) {
 	if m.isTimeline() {
 		return m, nil
@@ -115,6 +129,7 @@ func (m Model) updateIssueConfirmationKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc":
 		m.issueActionConfirm = false
+		m.issueActionTarget = nil
 		m.status = "Issue action cancelled"
 		return m, nil
 	case "enter":
@@ -124,11 +139,21 @@ func (m Model) updateIssueConfirmationKey(key string) (tea.Model, tea.Cmd) {
 			m.status = "Issue actions are unavailable for this client"
 			return m, nil
 		}
-		closed := m.issueActionClosing
+		pending := m.issueActionTarget
+		m.issueActionTarget = nil
+		// Older callers may already have opened the detail confirmation.
+		if pending == nil && m.detail != nil && m.detail.Content != nil {
+			pending = &issueActionState{itemID: m.detailItemID, issueID: m.detail.Content.ID, scope: m.currentBoardReadScope(), closed: m.issueActionClosing, previousState: m.detail.Content.State}
+		}
+		if pending == nil || !pending.scope.matches(m) {
+			m.status = "Issue selection changed; try again"
+			return m, nil
+		}
+		closed := pending.closed
 		m.nextIssueAction++
-		pending := &issueActionState{id: m.nextIssueAction, itemID: m.detailItemID, issueID: m.detail.Content.ID, scope: m.currentBoardReadScope(), closed: closed, previousState: m.detail.Content.State}
+		pending.id = m.nextIssueAction
 		m.issueActionPending = pending
-		id, itemID, gen := m.detail.Content.ID, m.detailItemID, m.generation
+		id, itemID, gen := pending.issueID, pending.itemID, m.generation
 		m.mutationLoading = true
 		label := "Issue reopened."
 		state := "OPEN"
