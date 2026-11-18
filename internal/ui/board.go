@@ -1047,10 +1047,7 @@ func (m Model) renderBoardContent(b *strings.Builder) {
 		return
 	}
 
-	fmt.Fprintf(b, "%s  %s  %s\n", titleStyle.Render(m.view.Name), mutedStyle.Render(fmt.Sprintf("#%d", m.view.Number)), layoutBadge(string(m.view.Layout)))
-	b.WriteString(mutedStyle.Render("Display note: collapsed-group state is not exposed by this API; groups follow saved field and option order.") + "\n")
 	if m.view.Filter != "" {
-		fmt.Fprintf(b, "%s %s\n", mutedStyle.Render("Filter:"), m.view.Filter)
 		b.WriteString(mutedStyle.Render("Position is project-wide; moving a card can change its relationship to hidden cards and other saved views.") + "\n")
 	}
 	visibleItems := m.boardItems()
@@ -1061,47 +1058,22 @@ func (m Model) renderBoardContent(b *strings.Builder) {
 		}
 		fmt.Fprintf(b, "%s %s (%d matches)\n", statusStyle.Render("Search:"), search, len(visibleItems))
 	}
-	columnField, verticalField, combined := boardCombinedFields(m.view)
 	field, axis, hasGroup := boardGroupField(m.view)
-	if combined {
-		columnName := columnField.Name
-		if columnName == "" {
-			columnName = "unknown field"
-		}
-		verticalName := verticalField.Name
-		if verticalName == "" {
-			verticalName = "unknown field"
-		}
-		fmt.Fprintf(b, "%s %s columns / %s swimlanes\n", mutedStyle.Render("Grouping:"), columnName, verticalName)
-	} else if !hasGroup {
-		b.WriteString(mutedStyle.Render("Grouping: none") + "\n")
-	} else {
+	if hasGroup {
 		label := field.Name
 		if label == "" {
 			label = "unknown field"
 		}
-		if _, supported := laneDefinitions(field); supported {
-			fmt.Fprintf(b, "%s %s (%s)\n", mutedStyle.Render("Grouping:"), label, axis)
-		} else {
+		if _, supported := laneDefinitions(field); !supported {
 			fmt.Fprintf(b, "%s %s (%s; display fallback; field type is not supported yet)\n", statusStyle.Render("Grouping:"), label, axis)
 		}
 	}
-	if len(m.view.SortByFields) > 0 && !positionOnly(m.view) {
-		if sortFieldsSupported(m.view) {
-			b.WriteString(statusStyle.Render("Sort: saved field sort applied") + "\n")
-		} else {
-			b.WriteString(statusStyle.Render("Sort: saved field sort is not applied yet; showing project position") + "\n")
-		}
-	}
-	if strings.TrimSpace(m.filter) == "" {
-		fmt.Fprintf(b, "%s %d", mutedStyle.Render("Items:"), len(m.items))
-	} else {
-		fmt.Fprintf(b, "%s %d/%d", mutedStyle.Render("Items:"), len(visibleItems), len(m.items))
+	if len(m.view.SortByFields) > 0 && !positionOnly(m.view) && !sortFieldsSupported(m.view) {
+		b.WriteString(statusStyle.Render("Sort: saved field sort is not applied yet; showing project position") + "\n")
 	}
 	if m.itemsLoading {
-		b.WriteString("  " + statusStyle.Render(m.itemsLoadingSpinner()+" loading"))
+		b.WriteString(statusStyle.Render(m.itemsLoadingSpinner()+" loading") + "\n")
 	}
-	b.WriteString("\n")
 
 	if m.itemsErr != nil && len(m.items) == 0 && !m.itemsLoading {
 		b.WriteString("\n" + errorStyle.Render("Items failed: "+m.itemsErr.Error()) + "\n")

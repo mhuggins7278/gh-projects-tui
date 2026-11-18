@@ -24,8 +24,6 @@ var (
 	red         = lipgloss.Color("#f85149")
 	purple      = lipgloss.Color("#bc8cff")
 
-	brandStyle   = lipgloss.NewStyle().Bold(true).Foreground(bright)
-	hostStyle    = lipgloss.NewStyle().Foreground(muted)
 	crumbStyle   = lipgloss.NewStyle().Foreground(blue)
 	mutedStyle   = lipgloss.NewStyle().Foreground(muted)
 	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(bright)
@@ -111,13 +109,11 @@ func (m Model) bodyCanvasHeight() int {
 }
 
 func (m Model) renderHeader() string {
-	top := lipgloss.JoinHorizontal(
-		lipgloss.Center,
-		brandStyle.Render("gh projects-tui"),
-		"  ",
-		hostStyle.Render("["+m.host+"]"),
-	)
-	lines := []string{top, crumbStyle.Render(m.breadcrumb())}
+	crumb := crumbStyle.Render(m.breadcrumb())
+	if m.screen == screenBoard && m.view != nil {
+		crumb += "  " + layoutBadge(string(m.view.Layout))
+	}
+	lines := []string{crumb}
 	if telemetry := m.headerTelemetry(); telemetry != "" {
 		lines = append(lines, mutedStyle.Render(telemetry))
 	}

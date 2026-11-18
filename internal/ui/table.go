@@ -15,15 +15,6 @@ func (m Model) renderTableContent(b *strings.Builder) {
 		return
 	}
 
-	fmt.Fprintf(b, "%s  %s  %s\n", titleStyle.Render(m.view.Name), mutedStyle.Render(fmt.Sprintf("#%d", m.view.Number)), layoutBadge(string(m.view.Layout)))
-	if len(m.view.GroupByFields) > 0 {
-		b.WriteString(mutedStyle.Render("Display note: groups follow saved field/option order; collapsed state is unavailable from the API.") + "\n")
-	} else {
-		b.WriteString(mutedStyle.Render("Display note: rendering saved visible fields in API order.") + "\n")
-	}
-	if m.view.Filter != "" {
-		fmt.Fprintf(b, "%s %s\n", mutedStyle.Render("Filter:"), m.view.Filter)
-	}
 	rows := m.tableTreeRows()
 	groups := m.tableTreeGroups(rows)
 	visibleItems := tableGroupItems(groups)
@@ -34,14 +25,9 @@ func (m Model) renderTableContent(b *strings.Builder) {
 		}
 		fmt.Fprintf(b, "%s %s (%d matches)\n", statusStyle.Render("Search:"), search, len(visibleItems))
 	}
-	fmt.Fprintf(b, "%s %d", mutedStyle.Render("Items:"), len(m.items))
-	if len(visibleItems) != len(m.items) {
-		fmt.Fprintf(b, " (%d visible rows)", len(visibleItems))
-	}
 	if m.itemsLoading {
-		b.WriteString("  " + statusStyle.Render(m.itemsLoadingSpinner()+" loading"))
+		b.WriteString(statusStyle.Render(m.itemsLoadingSpinner()+" loading") + "\n")
 	}
-	b.WriteString("\n")
 	if m.tableMove != nil {
 		label := m.tableMove.itemID
 		if item, ok := m.selectedItem(); ok && item.Content != nil {

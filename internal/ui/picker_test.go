@@ -1136,8 +1136,32 @@ func TestBoardSearchFiltersLoadedCards(t *testing.T) {
 		t.Fatalf("search state = %#v", model)
 	}
 	content := ansi.Strip(model.View().Content)
-	if !strings.Contains(content, "Search: alpha") || !strings.Contains(content, "Items: 1/2") || strings.Contains(content, "Fix beta") {
+	if !strings.Contains(content, "Search: alpha") || strings.Contains(content, "Items:") || strings.Contains(content, "Fix beta") {
 		t.Fatalf("search rendering = %q", content)
+	}
+}
+
+func TestBoardHeaderOmitsStaticMetadata(t *testing.T) {
+	model := newPickerModel(fakePickerSource{})
+	model.screen = screenBoard
+	model.view = &github.View{Name: "Kanban", Number: 3, Layout: github.BoardLayout, Filter: "is:open"}
+	model.items = []github.Item{{ID: "one", Content: &github.Content{Kind: "Issue", Title: "First card"}}}
+	header := ansi.Strip(model.renderHeader())
+	for _, expected := range []string{"Kanban", "#3", "BOARD"} {
+		if !strings.Contains(header, expected) {
+			t.Errorf("header missing %q: %s", expected, header)
+		}
+	}
+	var b strings.Builder
+	model.renderBoardContent(&b)
+	content := ansi.Strip(b.String())
+	for _, unwanted := range []string{"Display note:", "Filter:", "Grouping: none", "Items:"} {
+		if strings.Contains(content, unwanted) {
+			t.Errorf("unexpected %q: %s", unwanted, content)
+		}
+	}
+	if !strings.Contains(content, "Position is project-wide") || !strings.Contains(content, "First card") {
+		t.Fatalf("missing warning or card: %s", content)
 	}
 }
 

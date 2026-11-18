@@ -38,6 +38,45 @@ func TestTableViewRendersSavedFieldsAndRows(t *testing.T) {
 	}
 }
 
+func TestTableHeaderOmitsSavedViewMetadata(t *testing.T) {
+	for _, grouped := range []bool{false, true} {
+		model := newPickerModel(fakePickerSource{})
+		model.screen = screenBoard
+		model.view = &github.View{Name: "Triage", Number: 9, Layout: github.TableLayout, Filter: "status:Triage"}
+		if grouped {
+			model.view.GroupByFields = []github.Field{{Name: "Status", DataType: "SINGLE_SELECT"}}
+		}
+		model.items = []github.Item{{ID: "one", Content: &github.Content{Kind: "Issue", Title: "First item"}}}
+		model.filter = "First"
+		model.itemsLoading = true
+
+		var b strings.Builder
+		model.renderTableContent(&b)
+		content := ansi.Strip(b.String())
+		header := ansi.Strip(model.renderHeader())
+		for _, expected := range []string{"Triage", "#9", "TABLE"} {
+			if !strings.Contains(header, expected) {
+				t.Errorf("grouped=%v: header missing %q: %s", grouped, expected, header)
+			}
+		}
+		for _, unwanted := range []string{"gh projects-tui", "[github.com]"} {
+			if strings.Contains(header, unwanted) {
+				t.Errorf("grouped=%v: unexpected header %q: %s", grouped, unwanted, header)
+			}
+		}
+		for _, expected := range []string{"Search: First", "loading", "First item"} {
+			if !strings.Contains(content, expected) {
+				t.Errorf("grouped=%v: missing %q: %s", grouped, expected, content)
+			}
+		}
+		for _, unwanted := range []string{"Display note:", "Filter:", "Items:", "visible rows"} {
+			if strings.Contains(content, unwanted) {
+				t.Errorf("grouped=%v: unexpected %q: %s", grouped, unwanted, content)
+			}
+		}
+	}
+}
+
 func TestTableActionsRespectProjectPermissions(t *testing.T) {
 	model := newPickerModel(fakePickerSource{})
 	model.screen = screenBoard
