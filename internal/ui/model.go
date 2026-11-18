@@ -1557,13 +1557,13 @@ func (m Model) footerHints() string {
 		return "enter confirm · esc cancel" + m.debugHint()
 	}
 	if m.tableEditor != nil {
-		return "j/k choose · space toggle multi-select · ctrl+u clear text · enter save · esc cancel" + m.debugHint()
+		return "type to search · ↑/↓ choose · space toggle · enter select/save · esc cancel" + m.debugHint()
 	}
 	if m.issueMetadataEditor != nil {
 		if m.issueMetadataEditor.searching {
-			return "type search · enter choose · esc stop searching" + m.debugHint()
+			return "type to search · ↑/↓ move · space toggle · enter save · esc cancel" + m.debugHint()
 		}
-		return "/ search · space toggle · enter save · esc cancel" + m.debugHint()
+		return "type to search · ↑/↓ move · space toggle · enter save · esc cancel" + m.debugHint()
 	}
 	if m.isTable() && m.tableMove != nil {
 		return "j/k choose group · enter move · esc cancel" + m.debugHint()
@@ -1581,9 +1581,9 @@ func (m Model) footerHints() string {
 	if m.screen == screenBoard && m.detailVisible {
 		if m.issueMetadataEditor != nil {
 			if m.issueMetadataEditor.searching {
-				return "type search · enter choose · esc stop searching" + m.debugHint()
+				return "type to search · ↑/↓ move · space toggle · enter save · esc cancel" + m.debugHint()
 			}
-			return "/ search · space toggle · enter save · esc cancel" + m.debugHint()
+			return "type to search · ↑/↓ move · space toggle · enter save · esc cancel" + m.debugHint()
 		}
 		if m.commentEditing {
 			return "type comment · enter submit · esc cancel" + m.debugHint()

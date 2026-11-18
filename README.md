@@ -237,7 +237,7 @@ the saved state. Use `r` to pick up external changes.
 | `enter` | Select a picker entry or open item details |
 | `H/L` (uppercase) | Move the selected card to an adjacent lane |
 | `J/K` (uppercase) | Reorder the selected card within its lane |
-| `e` | Choose a project field to edit; enter saves, esc cancels; space toggles multi-select options |
+| `e` | Type to find a field or option; arrows choose, enter selects/saves, esc cancels; space toggles multi-select options |
 | `m` (table) | Pick a saved group for the selected row; `j/k` choose and `enter` moves |
 | `J/K` (table) | Reorder the selected top-level row within its group when project-position sorted |
 | `a` / `t` | Edit assignees / labels on the selected issue |
@@ -262,9 +262,12 @@ values), and `esc` closes the panel. For GitHub issues on writable boards and ta
 `e` edits an available project field, including fields outside the saved columns.
 `l` edits labels and `a` edits assignees when permitted. The assignee picker
 searches GitHub as you type, while the label picker searches loaded labels.
-In either picker, `j/k` moves, `space` toggles, `enter` saves, and `/` searches;
-press `enter` to finish searching. Assignee results load more when you move past
-the last result. After a save, the app checks the issue state before allowing another
+In either picker, type to search, use `↑/↓` (or `ctrl+n/p`) to move, `space`
+to toggle, `enter` to save, and `esc` to cancel. Selected values remain visible
+above the results. Assignee results load more when you move past the last result.
+Project field pickers also support typing to find a field or option; `enter`
+chooses a field and then saves its value. The field list shows current values.
+After a save, the app checks the issue state before allowing another
 write. If the outcome is uncertain, `r` retries the check without resubmitting.
 `c` opens a comment composer (`enter` submits, `esc` cancels). In details or on
 the board or table, `x` prompts to close or reopen the selected issue (`enter`

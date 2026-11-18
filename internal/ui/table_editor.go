@@ -14,6 +14,7 @@ import (
 )
 
 type tableFieldEditor struct {
+	filter      string
 	detail      bool
 	loading     bool
 	requestID   uint64
@@ -118,7 +119,7 @@ func (m Model) updateSelectedFieldsLoaded(msg selectedFieldsLoadedMsg) (tea.Mode
 	}
 	editor.values = msg.detail.Fields
 	editor.loading = false
-	m.status = "Choose a project field with j/k; enter edits, esc cancels"
+	m.status = "Type to find a field · ↑/↓ choose · enter edit · esc cancel"
 	return m, nil
 }
 
@@ -160,7 +161,7 @@ func (m *Model) beginDetailFieldEdit() {
 		return
 	}
 	m.tableEditor = &tableFieldEditor{detail: true, scope: m.currentBoardReadScope(), itemID: item.ID, fields: fields, choosing: true}
-	m.status = "Choose a project field with j/k; enter edits, esc cancels"
+	m.status = "Type to find a field · ↑/↓ choose · enter edit · esc cancel"
 }
 
 func editableTableField(field github.Field) bool {
@@ -259,18 +260,48 @@ func (m Model) updateTableEditorKey(key string) (tea.Model, tea.Cmd) {
 	if editor.loading {
 		return m, nil
 	}
+	if !editor.acceptsText() {
+		if key == "backspace" || key == "ctrl+u" {
+			if key == "ctrl+u" {
+				editor.filter = ""
+			} else {
+				editor.filter = deleteLastRune(editor.filter)
+			}
+			editor.selectFirstMatch()
+			return m, nil
+		}
+		if key == "down" || key == "up" || key == "ctrl+n" || key == "ctrl+p" {
+			indices := editor.matchingIndices()
+			current := editor.optionIndex
+			if editor.choosing {
+				current = editor.fieldIndex
+			}
+			for i, index := range indices {
+				if index == current {
+					if (key == "down" || key == "ctrl+n") && i+1 < len(indices) {
+						current = indices[i+1]
+					}
+					if (key == "up" || key == "ctrl+p") && i > 0 {
+						current = indices[i-1]
+					}
+					break
+				}
+			}
+			if editor.choosing {
+				editor.fieldIndex = current
+			} else {
+				editor.optionIndex = current
+			}
+			return m, nil
+		}
+		if len(editor.matchingIndices()) == 0 {
+			return m, nil
+		}
+	}
 	if editor.choosing {
-		switch key {
-		case "j", "down":
-			if editor.fieldIndex+1 < len(editor.fields) {
-				editor.fieldIndex++
-			}
-		case "k", "up":
-			if editor.fieldIndex > 0 {
-				editor.fieldIndex--
-			}
-		case "enter":
+		if key == "enter" {
 			m.chooseTableField()
+			editor.filter = ""
 		}
 		return m, nil
 	}
@@ -391,30 +422,45 @@ func (m Model) renderTableEditor() string {
 	}
 	if editor.choosing {
 		var b strings.Builder
+		b.WriteString(m.editorIssueContext() + "\n")
 		b.WriteString(sectionStyle.Render("Edit project field") + "\n")
-		start, end := m.tableWindow(len(editor.fields), editor.fieldIndex)
-		for index := start; index < end; index++ {
+		b.WriteString("Search: " + editor.filter + "_\n\n")
+		indices := editor.matchingIndices()
+		if len(indices) == 0 {
+			b.WriteString(mutedStyle.Render("No matches") + "\n")
+		}
+		start, end := m.editorWindow(len(indices), matchPosition(indices, editor.fieldIndex))
+		for _, index := range indices[start:end] {
 			marker := "  "
 			if index == editor.fieldIndex {
 				marker = "> "
 			}
-			b.WriteString(truncateText(marker+editor.fields[index].Name, m.frameContentWidth()-2) + "\n")
+			b.WriteString(truncateText(marker+editor.fields[index].Name+"    "+m.editorFieldValue(editor, editor.fields[index]), m.detailPanelWidth()-4) + "\n")
 		}
 		return b.String()
 	}
 	field := editor.fields[editor.fieldIndex]
 	var b strings.Builder
+	b.WriteString(m.editorIssueContext() + "\n")
 	b.WriteString(sectionStyle.Render("Edit "+field.Name) + "\n")
 	if editor.acceptsText() {
-		b.WriteString(truncateText(editor.draft+"_", m.frameContentWidth()-2) + "\n")
+		b.WriteString(truncateText(editor.draft+"_", m.detailPanelWidth()-4) + "\n")
 		b.WriteString(mutedStyle.Render("ctrl+u clears · enter saves · esc cancels") + "\n")
 	} else {
 		options := append([]github.FieldOption{{Name: "Clear value"}}, editorOptions(field)...)
-		start, end := m.tableWindow(len(options), editor.optionIndex)
-		for index := start; index < end; index++ {
+		b.WriteString("Search: " + editor.filter + "_\n\n")
+		indices := editor.matchingIndices()
+		if len(indices) == 0 {
+			b.WriteString(mutedStyle.Render("No matches") + "\n")
+		}
+		start, end := m.editorWindow(len(indices), matchPosition(indices, editor.optionIndex))
+		for _, index := range indices[start:end] {
 			marker := "  "
 			if index == editor.optionIndex {
 				marker = "> "
+			}
+			if index > 0 && !isMultiSelectField(field) && editor.selected[options[index].ID] {
+				marker += "✓ "
 			}
 			if index > 0 && isMultiSelectField(field) {
 				if editor.selected[options[index].ID] {
@@ -423,11 +469,78 @@ func (m Model) renderTableEditor() string {
 					marker += "[ ] "
 				}
 			}
-			b.WriteString(truncateText(marker+options[index].Name, m.frameContentWidth()-2) + "\n")
+			b.WriteString(truncateText(marker+options[index].Name, m.detailPanelWidth()-4) + "\n")
 		}
 		if isMultiSelectField(field) {
 			b.WriteString(mutedStyle.Render("space toggles · enter saves selection") + "\n")
 		}
 	}
 	return b.String()
+}
+
+func matchPosition(indices []int, current int) int {
+	for i, index := range indices {
+		if index == current {
+			return i
+		}
+	}
+	return 0
+}
+func (editor *tableFieldEditor) matchingIndices() []int {
+	var names []string
+	if editor.choosing {
+		for _, field := range editor.fields {
+			names = append(names, field.Name)
+		}
+	} else {
+		names = append(names, "Clear value")
+		for _, option := range editorOptions(editor.fields[editor.fieldIndex]) {
+			names = append(names, option.Name)
+		}
+	}
+	var indices []int
+	for i, name := range names {
+		if strings.Contains(strings.ToLower(name), strings.ToLower(editor.filter)) {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+func (editor *tableFieldEditor) selectFirstMatch() {
+	indices := editor.matchingIndices()
+	if len(indices) == 0 {
+		return
+	}
+	if editor.choosing {
+		editor.fieldIndex = indices[0]
+	} else {
+		editor.optionIndex = indices[0]
+	}
+}
+func (m Model) editorFieldValue(editor *tableFieldEditor, field github.Field) string {
+	values := editor.values
+	if editor.detail && m.detail != nil {
+		values = m.detail.Fields
+	}
+	for _, value := range values {
+		if value.Field.ID == field.ID && value.Value != nil && value.Value.Available && value.Value.Value != "" {
+			return value.Value.Value
+		}
+	}
+	return "—"
+}
+
+func (m Model) editorIssueContext() string {
+	item, ok := m.selectedItem()
+	if !ok || item.Content == nil {
+		return ""
+	}
+	return mutedStyle.Render(truncateText(fmt.Sprintf("#%d %s", item.Content.Number, item.Content.Title), m.detailPanelWidth()-4))
+}
+
+func (m Model) editorWindow(count, selected int) (int, int) {
+	size := min(8, max(1, m.detailPanelHeight()-9))
+	start := max(0, selected-size/2)
+	start = min(start, max(0, count-size))
+	return start, min(count, start+size)
 }

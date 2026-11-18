@@ -286,10 +286,10 @@ func TestTableSelectEditorsSaveOptionIdentities(t *testing.T) {
 			m, s := editorModel(field)
 			m, _ = editorKey(m, "e")
 			m, _ = editorKey(m, "enter")
-			m, _ = editorKey(m, "j")
+			m, _ = editorKey(m, "down")
 			if kind == "MULTI_SELECT" {
 				m, _ = editorKey(m, "space")
-				m, _ = editorKey(m, "j")
+				m, _ = editorKey(m, "down")
 				m, _ = editorKey(m, "space")
 			}
 			m, cmd := editorKey(m, "enter")

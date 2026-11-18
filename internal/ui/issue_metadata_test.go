@@ -66,13 +66,10 @@ func TestAssigneeSearchRetainsSelectionsAcrossQueries(t *testing.T) {
 	if s.candidateReads != 0 || !reflect.DeepEqual(s.searches, []string{""}) || !m.issueMetadataEditor.searching {
 		t.Fatalf("unexpected initial load: candidates=%d searches=%#v", s.candidateReads, s.searches)
 	}
-	m, _ = editorKey(m, "enter")
-	m, _ = editorKey(m, "j")
+	m, _ = editorKey(m, "down")
 	m, _ = editorKey(m, "space") // Beta
-	m, _ = editorKey(m, "/")
 	m, search := editorKey(m, "C")
 	m = runMembershipReads(t, m, search)
-	m, _ = editorKey(m, "enter")
 	m, _ = editorKey(m, "space") // Charlie
 	m, cmd := editorKey(m, "enter")
 	m = runMembershipReads(t, m, cmd)
@@ -86,7 +83,7 @@ func TestMetadataSelectionAppearsBeforeWrite(t *testing.T) {
 	m.detail.Fields = []github.DetailField{{Field: github.Field{ID: "labels", Name: "Labels"}, Value: &github.FieldValue{Value: "Alpha", Available: true}}}
 	_ = m.renderedDetailLines()
 	m = openMetadata(t, m, "l")
-	m, _ = editorKey(m, "j")
+	m, _ = editorKey(m, "down")
 	m, _ = editorKey(m, "space")
 	m, cmd := editorKey(m, "enter")
 	if cmd == nil || m.detail.Fields[0].Value.Value != "Alpha, Beta" {
@@ -113,9 +110,8 @@ func TestSelectedItemMetadataShortcuts(t *testing.T) {
 					t.Fatal("selected-item editor is not visible")
 				}
 				if key == "a" {
-					m, _ = editorKey(m, "enter")
 				}
-				m, _ = editorKey(m, "j")
+				m, _ = editorKey(m, "down")
 				m, _ = editorKey(m, "space")
 				m, cmd = editorKey(m, "enter")
 				m = runMembershipReads(t, m, cmd)
@@ -169,7 +165,7 @@ func TestAssigneeToggleKeepsCursorOnUser(t *testing.T) {
 	m, s := metadataModel()
 	s.options = append(s.options, github.IssueMetadataOption{ID: "c", Name: "Charlie"})
 	m = openMetadata(t, m, "a")
-	for _, key := range []string{"enter", "j", "j", "space"} {
+	for _, key := range []string{"down", "down", "space"} {
 		m, _ = editorKey(m, key)
 	}
 	editor := m.issueMetadataEditor
@@ -206,8 +202,7 @@ func TestAssigneeSearchLoadsNextPageAtEnd(t *testing.T) {
 	if len(m.issueMetadataEditor.options) != 1 || !m.issueMetadataEditor.searchHasNext {
 		t.Fatal("initial page was not bounded")
 	}
-	m, _ = editorKey(m, "enter")
-	m, next := editorKey(m, "j")
+	m, next := editorKey(m, "down")
 	m = runMembershipReads(t, m, next)
 	if len(m.issueMetadataEditor.options) != 2 || m.issueMetadataEditor.searchHasNext || len(s.searches) != 2 {
 		t.Fatalf("next page missing: %#v", m.issueMetadataEditor)
@@ -264,15 +259,11 @@ func TestIssueMetadataEditSearchAndDelta(t *testing.T) {
 			if m.issueMetadataEditor == nil {
 				t.Fatalf("editor did not open: %s", m.status)
 			}
-			if key == "l" {
-				m, _ = editorKey(m, "/")
-			}
 			m, _ = editorKey(m, "B")
 			m, search := editorKey(m, "e")
 			if key == "a" {
 				m = runMembershipReads(t, m, search)
 			}
-			m, _ = editorKey(m, "enter")
 			if len(m.issueMetadataEditor.visibleOptions()) != 1 || m.issueMetadataEditor.visibleOptions()[0].ID != "b" {
 				t.Fatal("search did not filter options")
 			}
@@ -291,7 +282,7 @@ func TestIssueMetadataEditSearchAndDelta(t *testing.T) {
 func TestIssueMetadataAmbiguousWriteBlocksUntilConfirmed(t *testing.T) {
 	m, s := metadataModel()
 	m = openMetadata(t, m, "l")
-	m, _ = editorKey(m, "j")
+	m, _ = editorKey(m, "down")
 	m, _ = editorKey(m, "space")
 	s.writeErr = errors.New("timeout")
 	m, cmd := editorKey(m, "enter")
@@ -315,7 +306,6 @@ func TestIssueMetadataDeniedOrCancelledDoesNotWrite(t *testing.T) {
 	}
 	s.canEdit = true
 	m = openMetadata(t, m, "a")
-	m, _ = editorKey(m, "enter")
 	m, _ = editorKey(m, "space")
 	m, _ = editorKey(m, "esc")
 	if m.issueMetadataEditor != nil || len(s.writes) != 0 {
@@ -327,7 +317,7 @@ func TestIssueMetadataPartialFailureReadsBackSuccessfulChange(t *testing.T) {
 	m, s := metadataModel()
 	m = openMetadata(t, m, "l")
 	m, _ = editorKey(m, "space") // remove Alpha
-	m, _ = editorKey(m, "j")
+	m, _ = editorKey(m, "down")
 	m, _ = editorKey(m, "space") // add Beta
 	s.writeErr = &github.MutationError{Err: errors.New("denied"), Ambiguous: false}
 	s.failWrite = 2
@@ -341,7 +331,7 @@ func TestIssueMetadataPartialFailureReadsBackSuccessfulChange(t *testing.T) {
 func TestIssueMetadataReadbackFailureRemainsBlocked(t *testing.T) {
 	m, s := metadataModel()
 	m = openMetadata(t, m, "l")
-	m, _ = editorKey(m, "j")
+	m, _ = editorKey(m, "down")
 	m, _ = editorKey(m, "space")
 	m, cmd := editorKey(m, "enter")
 	msg := cmd()

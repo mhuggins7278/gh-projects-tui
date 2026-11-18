@@ -21,7 +21,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.issueMetadataEditor != nil && key != "ctrl+c" {
-		if m.issueMetadataEditor.searching && msg.Text != "" {
+		if !m.issueMetadataEditor.loading && msg.Text != "" && key != "space" && key != " " {
 			m.appendInputText(msg.Text)
 			if m.issueMetadataEditor.kind == github.IssueAssignees {
 				return m, m.scheduleAssigneeSearch()
@@ -31,7 +31,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.updateMetadataEditorKey(key)
 	}
 	// Text payloads belong to the focused editor before printable shortcuts.
-	if (m.filtering || m.commentEditing || (m.tableEditor != nil && m.tableEditor.acceptsText())) && msg.Text != "" && key != "ctrl+c" {
+	if (m.filtering || m.commentEditing || (m.tableEditor != nil && !m.tableEditor.loading)) && msg.Text != "" && key != "ctrl+c" && !(m.tableEditor != nil && (key == "space" || key == " ") && !m.tableEditor.acceptsText() && !m.tableEditor.choosing && isMultiSelectField(m.tableEditor.fields[m.tableEditor.fieldIndex])) {
 		m.appendInputText(msg.Text)
 		return m, nil
 	}
@@ -195,7 +195,7 @@ var singleLineInput = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 // appendInputText consumes text and paste payloads before printable shortcuts.
 func (m *Model) appendInputText(text string) {
 	if m.issueMetadataEditor != nil {
-		if m.issueMetadataEditor.searching {
+		if !m.issueMetadataEditor.loading {
 			m.issueMetadataEditor.filter += singleLineInput.Replace(text)
 			m.issueMetadataEditor.index = 0
 		}
@@ -204,6 +204,9 @@ func (m *Model) appendInputText(text string) {
 	if m.tableEditor != nil {
 		if m.tableEditor.acceptsText() {
 			m.tableEditor.draft += singleLineInput.Replace(text)
+		} else if !m.tableEditor.loading {
+			m.tableEditor.filter += singleLineInput.Replace(text)
+			m.tableEditor.selectFirstMatch()
 		}
 		return
 	}

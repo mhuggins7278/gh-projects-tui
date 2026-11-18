@@ -152,10 +152,10 @@ func (m Model) updateMetadataLoaded(msg metadataLoadedMsg) (tea.Model, tea.Cmd) 
 	}
 	if editor.kind == github.IssueAssignees {
 		editor.searching = true
-		m.status = "Type to search · enter selects results · space toggles"
+		m.status = "Type to search · ↑/↓ move · space toggle · enter save · esc cancel"
 		return m, m.scheduleAssigneeSearch()
 	}
-	m.status = "Space toggles · / searches · enter saves · esc cancels"
+	m.status = "Type to search · ↑/↓ move · space toggle · enter save · esc cancel"
 	return m, nil
 }
 
@@ -281,36 +281,22 @@ func (m Model) updateAssigneeSearch(msg assigneeSearchMsg) (tea.Model, tea.Cmd) 
 func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 	editor := m.issueMetadataEditor
 	if key == "esc" {
-		if editor.searching {
-			editor.searching = false
-			return m, nil
-		}
-		if editor.searchCancel != nil {
-			editor.searchCancel()
-		}
-		m.issueMetadataEditor = nil
+		m.clearIssueMetadataEditor()
 		m.status = "Edit cancelled"
 		return m, nil
 	}
 	if editor.loading {
 		return m, nil
 	}
-	if editor.searching {
-		switch key {
-		case "enter":
-			editor.searching = false
-		case "backspace":
-			editor.filter = deleteLastRune(editor.filter)
-			editor.index = 0
-			if editor.kind == github.IssueAssignees {
-				return m, m.scheduleAssigneeSearch()
-			}
-		case "ctrl+u":
+	if key == "backspace" || key == "ctrl+u" {
+		if key == "ctrl+u" {
 			editor.filter = ""
-			editor.index = 0
-			if editor.kind == github.IssueAssignees {
-				return m, m.scheduleAssigneeSearch()
-			}
+		} else {
+			editor.filter = deleteLastRune(editor.filter)
+		}
+		editor.index = 0
+		if editor.kind == github.IssueAssignees {
+			return m, m.scheduleAssigneeSearch()
 		}
 		return m, nil
 	}
@@ -318,13 +304,13 @@ func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "/":
 		editor.searching = true
-	case "j", "down":
+	case "down", "ctrl+n":
 		if editor.index+1 < len(options) {
 			editor.index++
 		} else if editor.kind == github.IssueAssignees && editor.searchHasNext && !editor.searchLoading {
 			return m, m.startAssigneeSearch(editor.searchCursor)
 		}
-	case "k", "up":
+	case "up", "ctrl+p":
 		if editor.index > 0 {
 			editor.index--
 		}
@@ -420,15 +406,26 @@ func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 func (m Model) renderIssueMetadataEditor() string {
 	editor := m.issueMetadataEditor
 	var b strings.Builder
+	b.WriteString(m.editorIssueContext() + "\n")
 	fmt.Fprintf(&b, "%s\n", sectionStyle.Render("Edit "+string(editor.kind)))
 	if editor.loading {
 		b.WriteString("Loading options...\n")
 		return b.String()
 	}
-	search := editor.filter
-	if editor.searching {
-		search += "_"
+	var chosen []string
+	for id, enabled := range editor.selected {
+		if enabled {
+			chosen = append(chosen, editor.known[id].Name)
+		}
 	}
+	sort.Strings(chosen)
+	selection := "None"
+	if len(chosen) > 0 {
+		selection = strings.Join(chosen, ", ")
+	}
+	b.WriteString(truncateText("Selected: "+selection, m.detailPanelWidth()-4) + "\n\n")
+	search := editor.filter
+	search += "_"
 	fmt.Fprintf(&b, "Search: %s\n", search)
 	if editor.kind == github.IssueAssignees && editor.searchError != nil {
 		b.WriteString(truncateText("Search failed: "+editor.searchError.Error(), m.detailPanelWidth()-4) + "\n")
@@ -437,7 +434,7 @@ func (m Model) renderIssueMetadataEditor() string {
 	if len(options) == 0 && !editor.searchLoading && editor.searchError == nil {
 		b.WriteString("No matching options\n")
 	}
-	start, end := m.tableWindow(len(options), editor.index)
+	start, end := m.editorWindow(len(options), editor.index)
 	for index := start; index < end; index++ {
 		marker := "  "
 		if index == editor.index {
@@ -455,11 +452,7 @@ func (m Model) renderIssueMetadataEditor() string {
 	if editor.kind == github.IssueAssignees && editor.searchHasNext {
 		b.WriteString(mutedStyle.Render("↓ at end loads more\n"))
 	}
-	if editor.searching {
-		b.WriteString(mutedStyle.Render("type search · enter choose · esc stop searching"))
-	} else {
-		b.WriteString(mutedStyle.Render("/ search · space toggle · enter save · esc cancel"))
-	}
+	b.WriteString(mutedStyle.Render("type to search · ↑/↓ move · space toggle · enter save · esc cancel"))
 	return b.String()
 }
 

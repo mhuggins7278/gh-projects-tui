@@ -24,10 +24,6 @@ func (m Model) renderTableContent(b *strings.Builder) {
 	if m.view.Filter != "" {
 		fmt.Fprintf(b, "%s %s\n", mutedStyle.Render("Filter:"), m.view.Filter)
 	}
-	if m.tableEditor != nil {
-		b.WriteString(m.renderTableEditor())
-		return
-	}
 	rows := m.tableTreeRows()
 	groups := m.tableTreeGroups(rows)
 	visibleItems := tableGroupItems(groups)
