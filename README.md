@@ -262,6 +262,9 @@ values), and `esc` closes the panel. For GitHub issues on writable boards and ta
 `e` edits an available project field, including fields outside the saved columns.
 `l` edits labels and `a` edits assignees when permitted. The assignee picker
 searches GitHub as you type, while the label picker searches loaded labels.
+Assignee search results are cached locally for 15 minutes per GitHub host,
+repository, query, and page, including across app restarts. Reopening the picker
+reuses recent candidates; current assignments and permissions are checked fresh.
 In either picker, type to search, use `↑/↓` (or `ctrl+n/p`) to move, `space`
 to toggle, `enter` to save, and `esc` to cancel. Selected values remain visible
 above the results. Assignee results load more when you move past the last result.

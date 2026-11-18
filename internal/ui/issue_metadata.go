@@ -24,6 +24,7 @@ type issueMetadataEditor struct {
 	id                uint64
 	scope             boardReadScope
 	issueID, itemID   string
+	repository        string
 	kind              github.IssueMetadataKind
 	fromDetail        bool
 	loading           bool
@@ -102,7 +103,7 @@ func (m *Model) beginIssueMetadataEdit(kind github.IssueMetadataKind) tea.Cmd {
 		}
 	}
 	m.nextMetadataEditor++
-	editor := &issueMetadataEditor{id: m.nextMetadataEditor, scope: m.currentBoardReadScope(), issueID: item.Content.ID, itemID: item.ID, kind: kind, loading: true, fromDetail: m.detailVisible}
+	editor := &issueMetadataEditor{id: m.nextMetadataEditor, scope: m.currentBoardReadScope(), issueID: item.Content.ID, itemID: item.ID, kind: kind, loading: true, fromDetail: m.detailVisible, repository: item.Content.Repository}
 	m.issueMetadataEditor = editor
 	m.status = "Loading " + string(kind) + "..."
 	return func() tea.Msg {
@@ -207,6 +208,12 @@ func (m *Model) scheduleAssigneeSearch() tea.Cmd {
 	editor.options = nil
 	editor.index = 0
 	id, revision := editor.id, editor.searchRevision
+	if page, ok := readAssigneeCache(assigneeCachePath(m.host, editor.repository, editor.filter, "")); ok {
+		// Apply synchronously so reopening never flashes a search spinner.
+		updated, _ := m.updateAssigneeSearch(assigneeSearchMsg{editorID: id, revision: revision, page: page})
+		*m = updated.(Model)
+		return nil
+	}
 	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg { return assigneeSearchDebounceMsg{editorID: id, revision: revision} })
 }
 
@@ -229,9 +236,16 @@ func (m *Model) startAssigneeSearch(after string) tea.Cmd {
 	editor.searchLoading = true
 	editor.searchError = nil
 	id, revision, issueID, query := editor.id, editor.searchRevision, editor.issueID, editor.filter
+	cachePath := assigneeCachePath(m.host, editor.repository, query, after)
 	return func() tea.Msg {
 		defer cancel()
+		if page, ok := readAssigneeCache(cachePath); ok {
+			return assigneeSearchMsg{editorID: id, revision: revision, after: after, page: page}
+		}
 		page, err := source.SearchIssueAssignees(ctx, issueID, query, after)
+		if err == nil {
+			writeAssigneeCache(cachePath, page)
+		}
 		return assigneeSearchMsg{editorID: id, revision: revision, after: after, page: page, err: err}
 	}
 }
