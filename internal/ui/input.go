@@ -9,6 +9,21 @@ import (
 
 func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+	if m.viewFilter != nil && key != "ctrl+c" {
+		if m.viewFilter.saving {
+			return m, nil
+		}
+		if m.viewFilter.editing {
+			if msg.Text != "" {
+				m.viewFilter.insert(msg.Text)
+				return m, nil
+			}
+			return m.updateViewFilterKey(key)
+		}
+		if !m.detailVisible && m.tableEditor == nil && m.issueMetadataEditor == nil && !m.filtering && m.tableAction == nil && m.tableMove == nil && !m.issueActionConfirm && (key == "ctrl+s" || key == "ctrl+g") {
+			return m.updateViewFilterKey(key)
+		}
+	}
 	if m.actionPreparing && key != "ctrl+c" {
 		if key == "esc" {
 			if m.actionCancel != nil {
@@ -122,6 +137,9 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "e":
 				return m, m.beginSelectedFieldEdit()
+			case "f":
+				m.beginViewFilterEdit()
+				return m, nil
 			case "x":
 				m.beginIssueStateChange()
 				return m, nil
@@ -194,6 +212,10 @@ var singleLineInput = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 
 // appendInputText consumes text and paste payloads before printable shortcuts.
 func (m *Model) appendInputText(text string) {
+	if m.viewFilter != nil && m.viewFilter.editing && !m.viewFilter.saving {
+		m.viewFilter.insert(text)
+		return
+	}
 	if m.issueMetadataEditor != nil {
 		if !m.issueMetadataEditor.loading {
 			m.issueMetadataEditor.filter += singleLineInput.Replace(text)

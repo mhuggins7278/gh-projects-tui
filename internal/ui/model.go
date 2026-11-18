@@ -123,6 +123,7 @@ func (scope pickerReadScope) matches(m Model) bool {
 
 // abandonReads cancels navigation reads, never submitted writes.
 func (m *Model) abandonReads() {
+	m.viewFilter = nil
 	if m.cancel != nil {
 		m.cancel()
 	}
@@ -151,6 +152,7 @@ const (
 // Model drives the picker and board. Unsupported mutation paths remain
 // read-only until their reconciliation and safety rules are implemented.
 type Model struct {
+	viewFilter *viewFilterState
 	source     DiscoverySource
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -408,6 +410,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.startItemsLoadWithSpinner()
 	case itemsPageMsg:
 		return m.updateItems(msg)
+	case viewFilterSavedMsg:
+		return m.updateViewFilterSaved(msg)
 	case selectedFieldsLoadedMsg:
 		return m.updateSelectedFieldsLoaded(msg)
 	case mutationViewRefreshMsg:
@@ -1178,10 +1182,15 @@ func (m *Model) selectCurrent() tea.Cmd {
 }
 
 func (m *Model) refresh() tea.Cmd {
+	if m.viewFilter != nil {
+		m.status = "Discard the filter preview with ctrl+g before refreshing saved settings"
+		return nil
+	}
 	// Repeated refresh keys join the current UI read rather than restarting it.
 	if m.itemsLoading || m.loadingDetail || m.loadingViews || m.projectsLoading {
 		return nil
 	}
+	m.viewFilter = nil
 	if source, ok := m.source.(interface{ InvalidateReads() }); ok {
 		source.InvalidateReads()
 	}
@@ -1544,6 +1553,17 @@ func (m Model) filterLine() string {
 }
 
 func (m Model) footerHints() string {
+	if m.viewFilter != nil {
+		if m.viewFilter.saving {
+			return "saving view filter..."
+		}
+		if m.viewFilter.editing {
+			return "type filter · enter preview · ctrl+u clear · esc cancel"
+		}
+		if !m.detailVisible && m.tableEditor == nil && m.issueMetadataEditor == nil && m.issueActionPending == nil && m.tableAction == nil && m.tableMove == nil && !m.filtering && !m.issueActionConfirm && !m.actionPreparing {
+			return "FILTER PREVIEW · ctrl+s save to GitHub · ctrl+g discard · f edit · ? help"
+		}
+	}
 	if m.actionPreparing {
 		return "finding checkout · esc cancel" + m.debugHint()
 	}
@@ -1616,9 +1636,9 @@ func (m Model) footerHints() string {
 			}
 		}
 		if m.isTable() {
-			return "j/k rows · h/l expand · enter details · e fields · a assign · " + labels + " · x close/reopen · A archive · D remove · m group · ? help" + m.debugHint()
+			return "j/k rows · h/l expand · enter details · e fields · a assign · " + labels + " · x close/reopen · f filter · A archive · D remove · m group · ? help" + m.debugHint()
 		}
-		return "h/l lanes · j/k cards · H/L move · J/K reorder · e fields · a assign · " + labels + " · x close/reopen · A archive · D remove · ? help" + m.debugHint()
+		return "h/l lanes · j/k cards · H/L move · J/K reorder · e fields · a assign · " + labels + " · x close/reopen · f filter · A archive · D remove · ? help" + m.debugHint()
 	default:
 		return "Loading... q to quit"
 	}
@@ -1643,7 +1663,9 @@ func (m Model) helpText() string {
 	return actions + "Navigation\n" +
 		"  j/k or up/down    Move selection\n" +
 		"  enter             Select or open details\n" +
-		"  /                 Filter or search (enter finishes, esc clears)\n" +
+		"  /                 Search loaded items (enter finishes, esc clears)\n" +
+		"  f                 Edit view filter (enter previews)\n" +
+		"  ctrl+s / ctrl+g   Save / discard filter preview\n" +
 		"  esc/backspace     Go back\n" +
 		"  p / v / r         Projects / views / refresh\n" +
 		"  o                 Open in browser\n" +

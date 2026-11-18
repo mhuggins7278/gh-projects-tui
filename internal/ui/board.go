@@ -1012,6 +1012,14 @@ func (m *Model) moveBoardCard(delta int) {
 func (m Model) renderBoard(b *strings.Builder) {
 	board := &strings.Builder{}
 	m.renderBoardContent(board)
+	if m.viewFilter != nil && m.viewFilter.preview {
+		board.WriteString("\n" + statusStyle.Render("FILTER PREVIEW · not saved to GitHub"))
+	}
+	if m.viewFilter != nil && m.viewFilter.editing {
+		panel := detailFrameStyle.Width(m.detailPanelWidth()).Render(m.renderViewFilterEditor())
+		b.WriteString(renderPopover(board.String(), panel, m.frameContentWidth(), m.bodyCanvasHeight()))
+		return
+	}
 	if !m.detailVisible && m.tableEditor != nil {
 		panel := detailFrameStyle.Width(m.detailPanelWidth()).Height(min(18, m.detailPanelHeight())).Render(m.renderTableEditor())
 		b.WriteString(renderPopover(board.String(), panel, m.frameContentWidth(), m.bodyCanvasHeight()))

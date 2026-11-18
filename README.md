@@ -244,6 +244,8 @@ the saved state. Use `r` to pick up external changes.
 | `x` | Close or reopen the selected issue (confirmation required) |
 | `A` / `D` | Archive / remove the selected item from this project (confirmation required) |
 | `/` | Filter picker entries or search loaded cards |
+| `f` (board/table) | Edit the view filter; enter previews the query using GitHub |
+| `ctrl+s` / `ctrl+g` | Save the filter preview to GitHub / discard it |
 | `enter` / `esc` while searching | Finish search / clear search |
 | `esc` or `backspace` | Go back |
 | `v` | Pick a saved view |
@@ -256,6 +258,17 @@ the saved state. Use `r` to pick up external changes.
 On a board or table, `.` also opens labels. This remains available when a custom
 action uses `t`. With `--debug`, `F` opens the API inspector outside the
 detail panel.
+
+To change which items a view contains, press `f`, edit its filter, and press
+`enter` to preview the results. Use arrows, Home/End, and Backspace/Delete to
+edit the query; `ctrl+u` clears it. The preview is marked as unsaved. Press
+`ctrl+s` to update the shared GitHub view, or `ctrl+g` to restore its original
+filter. Switching views discards the preview; discard it before refreshing saved
+settings. `/` continues to search only loaded items. Saving requires project write
+access, a completed preview without API errors, and a host supporting
+[`updateProjectV2View`](https://docs.github.com/en/graphql/reference/projects#updateprojectv2view).
+Before saving, the app checks for intervening edits to the saved filter and reads
+back the result. A failed save retains the preview and displays the error.
 
 In item details, `j/k` scrolls, `f` toggles all fields (including unset/unavailable
 values), and `esc` closes the panel. For GitHub issues on writable boards and tables,

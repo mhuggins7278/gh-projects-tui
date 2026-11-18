@@ -34,7 +34,7 @@ var reservedActionKeys = map[string]bool{
 	"j": true, "k": true, "h": true, "l": true, "H": true, "L": true, "J": true, "K": true,
 	"g": true, "f": true, "F": true, "e": true, "m": true, "a": true, "D": true, "c": true, "x": true,
 	"q": true, "A": true, "p": true, "v": true, "r": true, "o": true,
-	"ctrl+c": true, "ctrl+h": true, "ctrl+i": true, "ctrl+j": true, "ctrl+m": true, "ctrl+u": true, "ctrl+z": true, "ctrl+s": true, "ctrl+q": true,
+	"ctrl+g": true, "ctrl+c": true, "ctrl+h": true, "ctrl+i": true, "ctrl+j": true, "ctrl+m": true, "ctrl+u": true, "ctrl+z": true, "ctrl+s": true, "ctrl+q": true,
 }
 
 var actionTemplateFields = map[string]string{
