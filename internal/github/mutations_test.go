@@ -11,6 +11,21 @@ import (
 	"github.com/cli/go-gh/v2/pkg/api"
 )
 
+func TestIssueCommentUsesSubjectID(t *testing.T) {
+	graphql := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{
+		func(query string, variables map[string]interface{}, response interface{}) error {
+			want := map[string]interface{}{"subjectId": "issue", "body": "a comment"}
+			if !strings.Contains(query, "addComment") || !reflect.DeepEqual(variables["input"], want) {
+				t.Fatalf("mutation = %q, variables = %#v", query, variables)
+			}
+			return json.Unmarshal([]byte(`{"addComment":{"commentEdge":{"node":{"id":"comment"}}}}`), response)
+		},
+	}}
+	if err := newClient(graphql, &fakeREST{}).IssueComment(context.Background(), "issue", "a comment"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProjectItemArchiveAndRemoveUseProjectMembershipIDs(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

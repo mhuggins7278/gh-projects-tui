@@ -136,7 +136,7 @@ func (c *Client) IssueComment(ctx context.Context, issueID, body string) error {
 			} `json:"commentEdge"`
 		} `json:"addComment"`
 	}
-	if err := c.graphql.DoWithContext(ctx, addIssueCommentMutation, map[string]interface{}{"input": map[string]interface{}{"issueId": issueID, "body": body}}, &response); err != nil {
+	if err := c.graphql.DoWithContext(ctx, addIssueCommentMutation, map[string]interface{}{"input": map[string]interface{}{"subjectId": issueID, "body": body}}, &response); err != nil {
 		return classifyMutationError(err)
 	}
 	if response.Add == nil || response.Add.Edge == nil || response.Add.Edge.Node == nil {
