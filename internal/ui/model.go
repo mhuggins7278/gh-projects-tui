@@ -194,6 +194,7 @@ type Model struct {
 	itemsCursor           string
 	itemsErr              error
 	itemsLoadFrame        int
+	itemsTiming           itemsLoadTiming
 	pendingMutationReload *boardReadScope
 	mutationRefreshID     uint64
 	pendingIssueReload    *boardReadScope
@@ -731,6 +732,10 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	m.itemsCursor = ""
 	m.itemsErr = nil
 	m.itemsLoadFrame = 0
+	m.itemsTiming = itemsLoadTiming{}
+	if m.debug {
+		m.itemsTiming.started = time.Now()
+	}
 	m.boardLane = 0
 	m.boardCard = 0
 	m.boardFocusID = ""
@@ -789,6 +794,7 @@ func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
 		if ctx == nil {
 			ctx = context.Background()
 		}
+		started := time.Now()
 		var page github.ItemsPage
 		var err error
 		if selective, ok := source.(BoardItemsSource); ok && !timeline {
@@ -796,7 +802,7 @@ func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
 		} else {
 			page, err = loader.PageItems(ctx, owner, project, filter, after)
 		}
-		return itemsPageMsg{page: page, after: after, reset: reset, err: err, generation: generation, scope: scope}
+		return itemsPageMsg{page: page, after: after, reset: reset, err: err, generation: generation, scope: scope, duration: time.Since(started)}
 	}
 }
 
@@ -813,6 +819,17 @@ func boardReadFields(view github.View) []github.Field {
 func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	if msg.generation != m.generation || !msg.scope.matches(m) || m.loadingDetail {
 		return m, nil
+	}
+	if !m.itemsTiming.started.IsZero() {
+		m.itemsTiming.pages++
+		m.itemsTiming.fetch += msg.duration
+		m.itemsTiming.slowest = max(m.itemsTiming.slowest, msg.duration)
+		if m.itemsTiming.pages == 1 {
+			m.itemsTiming.first = time.Since(m.itemsTiming.started)
+		}
+		if msg.err != nil || !msg.page.HasNext {
+			m.itemsTiming.total = time.Since(m.itemsTiming.started)
+		}
 	}
 	if msg.reset {
 		m.items = nil
@@ -1725,6 +1742,14 @@ func (m Model) apiInspector() string {
 	if status.TotalCost > 0 {
 		lines[0] += fmt.Sprintf(" · %d query points measured", status.TotalCost)
 	}
+	if timing := m.itemsTiming; timing.pages > 0 && m.screen == screenBoard {
+		line := fmt.Sprintf("items: %d page(s) · first %s · fetching %s · slowest %s",
+			timing.pages, timing.first.Round(time.Millisecond), timing.fetch.Round(time.Millisecond), timing.slowest.Round(time.Millisecond))
+		if timing.total > 0 {
+			line += fmt.Sprintf(" · total %s", timing.total.Round(time.Millisecond))
+		}
+		lines = append(lines, line)
+	}
 	if !status.Reset.IsZero() {
 		lines[0] += fmt.Sprintf(" · resets %s", status.Reset.Local().Format("15:04:05"))
 	}
@@ -1834,7 +1859,14 @@ type viewDetailMsg struct {
 	generation uint64
 }
 
+type itemsLoadTiming struct {
+	started                      time.Time
+	pages                        int
+	first, fetch, slowest, total time.Duration
+}
+
 type itemsPageMsg struct {
+	duration   time.Duration
 	page       github.ItemsPage
 	after      string
 	reset      bool
