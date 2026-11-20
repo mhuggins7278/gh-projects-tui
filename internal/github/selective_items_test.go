@@ -88,3 +88,29 @@ func TestIDOnlyProjectReadAvoidsFieldPagination(t *testing.T) {
 		t.Logf("membership lean=%v: %d requests for 100 IDs with paginated field values", lean, calls)
 	}
 }
+
+func TestBoardQueryRequestsNestedMetadataOnlyForMatchingFields(t *testing.T) {
+	owner := Owner{Login: "fixture", Kind: OrganizationOwner}
+	for _, includeNested := range []bool{false, true} {
+		fields := []Field{{Name: "Status", DataType: "SINGLE_SELECT"}, {Name: "Estimate", DataType: "NUMBER"}}
+		if includeNested {
+			fields = append(fields, Field{Name: "Assignees", DataType: "ASSIGNEES"}, Field{Name: "Linked pull requests", DataType: "PULL_REQUEST"})
+		}
+		client := newClient(reviewGraphQLFunc(func(_ context.Context, query string, vars map[string]interface{}, result interface{}) error {
+			wantConnections := 0
+			if includeNested {
+				wantConnections = 1
+			}
+			if strings.Count(query, "users(first:") != wantConnections || strings.Count(query, "...LinkedPullRequests") != wantConnections || strings.Count(query, "fragment LinkedPullRequests") != wantConnections {
+				t.Fatalf("unexpected nested selections: %s", query)
+			}
+			if vars["filter"] != "is:open" || vars["after"] != "cursor" || vars["field0"] != "Status" || vars["field1"] != "Estimate" || !strings.Contains(query, "orderBy: {field: POSITION, direction: ASC}") {
+				t.Fatalf("page query changed grouping fields, filter, cursor, or order: %v", vars)
+			}
+			return json.Unmarshal([]byte(`{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}`), result)
+		}), &fakeREST{})
+		if _, err := client.PageBoardItems(context.Background(), owner, 1, "is:open", "cursor", fields); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

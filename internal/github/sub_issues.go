@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 const subIssueContentFields = `__typename id number title url state viewerCanSetFields viewerCanClose viewerCanReopen repository { name nameWithOwner } subIssuesSummary { total completed }`
@@ -87,7 +88,10 @@ func (c *Client) PageSubIssues(ctx context.Context, projectID, issueID, after st
 	definitions, selection, names := selectedItemFields(fields, true, variables)
 	query = fmt.Sprintf(`query SubIssueValues($ids: [ID!]!%s) { nodes(ids: $ids) { ... on ProjectV2Item { %s } } }`, definitions, selection)
 	if len(names) > 0 {
-		query += fieldValueFragment + linkedPullRequestsFragment
+		query += fieldValueFragment
+		if strings.Contains(selection, "...LinkedPullRequests") {
+			query += linkedPullRequestsFragment
+		}
 	}
 	var values struct{ Nodes []json.RawMessage }
 	if err := c.graphql.DoWithContext(ctx, query, variables, &values); err != nil {

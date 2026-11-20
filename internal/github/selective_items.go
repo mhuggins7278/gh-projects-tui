@@ -82,7 +82,7 @@ func (c *Client) pageSelectedItems(ctx context.Context, owner Owner, project int
 	query := fmt.Sprintf(`query SelectedProjectItems($login: String!, $project: Int!, $filter: String, $after: String%s) { %s(login: $login) { projectV2(number: $project) { items(first: 100, after: $after, query: $filter, orderBy: {field: POSITION, direction: ASC}) { nodes { %s } pageInfo { hasNextPage endCursor } } } } }`, definitions, branch, selection)
 	if len(names) > 0 {
 		query += fieldValueFragment
-		if content {
+		if strings.Contains(selection, "...LinkedPullRequests") {
 			query += linkedPullRequestsFragment
 		}
 	}
@@ -145,8 +145,6 @@ func selectedItemFields(fields []Field, content bool, variables map[string]inter
 		fmt.Fprintf(&definitions, ", $%s: String!", name)
 		fmt.Fprintf(&selections, "%s: fieldValueByName(name: $%s) { ...FieldValue", name, name)
 		if content {
-			selections.WriteString(" ... on ProjectV2ItemFieldUserValue { users(first: 10) { nodes { login } pageInfo { hasNextPage endCursor } } }")
-			selections.WriteString(" ...LinkedPullRequests")
 			selections.WriteString(selectedRowMetadata(field))
 		}
 		selections.WriteString(" } ")
@@ -182,9 +180,15 @@ func decodeSelectedItem(node json.RawMessage, names []string) (*rawItem, error) 
 
 // Select nested metadata only for saved columns that display it.
 func selectedRowMetadata(field Field) string {
+	const users = " ... on ProjectV2ItemFieldUserValue { users(first: 10) { nodes { login } pageInfo { hasNextPage endCursor } } }"
+	const pulls = " ...LinkedPullRequests"
 	kind := strings.ToUpper(field.DataType)
 	if kind == "" {
 		switch strings.ToLower(field.Name) {
+		case "assignees":
+			kind = "ASSIGNEES"
+		case "linked pull requests":
+			kind = "PULL_REQUEST"
 		case "labels":
 			kind = "LABELS"
 		case "milestone":
@@ -196,6 +200,12 @@ func selectedRowMetadata(field Field) string {
 		}
 	}
 	switch kind {
+	case "ASSIGNEES", "USER":
+		return users
+	case "PULL_REQUEST":
+		return pulls
+	case "TEXT", "TITLE", "NUMBER", "DATE", "SINGLE_SELECT", "MULTI_SELECT", "ITERATION":
+		return ""
 	case "LABELS":
 		return ` ... on ProjectV2ItemFieldLabelValue { labels(first: 10) { nodes { name } pageInfo { hasNextPage endCursor } } }`
 	case "MILESTONE":
@@ -204,6 +214,9 @@ func selectedRowMetadata(field Field) string {
 		return ` ... on ProjectV2ItemFieldRepositoryValue { repository { name nameWithOwner } }`
 	case "REVIEWERS":
 		return ` ... on ProjectV2ItemFieldReviewerValue { reviewers(first: 10) { nodes { __typename ... on User { login } ... on Team { name } } pageInfo { hasNextPage endCursor } } }`
+	default:
+		// Field metadata may omit the type. Preserve the nested values for
+		// fields we cannot identify from their type or built-in name.
+		return users + pulls
 	}
-	return ""
 }
