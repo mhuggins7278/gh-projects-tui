@@ -263,7 +263,7 @@ func (m *Model) startCustomAction(action config.Action) tea.Cmd {
 		m.actionPrepareID++
 		id := m.actionPrepareID
 		m.actionRunning, m.actionPreparing, m.actionCancel = true, true, cancel
-		m.status = "Finding checkout for " + values["RepoName"] + "... · esc cancels"
+		m.status = ""
 		paths, roots := m.repoPaths, m.repoSearchRoots
 		return func() tea.Msg {
 			defer cancel()
@@ -277,7 +277,7 @@ func (m *Model) startCustomAction(action config.Action) tea.Cmd {
 		return nil
 	}
 	m.actionRunning = true
-	m.status = "Running " + action.Name + "..."
+	m.status = ""
 	return tea.ExecProcess(command, func(err error) tea.Msg {
 		return customActionDoneMsg{scope: scope, itemID: itemID, name: action.Name, err: err}
 	})
@@ -306,7 +306,7 @@ func (m Model) updateCustomActionPrepared(msg customActionPreparedMsg) (tea.Mode
 		m.status = err.Error()
 		return m, nil
 	}
-	m.status = "Running " + msg.action.Name + "..."
+	m.status = ""
 	return m, tea.ExecProcess(command, func(err error) tea.Msg {
 		return customActionDoneMsg{scope: msg.scope, itemID: msg.itemID, name: msg.action.Name, err: err}
 	})
@@ -318,7 +318,7 @@ func (m Model) updateCustomActionDone(msg customActionDoneMsg) (tea.Model, tea.C
 	if msg.err != nil {
 		m.status = fmt.Sprintf("%s failed: %v", msg.name, msg.err)
 	} else {
-		m.status = msg.name + " finished"
+		m.status = ""
 	}
 	if invalidator, ok := m.source.(interface{ InvalidateReads() }); ok {
 		invalidator.InvalidateReads()

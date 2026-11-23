@@ -651,7 +651,8 @@ func TestSavedFilteredStatusBoardPagesUnchangedQuery(t *testing.T) {
 	}
 	updated, _ = model.Update(next())
 	model = updated.(Model)
-	if itemCalls != 2 || model.itemsLoading || len(model.items) != 2 || len(model.boardLanes()[1].Items) != 2 {
+	lanes := model.boardLanes()
+	if itemCalls != 2 || model.itemsLoading || len(model.items) != 2 || len(lanes) != 1 || lanes[0].Name != "Done" || len(lanes[0].Items) != 2 {
 		t.Fatalf("filtered pages = calls:%d items:%d loading:%v", itemCalls, len(model.items), model.itemsLoading)
 	}
 }
@@ -854,7 +855,7 @@ func TestSuccessfulMutationReconcilesCanonicalState(t *testing.T) {
 		t.Fatalf("mutation reloaded view: calls=%d view=%p want=%p", viewCalls, model.view, &view)
 	}
 	// Single successful move: pre-read + write, post-read skipped.
-	if itemCalls != 1 || model.status != "Move card saved" || model.mutationLoading || model.mutationSession != nil {
+	if itemCalls != 1 || model.status != "" || model.mutationLoading || model.mutationSession != nil {
 		t.Fatalf("successful mutation state = items %d status %q loading=%v session=%#v", itemCalls, model.status, model.mutationLoading, model.mutationSession)
 	}
 }
@@ -950,7 +951,7 @@ func TestSavedFilteredBoardAllowsSupportedMutations(t *testing.T) {
 		t.Fatalf("supported filtered mutation did not start: status=%q", model.status)
 	}
 	model = runMutationCommands(t, model, cmd)
-	if !reflect.DeepEqual(mutations, []string{"field:two"}) || !strings.Contains(model.status, "shared across views") {
+	if !reflect.DeepEqual(mutations, []string{"field:two"}) || model.status != "" {
 		t.Fatalf("filtered mutation = calls:%#v status:%q", mutations, model.status)
 	}
 }

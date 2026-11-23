@@ -105,7 +105,7 @@ func (m *Model) beginIssueMetadataEdit(kind github.IssueMetadataKind) tea.Cmd {
 	m.nextMetadataEditor++
 	editor := &issueMetadataEditor{id: m.nextMetadataEditor, scope: m.currentBoardReadScope(), issueID: item.Content.ID, itemID: item.ID, kind: kind, loading: true, fromDetail: m.detailVisible, repository: item.Content.Repository}
 	m.issueMetadataEditor = editor
-	m.status = "Loading " + string(kind) + "..."
+	m.status = ""
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
 		defer cancel()
@@ -153,10 +153,10 @@ func (m Model) updateMetadataLoaded(msg metadataLoadedMsg) (tea.Model, tea.Cmd) 
 	}
 	if editor.kind == github.IssueAssignees {
 		editor.searching = true
-		m.status = "Type to search · ↑/↓ move · space toggle · enter save · esc cancel"
+		m.status = ""
 		return m, m.scheduleAssigneeSearch()
 	}
-	m.status = "Type to search · ↑/↓ move · space toggle · enter save · esc cancel"
+	m.status = ""
 	return m, nil
 }
 
@@ -296,7 +296,7 @@ func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 	editor := m.issueMetadataEditor
 	if key == "esc" {
 		m.clearIssueMetadataEditor()
-		m.status = "Edit cancelled"
+		m.status = ""
 		return m, nil
 	}
 	if editor.loading {
@@ -366,7 +366,7 @@ func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 		}
 		m.issueMetadataEditor = nil
 		if len(add) == 0 && len(remove) == 0 {
-			m.status = "No changes"
+			m.status = ""
 			return m, nil
 		}
 		source, ok := m.source.(issueMetadataSource)
@@ -385,7 +385,7 @@ func (m Model) updateMetadataEditorKey(key string) (tea.Model, tea.Cmd) {
 		}
 		m.applyIssueMetadata(editor.itemID, editor.kind, selected)
 		m.mutationLoading = true
-		m.status = "Saving " + string(editor.kind) + "..."
+		m.status = ""
 		return m, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
 			defer cancel()
@@ -479,7 +479,6 @@ func (m Model) updateMetadataWrite(msg metadataWriteMsg) (tea.Model, tea.Cmd) {
 	pending.metadata.err, pending.metadata.incomplete = msg.err, msg.incomplete
 	// Even a definite rejection may follow a successful first step. Read back
 	// before unlocking so the UI and filtered membership reflect GitHub.
-	m.status = "Checking issue " + string(pending.metadata.kind) + "..."
 	return m, m.startIssueReadback()
 }
 
@@ -537,10 +536,8 @@ func (m Model) updateMetadataReadback(msg metadataReadbackMsg) (tea.Model, tea.C
 	m.mutationLoading = false
 	if pending.metadata.incomplete {
 		m.status = "Some changes may not have been saved: " + pending.metadata.err.Error()
-	} else if pending.metadata.err != nil {
-		m.status = "Issue " + string(pending.metadata.kind) + " reconciled"
 	} else {
-		m.status = "Issue " + string(pending.metadata.kind) + " saved"
+		m.status = ""
 	}
 	if !pending.scope.sameProject(m) {
 		return m, nil

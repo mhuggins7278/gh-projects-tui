@@ -31,7 +31,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.actionCancel = nil
 			m.actionPreparing, m.actionRunning = false, false
-			m.status = "Action cancelled"
+			m.status = ""
 		}
 		return m, nil
 	}

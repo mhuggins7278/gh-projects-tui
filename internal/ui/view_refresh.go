@@ -18,7 +18,7 @@ func (m *Model) refreshSavedView() tea.Cmd {
 	// Use the existing read gate during metadata loading too: submitted saves
 	// must wait for the fresh view before triggering any item reload.
 	m.itemsLoading = true
-	m.status = "Refreshing saved view settings..."
+	m.status = ""
 	scope, ctx, source := m.currentBoardReadScope(), m.ctx, m.source
 	return func() tea.Msg {
 		loader, ok := source.(ViewSource)

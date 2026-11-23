@@ -262,7 +262,7 @@ func TestViewPickerLoadsTableLayout(t *testing.T) {
 	if cmd == nil || !result.loadingDetail {
 		t.Fatalf("table view did not start loading: cmd nil=%v loading=%v", cmd == nil, result.loadingDetail)
 	}
-	if result.status != "Loading view #3..." {
+	if result.status != "" {
 		t.Fatalf("status = %q", result.status)
 	}
 }

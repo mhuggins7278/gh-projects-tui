@@ -177,7 +177,7 @@ func TestAssigneeToggleKeepsCursorOnUser(t *testing.T) {
 		t.Fatalf("cursor moved to %q after deselecting Charlie", got)
 	}
 	m, cmd := editorKey(m, "enter")
-	if cmd != nil || m.status != "No changes" {
+	if cmd != nil || m.status != "" || m.issueMetadataEditor != nil {
 		t.Fatalf("toggling Charlie twice should leave no changes, got %q", m.status)
 	}
 }

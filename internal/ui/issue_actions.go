@@ -78,7 +78,7 @@ func (m Model) updateIssueReadback(msg issueReadbackMsg) (tea.Model, tea.Cmd) {
 	}
 	m.issueActionPending = nil
 	m.mutationLoading = false
-	m.status = "Issue action reconciled: " + strings.ToLower(wanted)
+	m.status = ""
 	return m, m.queueIssueViewReload(pending.scope)
 }
 
@@ -108,7 +108,7 @@ func (m Model) updateIssueAction(msg issueActionMsg) (tea.Model, tea.Cmd) {
 				m.status = "Issue action failed: " + msg.err.Error()
 				return m, nil
 			}
-			m.status = msg.status
+			m.status = ""
 			if msg.err == nil && msg.closed != nil {
 				return m, m.queueIssueViewReload(pending.scope)
 			}
@@ -144,7 +144,7 @@ func (m Model) updateIssueAction(msg issueActionMsg) (tea.Model, tea.Cmd) {
 		m.status = "Issue action failed: " + msg.err.Error()
 		return m, nil
 	}
-	m.status = msg.status
+	m.status = ""
 	if msg.closed != nil {
 		state := "OPEN"
 		if *msg.closed {

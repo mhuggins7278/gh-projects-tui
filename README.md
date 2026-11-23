@@ -300,9 +300,11 @@ offer these issue actions.
   GitHub determines syntax and item membership; the TUI has no local filter
   allowlist or field-name/type restrictions. API errors are displayed without
   retrying as an unfiltered view. `/` searches only already-loaded cards and
-  does not change the saved GitHub query. On boards, simple exclusions such as
-  `-status:Triage,Backlog` also hide empty lanes for those status options;
-  grouped expressions and filters using `OR` do not hide lanes locally.
+  does not change the saved GitHub query. On boards, simple Status filters such
+  as `status:Triage,Backlog,Ready` or `-status:Done` hide empty lanes excluded by
+  those terms, including Status swimlanes. Allowed lanes remain visible even
+  when empty, and populated lanes are never hidden locally. Grouped expressions,
+  `OR`/`NOT`, and unfamiliar positive Status values do not prune lanes locally.
   See [the filter contract and evidence](docs/api-contract.md#saved-filter-grammar-and-evidence)
   for observed server behavior and web/API differences. Grouping and sorting
   have separate compatibility checks because the TUI implements them locally.
@@ -321,6 +323,8 @@ offer these issue actions.
   If a timeout leaves a save's outcome unknown, dependent writes pause until
   `r` confirms the state; `r` retries readback only and never resubmits the write.
   Switching views does not cancel a submitted write.
+- Routine saves, refreshes, and cancellations stay quiet. The status area is
+  reserved for errors, warnings, and confirmations that need your attention.
 - Board/table loads keep grouping, sort, and card fields selective. Views with
   at least 300 items read forward and backward concurrently, then join in
   canonical position order. Inconsistent counts or joins restart once with

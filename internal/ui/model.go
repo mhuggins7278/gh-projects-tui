@@ -195,7 +195,7 @@ type Model struct {
 	pendingRejectedBoard  *github.View
 	viewPickerNotice      string
 	loadingDetail         bool
-	status                string
+	status                string // Errors, warnings, and action-required prompts; not routine activity.
 	items                 []github.Item
 	itemsLoading          bool
 	itemsHasNext          bool
@@ -464,7 +464,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.fallback {
 			m.status = "This item has no browser URL; opened the project instead."
 		} else {
-			m.status = "Opened in browser."
+			m.status = ""
 		}
 		return m, nil
 	case issueActionMsg:
@@ -1234,7 +1234,7 @@ func (m *Model) selectCurrent() tea.Cmd {
 		}
 		m.loadingDetail = true
 		m.loading = false
-		m.status = fmt.Sprintf("Loading view #%d...", selected.Number)
+		m.status = ""
 		owner := *m.selectedOwner
 		project := m.selectedProject.Number
 		return m.openViewCmd(owner, project, selected.Number)

@@ -276,14 +276,10 @@ func lanesForView(view *github.View, items []github.Item) []boardLane {
 	return hideExcludedStatusLanes(view, withoutEmptyNoStatusLanes(lanes))
 }
 
-// hideExcludedStatusLanes applies only unambiguous negative Status terms to
-// empty board lanes. GitHub remains authoritative for item membership.
+// hideExcludedStatusLanes applies unambiguous Status inclusion/exclusion terms
+// to empty board lanes. GitHub remains authoritative for item membership.
 func hideExcludedStatusLanes(view *github.View, lanes []boardLane) []boardLane {
 	if view.Layout != github.BoardLayout || len(lanes) == 0 {
-		return lanes
-	}
-	excluded := excludedStatusValues(view.Filter)
-	if len(excluded) == 0 {
 		return lanes
 	}
 	column, row, combined := boardCombinedFields(view)
@@ -293,6 +289,14 @@ func hideExcludedStatusLanes(view *github.View, lanes []boardLane) []boardLane {
 	statusColumn := isSingleSelectField(column) && strings.EqualFold(column.Name, "Status")
 	statusRow := combined && isSingleSelectField(row) && strings.EqualFold(row.Name, "Status")
 	if !statusColumn && !statusRow {
+		return lanes
+	}
+	status := column
+	if statusRow {
+		status = row
+	}
+	excluded := excludedStatusValues(view.Filter, status.Options)
+	if len(excluded) == 0 {
 		return lanes
 	}
 	populatedColumns, populatedRows := map[string]bool{}, map[string]bool{}
@@ -321,8 +325,9 @@ func hideExcludedStatusLanes(view *github.View, lanes []boardLane) []boardLane {
 }
 
 // The filter language is server-owned. Only interpret simple conjunctions;
-// expressions with grouping or OR may legitimately retain an excluded value.
-func excludedStatusValues(filter string) map[string]bool {
+// expressions with grouping, OR, or NOT may legitimately retain an excluded
+// value. Positive values must match known options, not server-owned expressions.
+func excludedStatusValues(filter string, options []github.FieldOption) map[string]bool {
 	var tokens []string
 	var token strings.Builder
 	quoted, escaped := false, false
@@ -363,12 +368,18 @@ func excludedStatusValues(filter string) map[string]bool {
 		tokens = append(tokens, token.String())
 	}
 	excluded := map[string]bool{}
+	var included []map[string]bool
+	known := make(map[string]bool, len(options))
+	for _, option := range options {
+		known[strings.ToLower(option.Name)] = true
+	}
 	for _, term := range tokens {
-		if strings.EqualFold(term, "OR") {
+		if strings.EqualFold(term, "OR") || strings.EqualFold(term, "NOT") {
 			return nil
 		}
 		key, values, ok := strings.Cut(term, ":")
-		if !ok || !strings.EqualFold(key, "-status") {
+		positive := strings.EqualFold(key, "status")
+		if !ok || (!positive && !strings.EqualFold(key, "-status")) {
 			continue
 		}
 		var part strings.Builder
@@ -396,6 +407,7 @@ func excludedStatusValues(filter string) map[string]bool {
 			part.WriteRune(r)
 		}
 		parts = append(parts, part.String())
+		termValues := map[string]bool{}
 		for _, value := range parts {
 			if strings.HasPrefix(value, `"`) {
 				unquoted, err := strconv.Unquote(value)
@@ -409,7 +421,26 @@ func excludedStatusValues(filter string) map[string]bool {
 			if value == "" {
 				return nil
 			}
-			excluded[strings.ToLower(value)] = true
+			value = strings.ToLower(value)
+			if positive && !known[value] {
+				return nil
+			}
+			termValues[value] = true
+		}
+		if positive {
+			included = append(included, termValues)
+		} else {
+			for value := range termValues {
+				excluded[value] = true
+			}
+		}
+	}
+	for value := range known {
+		for _, values := range included {
+			if !values[value] {
+				excluded[value] = true
+				break
+			}
 		}
 	}
 	return excluded

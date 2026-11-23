@@ -33,7 +33,7 @@ func (m *Model) beginViewFilterEdit() {
 	}
 	m.viewFilter.draft, m.viewFilter.editing = m.view.Filter, true
 	m.viewFilter.cursor = len([]rune(m.view.Filter))
-	m.status = "Edit the view filter · enter preview · esc cancel"
+	m.status = ""
 }
 
 func (m Model) updateViewFilterKey(key string) (tea.Model, tea.Cmd) {
@@ -48,7 +48,7 @@ func (m Model) updateViewFilterKey(key string) (tea.Model, tea.Cmd) {
 			if !state.preview {
 				m.viewFilter = nil
 			}
-			m.status = "Filter edit cancelled"
+			m.status = ""
 		case "left":
 			state.cursor = max(0, state.cursor-1)
 		case "right":
@@ -77,7 +77,7 @@ func (m Model) updateViewFilterKey(key string) (tea.Model, tea.Cmd) {
 			view.Filter = state.draft
 			m.view = &view
 			m.filter, m.filtering = "", false
-			m.status = "Previewing filter · ctrl+s save to GitHub · ctrl+g discard · f edit"
+			m.status = ""
 			return m, m.startItemsLoadPreservingFocus()
 		}
 		return m, nil
@@ -91,7 +91,7 @@ func (m Model) updateViewFilterKey(key string) (tea.Model, tea.Cmd) {
 		view.Filter = state.original
 		m.view = &view
 		m.viewFilter = nil
-		m.status = "Filter preview discarded"
+		m.status = ""
 		return m, m.startItemsLoadPreservingFocus()
 	}
 	if key != "ctrl+s" {
@@ -108,7 +108,7 @@ func (m Model) updateViewFilterKey(key string) (tea.Model, tea.Cmd) {
 	}
 	state.saving = true
 	id, original, draft := m.view.ID, state.original, m.view.Filter
-	m.status = "Saving view filter to GitHub..."
+	m.status = ""
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
 		defer cancel()
@@ -132,7 +132,7 @@ func (m Model) updateViewFilterSaved(msg viewFilterSavedMsg) (tea.Model, tea.Cmd
 	if m.selectedOwner != nil && m.selectedProject != nil {
 		delete(m.viewsCache, viewsCacheKey(*m.selectedOwner, m.selectedProject.Number))
 	}
-	m.status = "View filter saved to GitHub"
+	m.status = ""
 	return m, nil
 }
 

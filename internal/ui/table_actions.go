@@ -224,7 +224,7 @@ func (m *Model) confirmTableAction() tea.Cmd {
 	remove := state.remove
 	scope := state.scope
 	source := m.source.(tableItemActionSource)
-	m.status = "Saving project item action..."
+	m.status = ""
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
 		defer cancel()
@@ -243,10 +243,6 @@ func (m Model) updateTableAction(msg tableActionMsg) (tea.Model, tea.Cmd) {
 	if state == nil || state.phase != "saving" || msg.scope != state.scope || state.itemID != msg.itemID || state.remove != msg.remove {
 		return m, nil
 	}
-	verb := "Archived"
-	if state.remove {
-		verb = "Removed from project"
-	}
 	if msg.err != nil && !github.IsAmbiguousMutationError(msg.err) {
 		if state.scope.matches(m) {
 			m.items = state.beforeItems
@@ -263,7 +259,7 @@ func (m Model) updateTableAction(msg tableActionMsg) (tea.Model, tea.Cmd) {
 		return m, m.startTableActionReadback()
 	} else {
 		m.tableAction = nil
-		m.status = verb + ": " + state.label
+		m.status = ""
 	}
 	// Select the next surviving row (or the previous one), even if the saved
 	// view's grouping or sort places it elsewhere after the next read.
@@ -341,7 +337,7 @@ func (m Model) updateTableActionReadback(msg tableActionReadbackMsg) (tea.Model,
 	}
 	m.tableAction = nil
 	delete(m.detailCache, state.itemID)
-	m.status = "Item no longer appears among the project's active items; action reconciled."
+	m.status = ""
 	if state.scope.sameProject(m) && m.screen == screenBoard {
 		if m.itemsLoading {
 			scope := m.currentBoardReadScope()
@@ -359,7 +355,7 @@ func (m Model) updateTableConfirmationKey(key string) (tea.Model, tea.Cmd) {
 		return m, m.confirmTableAction()
 	case "esc":
 		m.tableAction = nil
-		m.status = "Project item action cancelled"
+		m.status = ""
 	}
 	return m, nil
 }
@@ -368,7 +364,7 @@ func (m Model) updateTableMoveKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc":
 		m.tableMove = nil
-		m.status = "Group move cancelled"
+		m.status = ""
 	case "j", "down":
 		if m.tableMove.index+1 < len(m.tableMove.lanes) {
 			m.tableMove.index++

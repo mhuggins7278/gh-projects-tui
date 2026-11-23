@@ -186,11 +186,10 @@ func (m *Model) enqueueBoardMutation(intent boardMutationIntent) tea.Cmd {
 					// so reset the optimistic view explicitly.
 					m.items = cloneItems(session.canonicalItems)
 					m.clampBoardCursor()
-					m.status = "Move cancelled (back to start)"
 				} else {
 					m.projectPendingMutations()
-					m.status = fmt.Sprintf("Saving moves (%d queued)...", len(session.intents)-1)
 				}
+				m.status = ""
 				return nil
 			}
 			intent.direction = combined
@@ -203,11 +202,7 @@ func (m *Model) enqueueBoardMutation(intent boardMutationIntent) tea.Cmd {
 	session.intents = append(session.intents, intent)
 	m.boardFocusID = intent.itemID
 	m.projectPendingMutations()
-	if len(session.intents) > 1 {
-		m.status = fmt.Sprintf("Saving moves (%d queued)...", len(session.intents)-1)
-	} else {
-		m.status = intent.description + ": settling..."
-	}
+	m.status = ""
 	if len(session.intents) == 1 && session.plan == nil && session.attempt == nil && session.readID == 0 {
 		return m.settleMutationCmd(session.id)
 	}
@@ -231,7 +226,6 @@ func (m *Model) retryMutationReadback() tea.Cmd {
 	if m.mutationSession == nil || !m.mutationSession.blocked {
 		return nil
 	}
-	m.setMutationStatus(m.mutationSession, "Reconciling the saved project state...")
 	return m.startMutationReadback()
 }
 
@@ -428,15 +422,9 @@ func (m *Model) updateBoardMutation(msg boardMutationMsg) (tea.Model, tea.Cmd) {
 		session.attempt = nil
 		refresh := m.showReconciledItems(session)
 		detailRefresh := m.refreshMutationDetail(session, intent.itemID)
-		status := session.notice
-		if status == "" {
-			status = mutationCompletionStatus(session)
-		}
 		m.mutationSession = nil
 		m.mutationLoading = false
-		if status != "" && sameMutationProjectByModel(session, m) {
-			m.status = status
-		}
+		m.setMutationStatus(session, session.notice)
 		return *m, tea.Batch(refresh, detailRefresh)
 	}
 	session.attempt = &result
@@ -594,29 +582,15 @@ func (m *Model) dispatchNextMutation() tea.Cmd {
 		session.writeID++
 		m.mutationLoading = true
 		m.projectPendingMutations()
-		m.setMutationStatus(session, fmt.Sprintf("Saving moves (%d queued)...", len(session.intents)-1))
+		m.setMutationStatus(session, session.notice)
 		return m.applyMutationPlanCmd(session.id, session.writeID, plan)
 	}
 
 	refresh := m.showReconciledItems(session)
-	status := session.notice
-	if status == "" {
-		status = mutationCompletionStatus(session)
-	}
 	m.mutationSession = nil
 	m.mutationLoading = false
-	if status != "" && sameMutationProjectByModel(session, m) {
-		m.status = status
-	}
+	m.setMutationStatus(session, session.notice)
 	return refresh
-}
-
-func mutationCompletionStatus(session *boardMutationSession) string {
-	status := session.lastSuccess
-	if status != "" && !session.fieldEdited && strings.TrimSpace(session.view.Filter) != "" {
-		status += "; project position is shared across views, so this move can change the card's relationship to hidden items and other views"
-	}
-	return status
 }
 
 func (m *Model) applyMutationPlanCmd(sessionID, writeID uint64, plan boardMutationPlan) tea.Cmd {

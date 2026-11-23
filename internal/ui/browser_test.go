@@ -35,7 +35,7 @@ func TestOpenBrowserUsesSelectedIssueURL(t *testing.T) {
 	}
 	updated, _ = model.Update(cmd())
 	model = updated.(Model)
-	if opened != "https://github.example/acme/repo/issues/42" || model.status != "Opened in browser." {
+	if opened != "https://github.example/acme/repo/issues/42" || model.status != "" {
 		t.Fatalf("opened URL/status = %q / %q", opened, model.status)
 	}
 }
@@ -52,7 +52,7 @@ func TestOpenBrowserUsesProjectURLWhenNoCardIsSelected(t *testing.T) {
 	model = updated.(Model)
 	updated, _ = model.Update(cmd())
 	model = updated.(Model)
-	if opened != model.selectedProject.URL || model.status != "Opened in browser." {
+	if opened != model.selectedProject.URL || model.status != "" {
 		t.Fatalf("project URL/status = %q / %q", opened, model.status)
 	}
 }

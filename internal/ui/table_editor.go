@@ -65,7 +65,7 @@ func (m *Model) beginSelectedFieldEdit() tea.Cmd {
 	m.nextFieldRequest++
 	requestID := m.nextFieldRequest
 	m.tableEditor = &tableFieldEditor{scope: scope, itemID: item.ID, requestID: requestID, loading: true, choosing: true}
-	m.status = "Loading project fields..."
+	m.status = ""
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
 		defer cancel()
@@ -119,7 +119,7 @@ func (m Model) updateSelectedFieldsLoaded(msg selectedFieldsLoadedMsg) (tea.Mode
 	}
 	editor.values = msg.detail.Fields
 	editor.loading = false
-	m.status = "Type to find a field · ↑/↓ choose · enter edit · esc cancel"
+	m.status = ""
 	return m, nil
 }
 
@@ -161,7 +161,7 @@ func (m *Model) beginDetailFieldEdit() {
 		return
 	}
 	m.tableEditor = &tableFieldEditor{detail: true, scope: m.currentBoardReadScope(), itemID: item.ID, fields: fields, choosing: true}
-	m.status = "Type to find a field · ↑/↓ choose · enter edit · esc cancel"
+	m.status = ""
 }
 
 func editableTableField(field github.Field) bool {
@@ -228,7 +228,7 @@ func (m *Model) chooseTableField() {
 			break
 		}
 	}
-	m.status = "Enter saves; esc cancels. Empty scalar values clear the field."
+	m.status = ""
 }
 
 func editorOptions(field github.Field) []github.FieldOption {
@@ -254,7 +254,7 @@ func (m Model) updateTableEditorKey(key string) (tea.Model, tea.Cmd) {
 	editor := m.tableEditor
 	if key == "esc" {
 		m.tableEditor = nil
-		m.status = "Field edit cancelled"
+		m.status = ""
 		return m, nil
 	}
 	if editor.loading {

@@ -130,7 +130,7 @@ func (m Model) updateIssueConfirmationKey(key string) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.issueActionConfirm = false
 		m.issueActionTarget = nil
-		m.status = "Issue action cancelled"
+		m.status = ""
 		return m, nil
 	case "enter":
 		m.issueActionConfirm = false
@@ -162,6 +162,7 @@ func (m Model) updateIssueConfirmationKey(key string) (tea.Model, tea.Cmd) {
 			state = "CLOSED"
 		}
 		m.applyIssueState(itemID, id, state)
+		m.status = ""
 		return m, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
 			defer cancel()
@@ -181,6 +182,7 @@ func (m Model) updateCommentKey(key string) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.commentEditing = false
 		m.commentDraft = ""
+		m.status = ""
 		return m, nil
 	case "enter":
 		body := strings.TrimSpace(m.commentDraft)
@@ -199,6 +201,7 @@ func (m Model) updateCommentKey(key string) (tea.Model, tea.Cmd) {
 		}
 		m.commentEditing = false
 		m.commentDraft = ""
+		m.status = ""
 		m.mutationRefreshID++
 		m.mutationLoading = true
 		id, itemID, gen := m.detail.Content.ID, m.detailItemID, m.generation

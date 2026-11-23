@@ -60,7 +60,7 @@ func TestViewFilterPreviewSaveAndDiscard(t *testing.T) {
 			source.err = nil
 			m, cmd = filterKey(m, "ctrl+s")
 			m = runMembershipReads(t, m, cmd)
-			if m.viewFilter != nil || source.saved != "is:closed" || !strings.Contains(m.status, "saved") {
+			if m.viewFilter != nil || source.saved != "is:closed" || m.status != "" {
 				t.Fatal("save failed")
 			}
 		})

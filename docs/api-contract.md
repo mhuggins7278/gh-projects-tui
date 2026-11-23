@@ -85,6 +85,14 @@ alter the saved query. Filtered-view mutations still resolve writes using
 unfiltered project state and reload the saved query afterward; visible query
 membership is not used as authoritative project mutation state.
 
+For board presentation only, simple positive and negative `status:` terms hide
+empty Status columns or swimlanes that cannot match. Comma-separated values
+within a term are alternatives; repeated terms are intersected. Positive values
+must all match known Status options. Grouped expressions, `OR`/`NOT`, or unfamiliar
+positive values disable this pruning rather than guessing. Allowed empty lanes
+remain visible, and populated axes are retained for returned or optimistic items.
+This does not change item membership or the saved filter sent to GitHub.
+
 ### Historical probe matrix
 
 The matrix below records the former bounded grammar and its evidence as of
