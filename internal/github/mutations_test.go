@@ -289,7 +289,7 @@ func TestIssueBackedFieldsUseIssueMutationAndIdentities(t *testing.T) {
 		{name: "clear", key: "delete", want: true, clear: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			api := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{func(query string, vars map[string]interface{}, response interface{}) error {
+			api := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{allowIssuePermission(t, "viewerCanSetFields"), func(query string, vars map[string]interface{}, response interface{}) error {
 				if !strings.Contains(query, "setIssueFieldValue") || strings.Contains(query, "updateProjectV2ItemFieldValue") {
 					t.Fatal(query)
 				}
@@ -312,7 +312,7 @@ func TestIssueBackedFieldsUseIssueMutationAndIdentities(t *testing.T) {
 		})
 	}
 	for _, payload := range []string{`{}`, `{"setIssueFieldValue":{"issue":{"id":"other"}}}`} {
-		api := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{func(_ string, _ map[string]interface{}, r interface{}) error {
+		api := &fakeGraphQL{responses: []func(string, map[string]interface{}, interface{}) error{allowIssuePermission(t, "viewerCanSetFields"), func(_ string, _ map[string]interface{}, r interface{}) error {
 			return json.Unmarshal([]byte(payload), r)
 		}}}
 		err := newClient(api, &fakeREST{}).ClearItemFieldValue(context.Background(), ItemFieldValueClear{IssueID: "issue", IssueFieldID: "field"})

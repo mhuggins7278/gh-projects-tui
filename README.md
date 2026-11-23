@@ -197,7 +197,7 @@ them. Command output is not retained by the app after the terminal is restored.
 ## Current features
 
 - Owner, project, and saved-view pickers with filtering.
-- Progressive board loading through one paginated stream with selective fields.
+- Progressive board loading with selective fields and bounded bidirectional reads for large views.
 - Single-select, multi-select, and iteration grouping, including combined columns/swimlanes.
   Multi-select items appear in each selected option group; group moves and
   manual reordering remain disabled for these views.
@@ -321,9 +321,13 @@ offer these issue actions.
   If a timeout leaves a save's outcome unknown, dependent writes pause until
   `r` confirms the state; `r` retries readback only and never resubmits the write.
   Switching views does not cancel a submitted write.
-- Board loads use one paginated stream with only grouping, sort, and card
-  fields; recent views/metadata are cached briefly and `r` forces a refresh.
-  API cooldowns pace writes; `--debug` shows their countdown and request telemetry.
+- Board/table loads keep grouping, sort, and card fields selective. Views with
+  at least 300 items read forward and backward concurrently, then join in
+  canonical position order. Inconsistent counts or joins restart once with
+  uncached forward paging. Smaller views stay sequential.
+  At most two reads share the transport; writes stay exclusive and paced.
+  Recent reads are cached briefly, and `r` refreshes saved-view settings and items.
+  `--debug` shows shared API cooldowns and request telemetry.
 - Table support is an early preview; full parity with GitHub's table UI is not
   implemented. Table actions require update access, a complete item load, and
   no local search. Field editing loads the available project fields; empty text,

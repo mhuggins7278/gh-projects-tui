@@ -43,6 +43,10 @@ type BoardItemsSource interface {
 	PageBoardItems(context.Context, github.Owner, int, string, string, []github.Field) (github.ItemsPage, error)
 }
 
+type BoardItemsReadSource interface {
+	OpenBoardItems(context.Context, github.Owner, int, string, []github.Field) github.BoardItemsReader
+}
+
 type ItemDetailSource interface {
 	LoadItemDetail(context.Context, github.Owner, int, string) (github.ItemDetail, error)
 }
@@ -124,6 +128,10 @@ func (scope pickerReadScope) matches(m Model) bool {
 // abandonReads cancels navigation reads, never submitted writes.
 func (m *Model) abandonReads() {
 	m.viewFilter = nil
+	if m.itemsReader != nil {
+		m.itemsReader.Close()
+		m.itemsReader = nil
+	}
 	if m.cancel != nil {
 		m.cancel()
 	}
@@ -192,6 +200,7 @@ type Model struct {
 	itemsLoading          bool
 	itemsHasNext          bool
 	itemsCursor           string
+	itemsReader           github.BoardItemsReader
 	itemsErr              error
 	itemsLoadFrame        int
 	itemsTiming           itemsLoadTiming
@@ -717,6 +726,10 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	if m.selectedOwner == nil || m.selectedProject == nil || m.view == nil {
 		return nil
 	}
+	if m.itemsReader != nil {
+		m.itemsReader.Close()
+		m.itemsReader = nil
+	}
 	if m.cancel != nil {
 		m.cancel()
 	}
@@ -750,6 +763,9 @@ func (m *Model) startItemsLoad() tea.Cmd {
 	m.detail = nil
 	m.detailCache = nil
 	m.detailErr = nil
+	if source, ok := m.source.(BoardItemsReadSource); ok && !m.isTimeline() {
+		m.itemsReader = source.OpenBoardItems(m.ctx, *m.selectedOwner, m.selectedProject.Number, m.view.Filter, boardReadFields(*m.view))
+	}
 	return m.itemsPageCmd("", true)
 }
 
@@ -785,8 +801,21 @@ func (m *Model) itemsPageCmd(after string, reset bool) tea.Cmd {
 	scope := m.currentBoardReadScope()
 	ctx := m.ctx
 	source := m.source
+	reader := m.itemsReader
 	timeline := m.isTimeline()
 	return func() tea.Msg {
+		if reader != nil {
+			started := time.Now()
+			batch, err := reader.Next()
+			if err != nil || !batch.HasNext {
+				reader.Close()
+			}
+			return itemsPageMsg{
+				page:  github.ItemsPage{Items: batch.Items, HasNext: batch.HasNext},
+				after: after, reset: reset || batch.Reset, reader: reader, err: err,
+				generation: generation, scope: scope, duration: time.Since(started),
+			}
+		}
 		loader, ok := source.(ItemsSource)
 		if !ok {
 			return itemsPageMsg{after: after, reset: reset, err: fmt.Errorf("item loading is not supported by this client"), generation: generation, scope: scope}
@@ -818,6 +847,12 @@ func boardReadFields(view github.View) []github.Field {
 
 func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 	if msg.generation != m.generation || !msg.scope.matches(m) || m.loadingDetail {
+		if msg.reader != nil {
+			msg.reader.Close()
+			if msg.generation == m.generation {
+				m.itemsReader = nil
+			}
+		}
 		return m, nil
 	}
 	if !m.itemsTiming.started.IsZero() {
@@ -832,6 +867,11 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if msg.reset {
+		if len(m.items) > 0 && m.refreshFocusID == "" {
+			if item, ok := m.selectedItem(); ok {
+				m.refreshFocusID = item.ID
+			}
+		}
 		m.items = nil
 		m.boardLane = 0
 		m.boardCard = 0
@@ -842,6 +882,7 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 		m.itemsLoading = false
 		m.itemsErr = msg.err
 		m.itemsHasNext = false
+		m.itemsReader = nil
 		if m.isRowLayout() {
 			m.clampTableRow(true)
 		}
@@ -868,6 +909,7 @@ func (m Model) updateItems(msg itemsPageMsg) (tea.Model, tea.Cmd) {
 		return m, m.itemsPageCmd(msg.page.EndCursor, false)
 	}
 	m.itemsLoading = false
+	m.itemsReader = nil
 	if m.isRowLayout() {
 		m.clampTableRow(!m.subIssuesPending())
 	} else {
@@ -938,6 +980,10 @@ func (m *Model) cancelItemsLoad() {
 	}
 	if m.cancel != nil {
 		m.cancel()
+	}
+	if m.itemsReader != nil {
+		m.itemsReader.Close()
+		m.itemsReader = nil
 	}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.generation++
@@ -1870,6 +1916,7 @@ type itemsPageMsg struct {
 	page       github.ItemsPage
 	after      string
 	reset      bool
+	reader     github.BoardItemsReader
 	err        error
 	generation uint64
 	scope      boardReadScope

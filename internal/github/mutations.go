@@ -153,6 +153,13 @@ func (c *Client) SetIssueClosed(ctx context.Context, issueID string, closed bool
 	if !closed {
 		mutation, field = reopenIssueMutation, "reopenIssue"
 	}
+	permission := issueClosePermission
+	if !closed {
+		permission = issueReopenPermission
+	}
+	if err := c.requireIssuePermission(ctx, issueID, permission); err != nil {
+		return err
+	}
 	var response struct {
 		Close *struct {
 			Issue *struct {
@@ -405,6 +412,9 @@ func (c *Client) setIssueFieldValue(ctx context.Context, issueID, fieldID string
 			}
 			field[key] = v
 		}
+	}
+	if err := c.requireIssuePermission(ctx, issueID, issueSetFieldsPermission); err != nil {
+		return err
 	}
 	query := `mutation SetIssueField($input: SetIssueFieldValueInput!) { setIssueFieldValue(input: $input) { issue { id } } }`
 	var response struct {

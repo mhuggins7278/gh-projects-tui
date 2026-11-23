@@ -10,8 +10,9 @@ import (
 
 var ErrMutationItemUnavailable = errors.New("mutation item is unavailable in the active project")
 
-// PageBoardItems selects only the fields needed by this view. Field names are
-// variables, never interpolated into GraphQL source.
+// PageBoardItems selects only the fields needed to render this view. Issue
+// permissions are loaded with details or checked immediately before a write.
+// Field names are variables, never interpolated into GraphQL source.
 func (c *Client) PageBoardItems(ctx context.Context, owner Owner, project int, filter, after string, fields []Field) (ItemsPage, error) {
 	return c.pageSelectedItems(ctx, owner, project, filter, after, fields, true)
 }
@@ -71,29 +72,68 @@ func (c *Client) ReadMutationItemForProject(ctx context.Context, projectID, item
 }
 
 func (c *Client) pageSelectedItems(ctx context.Context, owner Owner, project int, filter, after string, fields []Field, content bool) (ItemsPage, error) {
+	page, err := c.readSelectedItems(ctx, owner, project, filter, after, fields, content, selectedItemRead{})
+	return page.ItemsPage, err
+}
+
+type selectedItemRead struct {
+	size      int
+	backwards bool
+	count     bool
+	fresh     bool
+}
+
+type selectedItemsPage struct {
+	ItemsPage
+	count *int
+}
+
+func (c *Client) readSelectedItems(ctx context.Context, owner Owner, project int, filter, after string, fields []Field, content bool, options selectedItemRead) (selectedItemsPage, error) {
 	branch := "organization"
 	if owner.Kind == UserOwner {
 		branch = "user"
 	} else if owner.Kind != OrganizationOwner {
-		return ItemsPage{}, fmt.Errorf("unsupported owner kind %q", owner.Kind)
+		return selectedItemsPage{}, fmt.Errorf("unsupported owner kind %q", owner.Kind)
+	}
+	size := options.size
+	if size == 0 {
+		size = 100
+	}
+	if size < 1 || size > 100 {
+		return selectedItemsPage{}, fmt.Errorf("item page size must be between 1 and 100")
 	}
 	variables := map[string]interface{}{"login": owner.Login, "project": project, "filter": nullableCursor(filter), "after": nullableCursor(after)}
 	definitions, selection, names := selectedItemFields(fields, content, variables)
-	query := fmt.Sprintf(`query SelectedProjectItems($login: String!, $project: Int!, $filter: String, $after: String%s) { %s(login: $login) { projectV2(number: $project) { items(first: 100, after: $after, query: $filter, orderBy: {field: POSITION, direction: ASC}) { nodes { %s } pageInfo { hasNextPage endCursor } } } } }`, definitions, branch, selection)
+	operation := "SelectedProjectItems"
+	if !content {
+		operation = "MutationProjectItems"
+	} else if options.fresh {
+		operation = "FreshProjectItems" // Authoritative fallback bypasses cached pages.
+	}
+	direction, cursor := "first", "after"
+	info := "hasNextPage endCursor"
+	if options.backwards {
+		direction, cursor = "last", "before"
+		info = "hasNextPage: hasPreviousPage endCursor: startCursor"
+	}
+	count := ""
+	if options.count {
+		count = "totalCount "
+	}
+	query := fmt.Sprintf(`query %s($login: String!, $project: Int!, $filter: String, $after: String%s) { %s(login: $login) { projectV2(number: $project) { items(%s: %d, %s: $after, query: $filter, orderBy: {field: POSITION, direction: ASC}) { %snodes { %s } pageInfo { %s } } } } }`,
+		operation, definitions, branch, direction, size, cursor, count, selection, info)
 	if len(names) > 0 {
 		query += fieldValueFragment
 		if strings.Contains(selection, "...LinkedPullRequests") {
 			query += linkedPullRequestsFragment
 		}
 	}
-	if !content {
-		query = strings.Replace(query, "query SelectedProjectItems(", "query MutationProjectItems(", 1)
-	}
 	type selectedOwner struct {
 		Project *struct {
 			Items struct {
-				Nodes    []json.RawMessage
-				PageInfo pageInfo
+				Nodes      []json.RawMessage
+				PageInfo   pageInfo
+				TotalCount *int
 			}
 		} `json:"projectV2"`
 	}
@@ -102,19 +142,19 @@ func (c *Client) pageSelectedItems(ctx context.Context, owner Owner, project int
 		Organization *selectedOwner
 	}
 	if err := c.graphql.DoWithContext(ctx, query, variables, &response); err != nil {
-		return ItemsPage{}, err
+		return selectedItemsPage{}, err
 	}
 	selected := response.Organization
 	if owner.Kind == UserOwner {
 		selected = response.User
 	}
 	if selected == nil || selected.Project == nil {
-		return ItemsPage{}, fmt.Errorf("project %d for %q was not found", project, owner.Login)
+		return selectedItemsPage{}, fmt.Errorf("project %d for %q was not found", project, owner.Login)
 	}
 	page := rawItemsPage{PageInfo: selected.Project.Items.PageInfo}
 	if page.PageInfo.HasNextPage {
 		if _, err := nextCursor(page.PageInfo, after); err != nil {
-			return ItemsPage{}, err
+			return selectedItemsPage{}, err
 		}
 	}
 	for _, node := range selected.Project.Items.Nodes {
@@ -123,11 +163,12 @@ func (c *Client) pageSelectedItems(ctx context.Context, owner Owner, project int
 		}
 		item, err := decodeSelectedItem(node, names)
 		if err != nil {
-			return ItemsPage{}, err
+			return selectedItemsPage{}, err
 		}
 		page.Nodes = append(page.Nodes, item)
 	}
-	return c.projectItems(ctx, page)
+	projected, err := c.projectItems(ctx, page)
+	return selectedItemsPage{ItemsPage: projected, count: selected.Project.Items.TotalCount}, err
 }
 
 // Share visible-field selection between saved-view rows and nested issue rows.
@@ -152,7 +193,7 @@ func selectedItemFields(fields []Field, content bool, variables map[string]inter
 	}
 	contentSelection := ""
 	if content {
-		contentSelection = `content { __typename ... on Issue { id number title url repository { name nameWithOwner } state viewerCanSetFields viewerCanClose viewerCanReopen subIssuesSummary { total completed } } ... on PullRequest { id number title url repository { name nameWithOwner } state isDraft merged } ... on DraftIssue { id title } }`
+		contentSelection = `content { __typename ... on Issue { id number title url repository { name nameWithOwner } state subIssuesSummary { total completed } } ... on PullRequest { id number title url repository { name nameWithOwner } state isDraft merged } ... on DraftIssue { id title } }`
 	}
 	return definitions.String(), "id " + contentSelection + " " + selections.String(), names
 }

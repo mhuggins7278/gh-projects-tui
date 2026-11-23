@@ -737,11 +737,32 @@ func (m *Model) startMutationViewRefresh() tea.Cmd {
 	m.mutationRefreshID++
 	id, scope, issueActionID := m.mutationRefreshID, m.currentBoardReadScope(), m.nextIssueAction
 	owner, project, filter := *m.selectedOwner, m.selectedProject.Number, m.view.Filter
-	fields, source := boardReadFields(*m.view), m.source
+	fields, source, readCtx := boardReadFields(*m.view), m.source, m.ctx
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), mutationRequestTimeout)
+		if readCtx == nil {
+			readCtx = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(readCtx, mutationRequestTimeout)
 		defer cancel()
 		result := mutationViewRefreshMsg{scope: scope, id: id, issueActionID: issueActionID}
+		if source, ok := source.(BoardItemsReadSource); ok {
+			reader := source.OpenBoardItems(ctx, owner, project, filter, fields)
+			defer reader.Close()
+			for {
+				batch, err := reader.Next()
+				if err != nil {
+					result.err = err
+					return result
+				}
+				if batch.Reset {
+					result.items = nil
+				}
+				result.items = append(result.items, batch.Items...)
+				if !batch.HasNext {
+					return result
+				}
+			}
+		}
 		seen := map[string]bool{}
 		after := ""
 		for {

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 )
 
 // APIStatus contains request metadata only; no query variables or item content.
@@ -42,10 +44,11 @@ func (c *Client) Ledger() map[string]int {
 }
 
 // requestScheduler is shared by this authenticated client's REST and GraphQL
-// transports. It holds the permit through response consumption, not just headers.
+// transports. Two reads may share its weighted permit; a write reserves both
+// slots. The permit is held through response consumption, not just headers.
 type requestScheduler struct {
 	base          http.RoundTripper
-	permit        chan struct{}
+	permit        *semaphore.Weighted
 	mu            sync.Mutex
 	status        APIStatus
 	nextWrite     time.Time
@@ -55,7 +58,7 @@ type requestScheduler struct {
 }
 
 func newRequestScheduler(base http.RoundTripper) *requestScheduler {
-	return &requestScheduler{base: base, permit: make(chan struct{}, 1), writeInterval: time.Second, now: time.Now, wait: waitRequest, status: APIStatus{Remaining: -1}}
+	return &requestScheduler{base: base, permit: semaphore.NewWeighted(2), writeInterval: time.Second, now: time.Now, wait: waitRequest, status: APIStatus{Remaining: -1}}
 }
 
 func waitRequest(ctx context.Context, delay time.Duration) error {
@@ -145,12 +148,6 @@ func (c *Client) APIStatus() APIStatus {
 }
 
 func (s *requestScheduler) RoundTrip(req *http.Request) (*http.Response, error) {
-	select {
-	case s.permit <- struct{}{}:
-	case <-req.Context().Done():
-		return nil, req.Context().Err()
-	}
-	defer func() { <-s.permit }()
 	var body []byte
 	if req.Body != nil {
 		var err error
@@ -169,7 +166,9 @@ func (s *requestScheduler) RoundTrip(req *http.Request) (*http.Response, error) 
 			var query string
 			_ = json.Unmarshal(payload["query"], &query)
 			query = strings.TrimSpace(query)
-			write = strings.HasPrefix(query, "mutation")
+			// Unknown operations remain exclusive; only recognizable queries
+			// may share the two read slots.
+			write = !(strings.HasPrefix(query, "query") || strings.HasPrefix(query, "{"))
 			if !write {
 				var original string
 				_ = json.Unmarshal(payload["query"], &original)
@@ -185,6 +184,14 @@ func (s *requestScheduler) RoundTrip(req *http.Request) (*http.Response, error) 
 			}
 		}
 	}
+	weight := int64(1)
+	if write {
+		weight = 2
+	}
+	if err := s.permit.Acquire(req.Context(), weight); err != nil {
+		return nil, err
+	}
+	defer s.permit.Release(weight)
 	for attempt := 0; ; attempt++ {
 		s.mu.Lock()
 		deadline := s.status.Cooldown
